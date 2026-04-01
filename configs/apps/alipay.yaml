@@ -1,0 +1,2 @@
+# Per-app config override for Alipay
+# Inherits from configs/default.yaml

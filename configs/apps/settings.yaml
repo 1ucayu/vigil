@@ -1,0 +1,2 @@
+# Per-app config override for Android Settings
+# Inherits from configs/default.yaml

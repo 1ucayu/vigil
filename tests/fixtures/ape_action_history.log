@@ -1,0 +1,6 @@
+1711800000000 {"actionType":"EVENT_START","throttle":0,"timestamp":0}
+1711800001000 {"actionType":"MODEL_CLICK","throttle":500,"timestamp":1,"target":"//node[@class='android.widget.TextView' and @resource-id='android:id/title']","full":"//node[@class='android.widget.TextView' and @resource-id='android:id/title' and @text='Wi-Fi']","bounds":"100,200,500,300"}
+1711800002000 {"actionType":"MODEL_BACK","throttle":500,"timestamp":2}
+1711800003000 {"actionType":"MODEL_CLICK","throttle":500,"timestamp":3,"target":"//node[@class='android.widget.TextView' and @resource-id='android:id/title']","full":"//node[@class='android.widget.TextView' and @resource-id='android:id/title' and @text='Bluetoo']","bounds":"100,300,500,400"}
+1711800004000 {"actionType":"MODEL_SCROLL_TOP_DOWN","throttle":500,"timestamp":4,"target":"//node[@class='androidx.recyclerview.widget.RecyclerView' and @resource-id='com.android.settings:id/list']","bounds":"0,100,1080,1920"}
+1711800005000 {"actionType":"PHANTOM_CRASH","throttle":0,"timestamp":5}
