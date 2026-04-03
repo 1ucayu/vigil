@@ -1,9 +1,9 @@
-"""Tests for vigil.neuro.state_abstractor — container classification."""
+"""Tests for vigil.neuro.state_abstractor — container classification and sub-FSM templates."""
 
 from pathlib import Path
 
 from vigil.core.ui_parser import parse_hierarchy_xml
-from vigil.models.fsm import AbstractState, AppFSM, ContainerType, HierarchyLevel
+from vigil.models.fsm import AbstractState, AppFSM, ContainerType, HierarchyLevel, Transition
 from vigil.models.state import RawScreen, UIElement
 from vigil.neuro.state_abstractor import StateAbstractor
 
@@ -384,3 +384,277 @@ class TestClassifyScreenContainers:
         )
         results = abstractor.classify_screen_containers(screen)
         assert results == []
+
+
+# ============================================================
+# Sub-FSM template tests
+# ============================================================
+
+
+def _build_sub_fsm_fixture():
+    """Build a synthetic FSM + traces simulating a content item drill-down.
+
+    s1 (list, CONTENT) → click item "HomeWiFi" → s2 (detail)
+    s2 → click "Advanced" → s3 (advanced settings)
+    s3 → back → s2
+    s2 → back → s1
+    s1 → click different item → s4 (same fingerprint as s2)
+    """
+    fsm = AppFSM("com.test.app")
+
+    s1 = AbstractState(
+        state_id="s1",
+        name="WiFi List",
+        fingerprint="fp_list",
+        hierarchy_level=HierarchyLevel.ACTIVITY,
+        raw_screens=["scr_01"],
+        container_type=ContainerType.CONTENT,
+        item_skeleton_hash="skel_wifi",
+    )
+    s2 = AbstractState(
+        state_id="s2",
+        name="HomeWiFi Detail",
+        fingerprint="fp_detail",
+        hierarchy_level=HierarchyLevel.FRAGMENT,
+        raw_screens=["scr_02"],
+    )
+    s3 = AbstractState(
+        state_id="s3",
+        name="Advanced Settings",
+        fingerprint="fp_advanced",
+        hierarchy_level=HierarchyLevel.FRAGMENT,
+        raw_screens=["scr_03"],
+    )
+    for s in (s1, s2, s3):
+        fsm.add_state(s)
+
+    transitions = [
+        Transition(
+            source="s1",
+            target="s2",
+            action={"type": "click", "target": "e_item1"},
+            observed_count=1,
+        ),
+        Transition(
+            source="s2",
+            target="s3",
+            action={"type": "click", "target": "e_advanced"},
+            observed_count=1,
+        ),
+        Transition(
+            source="s3",
+            target="s2",
+            action={"type": "navigate_back"},
+            observed_count=1,
+        ),
+        Transition(
+            source="s2",
+            target="s1",
+            action={"type": "navigate_back"},
+            observed_count=1,
+        ),
+    ]
+    for t in transitions:
+        fsm.add_transition(t)
+
+    # Raw traces (as they appear in the exploration JSON)
+    traces = [
+        {
+            "step_number": 1,
+            "source_screen_id": "scr_01",
+            "action": {"action_type": "click", "target_element_id": "e_item1"},
+            "target_screen_id": "scr_02",
+        },
+        {
+            "step_number": 2,
+            "source_screen_id": "scr_02",
+            "action": {"action_type": "click", "target_element_id": "e_advanced"},
+            "target_screen_id": "scr_03",
+        },
+        {
+            "step_number": 3,
+            "source_screen_id": "scr_03",
+            "action": {"action_type": "navigate_back"},
+            "target_screen_id": "scr_02",
+        },
+        {
+            "step_number": 4,
+            "source_screen_id": "scr_02",
+            "action": {"action_type": "navigate_back"},
+            "target_screen_id": "scr_01",
+        },
+    ]
+
+    # Screen ID → state ID mapping
+    sid_to_state_id = {
+        "scr_01": "s1",
+        "scr_02": "s2",
+        "scr_03": "s3",
+    }
+
+    # Raw screens with element data
+    screens = {
+        "scr_01": {
+            "screen_id": "scr_01",
+            "interactable_elements": [
+                {"element_id": "e_item1", "text": "HomeWiFi", "is_clickable": True},
+                {"element_id": "e_item2", "text": "OfficeNet", "is_clickable": True},
+            ],
+        },
+        "scr_02": {
+            "screen_id": "scr_02",
+            "interactable_elements": [
+                {"element_id": "e_advanced", "text": "Advanced", "is_clickable": True},
+            ],
+        },
+        "scr_03": {
+            "screen_id": "scr_03",
+            "interactable_elements": [],
+        },
+    }
+
+    return fsm, traces, sid_to_state_id, screens
+
+
+class TestExtractSubTree:
+    def test_extract_sub_tree(self):
+        fsm, traces, sid_to_state_id, _ = _build_sub_fsm_fixture()
+        abstractor = StateAbstractor()
+
+        sub_ids, sub_traces, entry_actions = abstractor._extract_sub_tree_from_traces(
+            "s1", traces, sid_to_state_id
+        )
+
+        assert "s2" in sub_ids
+        assert "s3" in sub_ids
+        assert "s1" not in sub_ids
+        assert len(sub_traces) > 0
+        assert len(entry_actions) == 1
+        assert entry_actions[0]["target_element_id"] == "e_item1"
+
+    def test_extract_no_clicks(self):
+        """No click traces from container → empty sub-tree."""
+        abstractor = StateAbstractor()
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_01",
+                "action": {"action_type": "scroll_up"},
+                "target_screen_id": "scr_01",
+            },
+        ]
+        sub_ids, _, _ = abstractor._extract_sub_tree_from_traces("s1", traces, {"scr_01": "s1"})
+        assert len(sub_ids) == 0
+
+
+class TestBuildSubFsmTemplate:
+    def test_build_sub_fsm_template(self):
+        fsm, traces, sid_to_state_id, screens = _build_sub_fsm_fixture()
+        abstractor = StateAbstractor()
+
+        templates = abstractor.build_sub_fsm_templates(fsm, traces, sid_to_state_id, screens)
+
+        assert len(templates) == 1
+        tmpl = templates[0]
+        assert tmpl.source_container_state_id == "s1"
+        assert "s2" in tmpl.states
+        assert "s3" in tmpl.states
+        assert len(tmpl.transitions) > 0
+        assert tmpl.item_skeleton_hash == "skel_wifi"
+
+    def test_parameterize_replaces_text(self):
+        fsm, traces, sid_to_state_id, screens = _build_sub_fsm_fixture()
+        abstractor = StateAbstractor()
+
+        templates = abstractor.build_sub_fsm_templates(fsm, traces, sid_to_state_id, screens)
+
+        assert len(templates) == 1
+        tmpl = templates[0]
+        # The state name "HomeWiFi Detail" should be parameterized
+        assert "$item.name" in tmpl.parameters
+        detail_state = tmpl.states.get("s2")
+        assert detail_state is not None
+        assert "$item.name" in detail_state.name
+
+    def test_template_added_to_fsm(self):
+        fsm, traces, sid_to_state_id, screens = _build_sub_fsm_fixture()
+        abstractor = StateAbstractor()
+
+        templates = abstractor.build_sub_fsm_templates(fsm, traces, sid_to_state_id, screens)
+
+        assert len(fsm.sub_fsm_templates) == 1
+        tmpl_id = templates[0].template_id
+        assert tmpl_id in fsm.sub_fsm_templates
+        assert fsm.states["s1"].sub_fsm_template_id == tmpl_id
+
+    def test_no_content_states(self):
+        """FSM with no CONTENT states → no templates."""
+        fsm = AppFSM("com.test.app")
+        state = AbstractState(
+            state_id="s1",
+            name="Settings",
+            fingerprint="fp1",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            container_type=ContainerType.STRUCTURAL,
+        )
+        fsm.add_state(state)
+        abstractor = StateAbstractor()
+
+        templates = abstractor.build_sub_fsm_templates(fsm, [], {}, {})
+        assert templates == []
+
+    def test_multiple_items_same_structure(self):
+        """Two items clicked from same container → one template (not two)."""
+        fsm, traces, sid_to_state_id, screens = _build_sub_fsm_fixture()
+
+        # Add a second item click leading to s2 (same structure)
+        # s4 has the same fingerprint as s2
+        s4 = AbstractState(
+            state_id="s4",
+            name="OfficeNet Detail",
+            fingerprint="fp_detail",
+            hierarchy_level=HierarchyLevel.FRAGMENT,
+            raw_screens=["scr_04"],
+        )
+        fsm.add_state(s4)
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s4",
+                action={"type": "click", "target": "e_item2"},
+                observed_count=1,
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="s4",
+                target="s1",
+                action={"type": "navigate_back"},
+                observed_count=1,
+            )
+        )
+
+        # Add traces for second item
+        traces.extend(
+            [
+                {
+                    "step_number": 5,
+                    "source_screen_id": "scr_01",
+                    "action": {"action_type": "click", "target_element_id": "e_item2"},
+                    "target_screen_id": "scr_04",
+                },
+                {
+                    "step_number": 6,
+                    "source_screen_id": "scr_04",
+                    "action": {"action_type": "navigate_back"},
+                    "target_screen_id": "scr_01",
+                },
+            ]
+        )
+        sid_to_state_id["scr_04"] = "s4"
+
+        abstractor = StateAbstractor()
+        templates = abstractor.build_sub_fsm_templates(fsm, traces, sid_to_state_id, screens)
+
+        # Only one template for s1 (even though two items were explored)
+        assert len(templates) == 1

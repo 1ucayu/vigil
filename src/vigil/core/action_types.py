@@ -73,6 +73,13 @@ def enumerate_element_actions(
             for action_type in ACTION_TEMPLATES[prop_name]:
                 if exclude and action_type in exclude:
                     continue
+                # Skip click/long_press on editable elements to avoid
+                # triggering the soft keyboard during exploration
+                if element.is_editable and action_type in (
+                    ActionType.CLICK,
+                    ActionType.LONG_PRESS,
+                ):
+                    continue
                 action = Action(
                     action_type=action_type,
                     target_element_id=element.element_id,

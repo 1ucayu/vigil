@@ -1,20 +1,32 @@
-"""Stage 2: State Abstraction — container classification.
+"""Stage 2: State Abstraction — container classification and sub-FSM templates.
 
 Classifies scrollable containers as STRUCTURAL (fixed menu) or CONTENT
 (dynamic list of homogeneous items). Uses multi-signal analysis of child
 widget skeletons to handle real-world edge cases: heterogeneous content
 lists, section headers, mixed containers.
+
+For CONTENT containers, extracts parameterized sub-FSM templates from
+exploration traces — the structural sub-tree behind a representative item click.
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import re
 from collections import Counter
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel
 
-from vigil.models.fsm import AppFSM, ContainerType
+from vigil.models.fsm import (
+    AbstractState,
+    AppFSM,
+    ContainerType,
+    SubFsmTemplate,
+    Transition,
+)
 from vigil.models.state import RawScreen, UIElement
 
 
@@ -298,3 +310,250 @@ class StateAbstractor:
                 f"container_type={winner}, "
                 f"resource_id={state.container_resource_id}"
             )
+
+    # ------------------------------------------------------------------
+    # Sub-FSM template extraction
+    # ------------------------------------------------------------------
+
+    def build_sub_fsm_templates(
+        self,
+        fsm: AppFSM,
+        traces: list[dict[str, Any]],
+        sid_to_state_id: dict[str, str],
+        screens: dict[str, dict[str, Any]],
+    ) -> list[SubFsmTemplate]:
+        """Extract sub-FSM templates from exploration traces for CONTENT containers.
+
+        For each CONTENT state, follows trace chains starting from click
+        transitions to discover the structural sub-tree behind list items.
+        Multiple items leading to the same structure produce one template.
+
+        Args:
+            fsm: The constructed FSM with container annotations.
+            traces: Raw trace dicts from the exploration JSON.
+            sid_to_state_id: Mapping from raw screen_id to abstract state_id.
+            screens: Raw screen dicts from the exploration JSON.
+
+        Returns:
+            List of extracted SubFsmTemplate objects (also added to fsm).
+        """
+        templates: list[SubFsmTemplate] = []
+        template_counter = 0
+
+        content_states = [
+            s for s in fsm.states.values() if s.container_type == ContainerType.CONTENT
+        ]
+
+        if not content_states:
+            return templates
+
+        for state in content_states:
+            sub_tree_ids, sub_tree_traces, entry_actions = self._extract_sub_tree_from_traces(
+                state.state_id, traces, sid_to_state_id
+            )
+
+            if not sub_tree_ids:
+                logger.debug(f"No sub-tree found for CONTENT state {state.state_id} ({state.name})")
+                continue
+
+            # Build template states and transitions from the sub-tree
+            tmpl_states: dict[str, AbstractState] = {}
+            for sid in sub_tree_ids:
+                if sid in fsm.states:
+                    tmpl_states[sid] = copy.deepcopy(fsm.states[sid])
+
+            tmpl_transitions: list[Transition] = []
+            for t in fsm.transitions:
+                in_sub = t.source in sub_tree_ids or t.source == state.state_id
+                out_sub = t.target in sub_tree_ids or t.target == state.state_id
+                if in_sub and out_sub:
+                    tmpl_transitions.append(copy.deepcopy(t))
+
+            if not tmpl_states:
+                continue
+
+            # Extract clicked item text for parameterization
+            clicked_text = self._get_clicked_item_text(entry_actions, screens, sid_to_state_id)
+
+            # Parameterize
+            tmpl_states, tmpl_transitions, params = self._parameterize_template(
+                tmpl_states, tmpl_transitions, clicked_text
+            )
+
+            template_counter += 1
+            template_id = f"tmpl_{template_counter:03d}"
+            entry_action = entry_actions[0] if entry_actions else {}
+
+            template = SubFsmTemplate(
+                template_id=template_id,
+                entry_action=entry_action,
+                states=tmpl_states,
+                transitions=tmpl_transitions,
+                parameters=params,
+                source_container_state_id=state.state_id,
+                item_skeleton_hash=state.item_skeleton_hash or "",
+            )
+            templates.append(template)
+            fsm.add_sub_fsm_template(template)
+            state.sub_fsm_template_id = template_id
+
+            logger.info(
+                f"Sub-FSM template {template_id} for state "
+                f"{state.state_id} ({state.name}): "
+                f"{len(tmpl_states)} states, {len(tmpl_transitions)} transitions, "
+                f"params={params}"
+            )
+
+        return templates
+
+    def _extract_sub_tree_from_traces(
+        self,
+        container_state_id: str,
+        traces: list[dict[str, Any]],
+        sid_to_state_id: dict[str, str],
+    ) -> tuple[set[str], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Follow trace chains from a CONTENT container's click transitions.
+
+        Starts from click actions leaving the container state and follows
+        the chain until returning to the container or reaching a known
+        non-sub-tree state.
+
+        Returns:
+            sub_tree_state_ids: Set of state IDs forming the sub-tree.
+            sub_tree_traces: Trace dicts within the sub-tree.
+            entry_actions: Action dicts that entered the sub-tree.
+        """
+        # Sort traces by step number for sequential following
+        sorted_traces = sorted(traces, key=lambda t: t.get("step_number", 0))
+
+        sub_tree_ids: set[str] = set()
+        sub_tree_traces: list[dict[str, Any]] = []
+        entry_actions: list[dict[str, Any]] = []
+
+        # Find click transitions leaving the container state
+        i = 0
+        while i < len(sorted_traces):
+            trace = sorted_traces[i]
+            source_sid = trace.get("source_screen_id", "")
+            source_state = sid_to_state_id.get(source_sid)
+            action = trace.get("action", {})
+            action_type = action.get("action_type", action.get("type", ""))
+
+            if source_state == container_state_id and action_type == "click":
+                target_sid = trace.get("target_screen_id", "")
+                target_state = sid_to_state_id.get(target_sid)
+
+                # Skip self-loops
+                if target_state is None or target_state == container_state_id:
+                    i += 1
+                    continue
+
+                # Follow the chain from this click
+                chain_ids: set[str] = set()
+                chain_traces: list[dict[str, Any]] = []
+                chain_ids.add(target_state)
+                chain_traces.append(trace)
+
+                # Walk forward through subsequent traces
+                j = i + 1
+                while j < len(sorted_traces):
+                    next_trace = sorted_traces[j]
+                    next_source_sid = next_trace.get("source_screen_id", "")
+                    next_source = sid_to_state_id.get(next_source_sid)
+                    next_target_sid = next_trace.get("target_screen_id", "")
+                    next_target = sid_to_state_id.get(next_target_sid)
+
+                    if next_source is None or next_target is None:
+                        j += 1
+                        continue
+
+                    # Still within the sub-tree
+                    if next_source in chain_ids:
+                        chain_traces.append(next_trace)
+                        if next_target == container_state_id:
+                            break  # Returned to container — chain complete
+                        chain_ids.add(next_target)
+                        j += 1
+                    else:
+                        break  # Left the sub-tree
+                    if next_target == container_state_id:
+                        break
+
+                if chain_ids:
+                    sub_tree_ids |= chain_ids
+                    sub_tree_traces.extend(chain_traces)
+                    entry_actions.append(action)
+
+            i += 1
+
+        return sub_tree_ids, sub_tree_traces, entry_actions
+
+    def _get_clicked_item_text(
+        self,
+        entry_actions: list[dict[str, Any]],
+        screens: dict[str, dict[str, Any]],
+        sid_to_state_id: dict[str, str],
+    ) -> str | None:
+        """Find the text of the clicked item from the entry action.
+
+        Looks up the target element in the source screen's elements to find
+        the text associated with the clicked list item.
+        """
+        if not entry_actions:
+            return None
+
+        action = entry_actions[0]
+        target_el_id = action.get("target_element_id")
+        if not target_el_id:
+            return None
+
+        # Search all screens for this element
+        for screen_data in screens.values():
+            elements = screen_data.get("interactable_elements", [])
+            for el in elements:
+                if el.get("element_id") == target_el_id:
+                    text = el.get("text")
+                    if text and text.strip():
+                        return text.strip()
+                    cd = el.get("content_description")
+                    if cd and cd.strip():
+                        return cd.strip()
+
+        return None
+
+    def _parameterize_template(
+        self,
+        template_states: dict[str, AbstractState],
+        template_transitions: list[Transition],
+        clicked_item_text: str | None,
+    ) -> tuple[dict[str, AbstractState], list[Transition], list[str]]:
+        """Replace content-specific values with $item.* parameter placeholders.
+
+        Scans state names and transition metadata for occurrences of the clicked
+        item's text and replaces them with parameter references.
+
+        Returns:
+            parameterized_states, parameterized_transitions, parameter_names
+        """
+        params: list[str] = []
+
+        if not clicked_item_text or len(clicked_item_text) < 2:
+            return template_states, template_transitions, params
+
+        param_name = "$item.name"
+        params.append(param_name)
+        pattern = re.compile(re.escape(clicked_item_text), re.IGNORECASE)
+
+        # Parameterize state names
+        for state in template_states.values():
+            if pattern.search(state.name):
+                state.name = pattern.sub(param_name, state.name)
+
+        # Parameterize transition action metadata
+        for t in template_transitions:
+            for key in ("target", "text"):
+                val = t.action.get(key)
+                if isinstance(val, str) and pattern.search(val):
+                    t.action[key] = pattern.sub(param_name, val)
+
+        return template_states, template_transitions, params

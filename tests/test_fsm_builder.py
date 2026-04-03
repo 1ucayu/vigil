@@ -422,3 +422,213 @@ class TestAppFSMMethods:
         assert sample_fsm.find_similar_state("fp_a") == "s1"
         assert sample_fsm.find_similar_state("fp_b") == "s2"
         assert sample_fsm.find_similar_state("fp_unknown") is None
+
+
+# ── Post-processing tests ──────────────────────────────────────
+
+
+class TestMergeScrollDuplicates:
+    def test_merge_scroll_duplicates(self) -> None:
+        """States sharing (activity, base_name) get merged."""
+        fsm = AppFSM(app_package="com.test")
+        s1 = AbstractState(
+            state_id="s1",
+            name="Sound #1",
+            fingerprint="fp1",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".SubSettings",
+            raw_screens=["scr_01"],
+        )
+        s2 = AbstractState(
+            state_id="s2",
+            name="Sound #2",
+            fingerprint="fp2",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".SubSettings",
+            raw_screens=["scr_02"],
+        )
+        s3 = AbstractState(
+            state_id="s3",
+            name="Display",
+            fingerprint="fp3",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".SubSettings",
+            raw_screens=["scr_03"],
+        )
+        for s in (s1, s2, s3):
+            fsm.add_state(s)
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s3",
+                action={"type": "click"},
+                observed_count=1,
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="s2",
+                target="s3",
+                action={"type": "click"},
+                observed_count=2,
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="s3",
+                target="s1",
+                action={"type": "navigate_back"},
+                observed_count=1,
+            )
+        )
+
+        builder = FsmBuilder("com.test")
+        merged = builder._merge_scroll_duplicates(fsm)
+
+        assert merged == 1
+        assert len(fsm.states) == 2
+        assert "s1" in fsm.states  # canonical
+        assert "s2" not in fsm.states  # merged away
+        assert fsm.states["s1"].name == "Sound"  # "#N" stripped
+        assert set(fsm.states["s1"].raw_screens) == {"scr_01", "scr_02"}
+
+    def test_merge_preserves_transitions(self) -> None:
+        """Merged state gets the union of both states' transitions."""
+        fsm = AppFSM(app_package="com.test")
+        s1 = AbstractState(
+            state_id="s1",
+            name="List #1",
+            fingerprint="fp1",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".Activity",
+            raw_screens=["scr_01"],
+        )
+        s2 = AbstractState(
+            state_id="s2",
+            name="List #2",
+            fingerprint="fp2",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".Activity",
+            raw_screens=["scr_02"],
+        )
+        s3 = AbstractState(
+            state_id="s3",
+            name="Detail A",
+            fingerprint="fp3",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".DetailA",
+        )
+        s4 = AbstractState(
+            state_id="s4",
+            name="Detail B",
+            fingerprint="fp4",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".DetailB",
+        )
+        for s in (s1, s2, s3, s4):
+            fsm.add_state(s)
+        # s1 → s3, s2 → s4 (different targets from each scroll position)
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s3",
+                action={"type": "click"},
+                observed_count=1,
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="s2",
+                target="s4",
+                action={"type": "click"},
+                observed_count=1,
+            )
+        )
+
+        builder = FsmBuilder("com.test")
+        builder._merge_scroll_duplicates(fsm)
+
+        # Canonical s1 should now have transitions to both s3 and s4
+        targets = {t.target for t in fsm.transitions if t.source == "s1"}
+        assert "s3" in targets
+        assert "s4" in targets
+
+    def test_merge_updates_initial_state(self) -> None:
+        """If initial_state is a duplicate, it gets redirected."""
+        fsm = AppFSM(app_package="com.test")
+        s1 = AbstractState(
+            state_id="s1",
+            name="Home #1",
+            fingerprint="fp1",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".Main",
+            raw_screens=["scr_01"],
+        )
+        s2 = AbstractState(
+            state_id="s2",
+            name="Home #2",
+            fingerprint="fp2",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".Main",
+            raw_screens=["scr_02"],
+        )
+        for s in (s1, s2):
+            fsm.add_state(s)
+        fsm.initial_state = "s2"  # set to duplicate
+
+        builder = FsmBuilder("com.test")
+        builder._merge_scroll_duplicates(fsm)
+
+        assert fsm.initial_state == "s1"  # redirected to canonical
+
+
+class TestRemoveErrorStates:
+    def test_remove_error_states(self) -> None:
+        fsm = AppFSM(app_package="com.test")
+        s1 = AbstractState(
+            state_id="s1",
+            name="Settings",
+            fingerprint="fp1",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+        s2 = AbstractState(
+            state_id="s2",
+            name="Webpage not available",
+            fingerprint="fp2",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+        for s in (s1, s2):
+            fsm.add_state(s)
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s2",
+                action={"type": "click"},
+                observed_count=1,
+            )
+        )
+        fsm.initial_state = "s1"
+
+        builder = FsmBuilder("com.test")
+        removed = builder._remove_error_states(fsm)
+
+        assert removed == 1
+        assert "s2" not in fsm.states
+        assert len(fsm.transitions) == 0  # transition to s2 also removed
+        assert fsm.initial_state == "s1"  # preserved
+
+    def test_remove_keeps_normal_states(self) -> None:
+        fsm = AppFSM(app_package="com.test")
+        s1 = AbstractState(
+            state_id="s1",
+            name="WiFi Settings",
+            fingerprint="fp1",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+        fsm.add_state(s1)
+
+        builder = FsmBuilder("com.test")
+        removed = builder._remove_error_states(fsm)
+
+        assert removed == 0
+        assert "s1" in fsm.states

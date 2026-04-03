@@ -66,7 +66,7 @@ class AppExplorer:
     # Max scroll attempts per scrollable element
     MAX_SCROLLS_PER_ELEMENT = 3
     # Seconds to wait after an action for the screen to stabilize
-    STABILITY_WAIT = 1.0
+    STABILITY_WAIT = 1.5
     # Max retries for device calls
     DEVICE_RETRIES = 3
 
@@ -150,14 +150,23 @@ class AppExplorer:
         # screen_id -> list of (action, target_screen_id) describing how to reach it
         # from the initial screen (empty list = initial screen itself)
         nav_paths: dict[str, list[tuple[Action, str]]] = {initial_screen.screen_id: []}
+        nav_failures: dict[str, int] = {}  # screen_id -> consecutive failure count
+        max_nav_failures = 3
 
         # During exploration, text input doesn't discover new screens and
         # pollutes text fields — exclude it from candidate actions.
-        skip_actions: set[ActionType] = {ActionType.INPUT_TEXT}
+        skip_actions: set[ActionType] = {
+            ActionType.INPUT_TEXT,
+            ActionType.NAVIGATE_HOME,
+            ActionType.LONG_PRESS,
+        }
 
-        # Build frontier: (screen_id, action) pairs
+        # Build frontier: (screen_id, action) pairs.
+        # Exclude navigate_back for initial screen — it exits the app.
         frontier: deque[tuple[str, Action]] = deque()
         for action in enumerate_actions(initial_screen, exclude=skip_actions):
+            if action.action_type == ActionType.NAVIGATE_BACK:
+                continue
             frontier.append((initial_screen.screen_id, action))
 
         max_steps = self._config.app.max_exploration_steps
@@ -181,10 +190,27 @@ class AppExplorer:
                 nav_ok = self._navigate_to_screen_via_replay(source_screen_id, screens, nav_paths)
                 if nav_ok:
                     current_fp = source_fp
+                    nav_failures.pop(source_screen_id, None)
                 else:
-                    # Navigation failed — figure out where we are
                     current_fp = self._identify_current_fp()
-                    logger.debug(f"Could not navigate to {source_screen_id}, skipping action")
+                    nav_failures[source_screen_id] = nav_failures.get(source_screen_id, 0) + 1
+                    if nav_failures[source_screen_id] >= max_nav_failures:
+                        before = len(frontier)
+                        frontier = deque(
+                            (sid, act) for sid, act in frontier if sid != source_screen_id
+                        )
+                        drained = before - len(frontier)
+                        logger.warning(
+                            f"Screen {source_screen_id} unreachable after "
+                            f"{max_nav_failures} attempts, "
+                            f"draining {drained} remaining actions"
+                        )
+                    else:
+                        logger.debug(
+                            f"Navigation to {source_screen_id} failed "
+                            f"(attempt {nav_failures[source_screen_id]}"
+                            f"/{max_nav_failures})"
+                        )
                     continue
 
             # Execute the action
@@ -196,6 +222,9 @@ class AppExplorer:
             self._execute_action(action)
             self._wait_for_stability()
             step += 1
+
+            # Dismiss keyboard if it popped up
+            self._dismiss_keyboard_if_showing()
 
             # Check if we're still in the target app
             if not self._is_within_app():
@@ -255,6 +284,16 @@ class AppExplorer:
                         visited.add(ss_fp)
                         screens[ss.screen_id] = ss
                         fp_to_sid[ss_fp] = ss.screen_id
+                        # Add actions from scroll-revealed elements to frontier.
+                        # Use the original screen_id as source since we're still
+                        # on the same logical page, just scrolled down.
+                        new_actions = enumerate_actions(ss, exclude=skip_actions)
+                        for new_action in new_actions:
+                            frontier.append((target_screen.screen_id, new_action))
+                        logger.info(
+                            f"Scroll revealed {ss.screen_id}, "
+                            f"added {len(new_actions)} actions to frontier"
+                        )
 
                 # Update current_fp after scroll discovery may have changed screen
                 if scroll_screens:
@@ -393,6 +432,26 @@ class AppExplorer:
     def _wait_for_stability(self) -> None:
         """Wait for the screen to stabilize after an action."""
         time.sleep(self.STABILITY_WAIT)
+
+    def _dismiss_keyboard_if_showing(self) -> None:
+        """Detect and dismiss soft keyboard to prevent fingerprint corruption."""
+        assert self._device is not None
+        try:
+            current_xml = self._device.dump_hierarchy()
+            ime_indicators = [
+                "com.google.android.inputmethod",
+                "com.android.inputmethod",
+                "com.sohu.inputmethod",
+                "com.baidu.input",
+                "com.iflytek.inputmethod",
+                "com.miui.contentcatcher",
+            ]
+            if any(indicator in current_xml for indicator in ime_indicators):
+                logger.debug("Keyboard detected, dismissing")
+                self._device.press("back")
+                time.sleep(0.5)
+        except Exception:
+            pass
 
     def _wait_for_app_foreground(self, timeout: float = 10.0) -> bool:
         """Poll until the target app is in the foreground.
@@ -625,6 +684,7 @@ class AppExplorer:
                 "total_elements": len(s.elements),
                 "interactable_elements": [e.model_dump(mode="json") for e in interactable],
                 "timestamp": s.timestamp,
+                "metadata": self._extract_metadata(s),
             }
 
         data: dict[str, Any] = {
@@ -642,6 +702,38 @@ class AppExplorer:
 
         trace_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
         logger.info(f"Exploration trace saved to {trace_path}")
+
+    @staticmethod
+    def _extract_metadata(screen: RawScreen) -> dict[str, Any]:
+        """Extract page_title and other metadata from a screen's elements.
+
+        Scans all elements (not just interactable) for title resource IDs
+        so that FSM construction can use page_title for fingerprinting and
+        state naming.
+        """
+        metadata: dict[str, Any] = {}
+
+        for e in screen.elements:
+            rid = e.resource_id or ""
+            if "action_bar_title" in rid.lower() and e.text and e.text.strip():
+                metadata["page_title"] = e.text.strip()
+                return metadata
+
+        # Broader title search
+        for e in screen.elements:
+            rid = e.resource_id or ""
+            if (
+                rid
+                and "title" in rid.lower()
+                and "subtitle" not in rid.lower()
+                and e.text
+                and e.text.strip()
+                and len(e.text.strip()) > 1
+            ):
+                metadata["page_title"] = e.text.strip()
+                return metadata
+
+        return metadata
 
 
 def _now_iso() -> str:

@@ -17,7 +17,7 @@ from loguru import logger
 
 from vigil.core.ui_parser import parse_hierarchy_xml
 from vigil.models.action import Action
-from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
+from vigil.models.fsm import AbstractState, AppFSM, ContainerType, HierarchyLevel, Transition
 from vigil.models.state import RawScreen
 from vigil.neuro.state_abstractor import StateAbstractor
 
@@ -54,7 +54,7 @@ class FsmBuilder:
         raw_traces = data.get("traces", [])
 
         # Step 1: Deduplicate screens by fingerprint → canonical state mapping
-        fp_to_state_id, states = self._build_states(raw_screens)
+        fp_to_state_id, states = self._build_states(raw_screens, trace_path.parent)
         sid_to_state_id = self._build_screen_mapping(raw_screens, fp_to_state_id)
 
         # Step 2: Build transitions from traces
@@ -85,9 +85,22 @@ class FsmBuilder:
         if classify_containers:
             self._classify_containers(fsm, raw_screens, trace_path.parent)
 
+        # Step 8: Sub-FSM template extraction for CONTENT containers
+        if classify_containers:
+            self._build_sub_fsm_templates(fsm, raw_traces, sid_to_state_id, raw_screens)
+
+        # Step 9: Post-processing — merge duplicates and remove error states
+        merged = self._merge_scroll_duplicates(fsm)
+        removed = self._remove_error_states(fsm)
+        if merged or removed:
+            logger.info(
+                f"Post-processing: merged {merged} duplicate states, removed {removed} error states"
+            )
+
         logger.info(
-            f"FSM built: {len(states)} states, {len(transitions)} transitions, "
-            f"initial_state={initial_state}"
+            f"FSM built: {len(fsm.states)} states, {len(fsm.transitions)} transitions, "
+            f"initial_state={initial_state}, "
+            f"sub_fsm_templates={len(fsm.sub_fsm_templates)}"
         )
         return fsm
 
@@ -154,8 +167,180 @@ class FsmBuilder:
             f"({len(screens)} XML files parsed)"
         )
 
+    def _build_sub_fsm_templates(
+        self,
+        fsm: AppFSM,
+        raw_traces: list[dict[str, Any]],
+        sid_to_state_id: dict[str, str],
+        raw_screens: dict[str, Any],
+    ) -> None:
+        """Extract sub-FSM templates for CONTENT container states."""
+        content_states = [
+            s for s in fsm.states.values() if s.container_type == ContainerType.CONTENT
+        ]
+        if not content_states:
+            return
+
+        abstractor = StateAbstractor()
+        templates = abstractor.build_sub_fsm_templates(
+            fsm, raw_traces, sid_to_state_id, raw_screens
+        )
+        if templates:
+            logger.info(f"Built {len(templates)} sub-FSM templates")
+        else:
+            logger.debug("No sub-FSM templates extracted (no item clicks in traces)")
+
+    # --- Post-processing: duplicate/error state cleanup ---
+
+    ERROR_PAGE_PATTERNS: list[str] = [
+        "Webpage not available",
+        "Android System notif",
+        "App isn't responding",
+        "has stopped",
+        "isn't responding",
+        "Keep waiting",
+    ]
+
+    def _merge_scroll_duplicates(self, fsm: AppFSM) -> int:
+        """Merge states that share the same (activity_name, page_title).
+
+        Scroll-induced duplicates (e.g., "官方音效 #1", "官方音效 #2") share the
+        same activity and title but have different fingerprints because scrolling
+        changes visible elements. Merges them into one canonical state.
+
+        Returns:
+            Number of states merged away.
+        """
+        # Group states by (activity_name, base_name) — strip "#N" suffixes
+        import re
+
+        groups: dict[tuple[str | None, str], list[str]] = defaultdict(list)
+        for state in fsm.states.values():
+            base_name = re.sub(r"\s*#\d+$", "", state.name)
+            key = (state.activity_name, base_name)
+            groups[key].append(state.state_id)
+
+        merged_count = 0
+        for (_activity, base_name), state_ids in groups.items():
+            if len(state_ids) <= 1:
+                continue
+
+            # Keep first as canonical, merge others into it
+            canonical_id = state_ids[0]
+            duplicates = state_ids[1:]
+
+            # Collect raw_screens from duplicates
+            for dup_id in duplicates:
+                dup_state = fsm.states[dup_id]
+                fsm.states[canonical_id].raw_screens.extend(dup_state.raw_screens)
+
+            # Strip "#N" suffix from canonical state name
+            fsm.states[canonical_id].name = base_name
+
+            # Redirect transitions
+            redirect_map = {dup_id: canonical_id for dup_id in duplicates}
+            new_transitions: list[Transition] = []
+            seen_keys: set[tuple[str, str, str]] = set()
+
+            for t in fsm.transitions:
+                source = redirect_map.get(t.source, t.source)
+                target = redirect_map.get(t.target, t.target)
+                # Skip self-loops created by merging
+                if source == target:
+                    continue
+                action_type = t.action.get("type", "")
+                key = (source, target, action_type)
+                if key in seen_keys:
+                    # Find existing and increment count
+                    for existing in new_transitions:
+                        e_src = existing.source
+                        e_tgt = existing.target
+                        e_act = existing.action.get("type", "")
+                        if (e_src, e_tgt, e_act) == key:
+                            existing.observed_count += t.observed_count
+                            break
+                else:
+                    seen_keys.add(key)
+                    new_transitions.append(
+                        Transition(
+                            source=source,
+                            target=target,
+                            action=t.action,
+                            guard=t.guard,
+                            confidence=t.confidence,
+                            observed_count=t.observed_count,
+                        )
+                    )
+
+            # Remove duplicate states from graph and dict
+            for dup_id in duplicates:
+                if dup_id in fsm.states:
+                    del fsm.states[dup_id]
+                if dup_id in fsm.graph:
+                    fsm.graph.remove_node(dup_id)
+
+            # Rebuild graph edges
+            fsm.graph.remove_edges_from(list(fsm.graph.edges))
+            fsm.transitions = new_transitions
+            for t in new_transitions:
+                if t.source in fsm.graph and t.target in fsm.graph:
+                    fsm.graph.add_edge(
+                        t.source,
+                        t.target,
+                        action=t.action,
+                        guard=t.guard,
+                        confidence=t.confidence,
+                        observed_count=t.observed_count,
+                    )
+
+            # Update initial_state if it was a duplicate
+            if fsm.initial_state in redirect_map:
+                fsm.initial_state = redirect_map[fsm.initial_state]
+
+            merged_count += len(duplicates)
+            logger.debug(
+                f"Merged {len(duplicates)} duplicates of '{base_name}' into {canonical_id}"
+            )
+
+        return merged_count
+
+    def _remove_error_states(self, fsm: AppFSM) -> int:
+        """Remove transient error/system states from the FSM.
+
+        Matches state names against ERROR_PAGE_PATTERNS (substring match).
+
+        Returns:
+            Number of states removed.
+        """
+        to_remove: list[str] = []
+        for state in fsm.states.values():
+            name_lower = state.name.lower()
+            for pattern in self.ERROR_PAGE_PATTERNS:
+                if pattern.lower() in name_lower:
+                    to_remove.append(state.state_id)
+                    break
+
+        for sid in to_remove:
+            # Remove transitions involving this state
+            fsm.transitions = [t for t in fsm.transitions if t.source != sid and t.target != sid]
+            # Remove from graph
+            if sid in fsm.graph:
+                fsm.graph.remove_node(sid)
+            # Remove from states dict
+            del fsm.states[sid]
+            # Update initial_state if needed
+            if fsm.initial_state == sid:
+                fsm.initial_state = None
+
+        if to_remove:
+            logger.debug(f"Removed error states: {to_remove}")
+
+        return len(to_remove)
+
     def _build_states(
-        self, raw_screens: dict[str, Any]
+        self,
+        raw_screens: dict[str, Any],
+        trace_dir: Path | None = None,
     ) -> tuple[dict[str, str], dict[str, AbstractState]]:
         """Build AbstractStates from screens, deduplicating by scroll-aware fingerprint.
 
@@ -182,7 +367,7 @@ class FsmBuilder:
 
             state_counter += 1
             state_id = f"s_{state_counter:03d}"
-            name = self._derive_state_name(screen, state_id)
+            name = self._derive_state_name(screen, state_id, trace_dir)
 
             state = AbstractState(
                 state_id=state_id,
@@ -392,27 +577,82 @@ class FsmBuilder:
                 for sid in state_ids:
                     states[sid].hierarchy_level = HierarchyLevel.FRAGMENT
 
-    def _derive_state_name(self, screen: dict[str, Any], fallback_id: str) -> str:
-        """Derive a human-readable state name from screen metadata."""
-        # Try to find a title element
-        elements = screen.get("interactable_elements", screen.get("elements", []))
-        for el in elements:
+    def _derive_state_name(
+        self, screen: dict[str, Any], fallback_id: str, trace_dir: Path | None = None
+    ) -> str:
+        """Derive a human-readable state name from screen metadata.
+
+        Reads the full XML accessibility tree (not just interactable elements)
+        to find title elements like action_bar_title, which are typically
+        non-clickable TextViews containing the page name.
+        """
+        # Strategy 1: Parse full XML tree for title elements
+        all_elements = self._get_all_elements(screen, trace_dir)
+
+        # Look for title resource IDs in all elements (including non-interactable)
+        for el in all_elements:
             rid = el.get("resource_id", "") or ""
-            if "title" in rid.lower() or "action_bar_title" in rid.lower():
+            if "action_bar_title" in rid.lower():
                 text = el.get("text")
                 if text and text.strip():
                     return text.strip()
 
-        # Try content_description of first element
-        for el in elements:
+        # Look for broader title patterns
+        for el in all_elements:
+            rid = el.get("resource_id", "") or ""
+            if rid and "title" in rid.lower() and "subtitle" not in rid.lower():
+                text = el.get("text")
+                if text and text.strip() and len(text.strip()) > 1:
+                    return text.strip()
+
+        # Strategy 2: content_description from all elements
+        for el in all_elements:
             cd = el.get("content_description")
             if cd and cd.strip() and len(cd.strip()) > 2:
                 return cd.strip()
 
-        # Fallback to first non-empty text
-        for el in elements:
+        # Strategy 3: first non-empty text from interactable elements
+        interactable = screen.get("interactable_elements", screen.get("elements", []))
+        for el in interactable:
             text = el.get("text")
             if text and text.strip() and len(text.strip()) > 2:
                 return text.strip()
 
         return fallback_id
+
+    def _get_all_elements(
+        self, screen: dict[str, Any], trace_dir: Path | None = None
+    ) -> list[dict[str, Any]]:
+        """Get all elements for a screen, parsing XML if available.
+
+        Falls back to interactable_elements if XML is not found.
+        """
+        xml_rel_path = screen.get("xml_tree_path")
+        if xml_rel_path and trace_dir is not None:
+            xml_path = self._resolve_path(xml_rel_path, trace_dir)
+            if xml_path is not None:
+                xml_content = xml_path.read_text(encoding="utf-8")
+                elements = parse_hierarchy_xml(xml_content)
+                if elements:
+                    return [e.model_dump() for e in elements]
+
+        return screen.get("interactable_elements", screen.get("elements", []))
+
+    @staticmethod
+    def _resolve_path(rel_path: str, trace_dir: Path) -> Path | None:
+        """Resolve a relative path, trying trace_dir then walking up."""
+        xml_path = trace_dir / rel_path
+        if xml_path.exists():
+            return xml_path
+        # Try as absolute or project-relative
+        abs_path = Path(rel_path)
+        if abs_path.exists():
+            return abs_path
+        # Walk up from trace_dir
+        parent = trace_dir
+        while parent.parent != parent:
+            candidate = parent / rel_path
+            if candidate.exists():
+                return candidate
+            parent = parent.parent
+        return None
