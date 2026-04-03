@@ -15,8 +15,11 @@ from typing import Any
 
 from loguru import logger
 
+from vigil.core.ui_parser import parse_hierarchy_xml
 from vigil.models.action import Action
 from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
+from vigil.models.state import RawScreen
+from vigil.neuro.state_abstractor import StateAbstractor
 
 
 class FsmBuilder:
@@ -33,12 +36,15 @@ class FsmBuilder:
         self,
         trace_path: Path,
         include_self_loops: bool = False,
+        classify_containers: bool = True,
     ) -> AppFSM:
         """Build an FSM from a serialized exploration trace.
 
         Args:
             trace_path: Path to the exploration JSON file.
             include_self_loops: Whether to include transitions where source == target.
+            classify_containers: Whether to classify scrollable containers in each
+                state as STRUCTURAL or CONTENT. Requires xml_tree_path in trace data.
 
         Returns:
             A fully constructed AppFSM.
@@ -75,11 +81,78 @@ class FsmBuilder:
         for t in transitions:
             fsm.add_transition(t)
 
+        # Step 7: Container classification
+        if classify_containers:
+            self._classify_containers(fsm, raw_screens, trace_path.parent)
+
         logger.info(
             f"FSM built: {len(states)} states, {len(transitions)} transitions, "
             f"initial_state={initial_state}"
         )
         return fsm
+
+    def _classify_containers(
+        self,
+        fsm: AppFSM,
+        raw_screens: dict[str, Any],
+        trace_dir: Path,
+    ) -> None:
+        """Classify scrollable containers by parsing XML tree files.
+
+        Reads the full accessibility tree XML for each raw screen (via
+        xml_tree_path in the trace data) to get the complete element hierarchy
+        needed for container analysis.
+        """
+        screens: dict[str, RawScreen] = {}
+        missing_count = 0
+
+        for screen_id, screen_data in raw_screens.items():
+            xml_rel_path = screen_data.get("xml_tree_path")
+            if not xml_rel_path:
+                missing_count += 1
+                continue
+
+            # Resolve path: try relative to trace dir, then relative to project root
+            xml_path = trace_dir / xml_rel_path
+            if not xml_path.exists():
+                # Try as project-relative path
+                project_root = trace_dir
+                while project_root.parent != project_root:
+                    candidate = project_root / xml_rel_path
+                    if candidate.exists():
+                        xml_path = candidate
+                        break
+                    project_root = project_root.parent
+
+            if not xml_path.exists():
+                missing_count += 1
+                continue
+
+            xml_content = xml_path.read_text(encoding="utf-8")
+            elements = parse_hierarchy_xml(xml_content)
+            if not elements:
+                continue
+
+            screens[screen_id] = RawScreen(
+                screen_id=screen_id,
+                activity_name=screen_data.get("activity_name"),
+                elements=elements,
+            )
+
+        if not screens:
+            logger.warning(
+                f"Container classification skipped: no XML files found "
+                f"({missing_count} screens missing xml_tree_path)"
+            )
+            return
+
+        abstractor = StateAbstractor()
+        abstractor.annotate_fsm_states(fsm, screens)
+        classified = sum(1 for s in fsm.states.values() if s.container_type.value != "none")
+        logger.info(
+            f"Container classification: {classified}/{len(fsm.states)} states classified "
+            f"({len(screens)} XML files parsed)"
+        )
 
     def _build_states(
         self, raw_screens: dict[str, Any]

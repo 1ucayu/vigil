@@ -42,6 +42,11 @@ def main() -> None:
         action="store_true",
         help="Include self-loop transitions (action doesn't change state)",
     )
+    parser.add_argument(
+        "--no-classify",
+        action="store_true",
+        help="Skip container classification (STRUCTURAL/CONTENT)",
+    )
 
     args = parser.parse_args()
 
@@ -65,6 +70,7 @@ def main() -> None:
     fsm = builder.build_from_trace(
         trace_path=trace_path,
         include_self_loops=args.include_self_loops,
+        classify_containers=not args.no_classify,
     )
 
     # Serialize

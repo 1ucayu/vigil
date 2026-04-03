@@ -67,7 +67,7 @@ def render_fsm(
         )
         raise SystemExit(1) from err
 
-    from vigil.models.fsm import AppFSM
+    from vigil.models.fsm import AppFSM, ContainerType
 
     fsm = AppFSM.deserialize(fsm_path)
     logger.info(f"Loaded {fsm}")
@@ -93,14 +93,27 @@ def render_fsm(
         act: _ACTIVITY_COLORS[i % len(_ACTIVITY_COLORS)] for i, act in enumerate(activities)
     }
 
+    # Container type → visual style
+    container_style = {
+        ContainerType.CONTENT: {"fillcolor": "#c8e6c9", "suffix": "[C]"},
+        ContainerType.STRUCTURAL: {"fillcolor": "#bbdefb", "suffix": "[S]"},
+    }
+
     # Add nodes
     for state in fsm.states.values():
         label = _truncate(state.name, max_label_len)
         if state.activity_name:
             label += f"\n({state.activity_name.rsplit('.', 1)[-1]})"
 
+        # Annotate container type
+        ct_style = container_style.get(state.container_type)
+        if ct_style:
+            label += f"\n{ct_style['suffix']}"
+
         shape = "box" if state.hierarchy_level == "activity" else "ellipse"
         fill = activity_color.get(state.activity_name or "unknown", "#e3f2fd")
+        if ct_style:
+            fill = ct_style["fillcolor"]
 
         peripheries = "2" if state.state_id == fsm.initial_state else "1"
 

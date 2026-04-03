@@ -28,6 +28,7 @@ dependencies = [
     "Pillow>=10.0",
     # Logging
     "loguru>=0.7",
+    "graphviz>=0.21",
 ]
 
 [project.optional-dependencies]
