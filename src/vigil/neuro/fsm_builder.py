@@ -502,6 +502,7 @@ class FsmBuilder:
                     source=source_state,
                     target=target_state,
                     action=fsm_action,
+                    confidence=1.0,
                     observed_count=1,
                 )
             )

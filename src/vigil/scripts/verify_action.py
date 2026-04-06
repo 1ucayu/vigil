@@ -129,7 +129,12 @@ def _cmd_trajectory(fsm, args) -> None:
     steps = [TrajectoryStep(action=a) for a in actions_raw]
     goal = _resolve_goal(fsm, args.goal) if args.goal else None
 
-    verifier = TrajectoryVerifier(fsm)
+    config = None
+    if args.confidence is not None:
+        from vigil.core.config import VerificationConfig
+
+        config = VerificationConfig(confidence_threshold=args.confidence)
+    verifier = TrajectoryVerifier(fsm, config=config)
     result = verifier.verify_trajectory(args.state, steps, goal_state=goal)
 
     print(f"\n{_BOLD}Trajectory Verification ({result.total_steps} steps){_RESET}")
@@ -166,7 +171,12 @@ def _cmd_verify(fsm, args) -> None:
         intent_vars = json.loads(args.intent)
         intent_ctx = IntentContext(variables=intent_vars)
 
-    engine = DecisionEngine(fsm)
+    config = None
+    if args.confidence is not None:
+        from vigil.core.config import VerificationConfig
+
+        config = VerificationConfig(confidence_threshold=args.confidence)
+    engine = DecisionEngine(fsm, config=config)
 
     if args.state:
         result = engine.verify_by_state(args.state, action, intent_ctx=intent_ctx, goal_state=goal)
@@ -210,6 +220,12 @@ def main() -> None:
     # Optional context
     parser.add_argument("--goal", help="Goal state ID or name")
     parser.add_argument("--intent", help='Intent variables JSON (e.g., \'{"wifi_name": "HKU"}\')')
+    parser.add_argument(
+        "--confidence",
+        type=float,
+        default=None,
+        help="Override confidence threshold (default: 0.7). Use 0 to skip confidence checks.",
+    )
 
     args = parser.parse_args()
 
