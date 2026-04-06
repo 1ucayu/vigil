@@ -59,6 +59,7 @@ vigil-explore = "vigil.scripts.explore_app:main"
 vigil-build = "vigil.scripts.build_fsm:main"
 vigil-verify = "vigil.scripts.verify_fsm:main"
 vigil-visualize = "vigil.scripts.visualize_fsm:main"
+vigil-verify-action = "vigil.scripts.verify_action:main"
 
 [build-system]
 requires = ["hatchling"]

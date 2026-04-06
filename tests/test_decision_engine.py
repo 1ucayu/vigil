@@ -1,5 +1,394 @@
-"""Tests for vigil.symbolic.decision_engine."""
+"""Tests for vigil.symbolic.decision_engine — combined Tier 1 + Tier 2."""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+import pytest
+
+from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
+from vigil.models.state import RawScreen, UIElement
+from vigil.symbolic.decision_engine import DecisionEngine
+from vigil.symbolic.dsl_evaluator import IntentContext, ScreenContext
+from vigil.symbolic.fsm_checker import VerifyReason, VerifyResult
 
 
-def test_placeholder() -> None:
-    """Placeholder — replace with real tests when decision engine is implemented."""
+@pytest.fixture
+def guarded_fsm() -> AppFSM:
+    """FSM with a DSL guard on s1→s2 and no guard on s2→s3."""
+    fsm = AppFSM(app_package="com.test.app")
+
+    s1 = AbstractState(
+        state_id="s1",
+        name="MainSettings",
+        fingerprint="fp_main",
+        hierarchy_level=HierarchyLevel.ACTIVITY,
+        activity_name="com.test.app.Main",
+    )
+    s2 = AbstractState(
+        state_id="s2",
+        name="WiFiSettings",
+        fingerprint="fp_wifi",
+        hierarchy_level=HierarchyLevel.FRAGMENT,
+        parent_state="s1",
+        activity_name="com.test.app.Main",
+    )
+    s3 = AbstractState(
+        state_id="s3",
+        name="WiFiDetail",
+        fingerprint="fp_wifi_detail",
+        hierarchy_level=HierarchyLevel.FRAGMENT,
+        parent_state="s2",
+        activity_name="com.test.app.Main",
+    )
+
+    fsm.add_state(s1)
+    fsm.add_state(s2)
+    fsm.add_state(s3)
+    fsm.initial_state = "s1"
+
+    t1 = Transition(
+        source="s1",
+        target="s2",
+        action={"type": "click", "target": "e_0001"},
+        guard='read(wifi_item, text) != ""',
+        confidence=0.95,
+        observed_count=10,
+    )
+    t2 = Transition(
+        source="s2",
+        target="s3",
+        action={"type": "click", "target": "e_0002"},
+        confidence=0.85,
+        observed_count=5,
+    )
+
+    fsm.add_transition(t1)
+    fsm.add_transition(t2)
+    return fsm
+
+
+class TestTier1Only:
+    """Tests where only Tier 1 (structural FSM check) is exercised."""
+
+    def test_tier1_allow_no_guard(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm)
+        # s2→s3 has no guard — Tier 2 skipped
+        out = engine.verify_by_state("s2", {"type": "click"})
+        assert out.result == VerifyResult.ALLOW
+        assert out.reason == VerifyReason.TRANSITION_VALID
+
+    def test_tier1_deny(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm)
+        out = engine.verify_by_state("s1", {"type": "scroll_up"})
+        assert out.result == VerifyResult.DENY
+        assert out.reason == VerifyReason.TRANSITION_INVALID
+
+    def test_tier1_blocks_before_tier2(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm)
+        # s3 has no outgoing transitions — Tier 1 denies, Tier 2 never runs
+        out = engine.verify_by_state("s3", {"type": "click"})
+        assert out.result == VerifyResult.DENY
+        assert out.reason == VerifyReason.TRANSITION_INVALID
+
+    def test_no_evaluator(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm, grammar_path="/nonexistent/grammar.lark")
+        assert engine._evaluator is None
+        # s2→s3 (no guard) — Tier 1 ALLOW, Tier 2 skipped
+        out = engine.verify_by_state("s2", {"type": "click"})
+        assert out.result == VerifyResult.ALLOW
+
+    def test_no_evaluator_with_guard(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm, grammar_path="/nonexistent/grammar.lark")
+        # s1→s2 has guard, but evaluator is None — Tier 2 skipped
+        out = engine.verify_by_state("s1", {"type": "click"})
+        assert out.result == VerifyResult.ALLOW
+
+
+class TestTier2Guard:
+    """Tests where Tier 2 DSL guard evaluation runs."""
+
+    def test_tier2_guard_pass(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm)
+        ctx = ScreenContext(elements={"wifi_item": {"text": "HKU_WiFi"}})
+        out = engine.verify_by_state("s1", {"type": "click"}, screen_ctx=ctx)
+        assert out.result == VerifyResult.ALLOW
+        assert out.reason == VerifyReason.TRANSITION_VALID
+
+    def test_tier2_guard_fail(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm)
+        ctx = ScreenContext(elements={"wifi_item": {"text": ""}})
+        out = engine.verify_by_state("s1", {"type": "click"}, screen_ctx=ctx)
+        assert out.result == VerifyResult.DENY
+        assert out.reason == VerifyReason.GUARD_FAILED
+        assert "guard failed" in out.details.lower()
+
+    def test_tier2_guard_missing_element(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm)
+        ctx = ScreenContext(elements={})
+        out = engine.verify_by_state("s1", {"type": "click"}, screen_ctx=ctx)
+        assert out.result == VerifyResult.DENY
+        assert out.reason == VerifyReason.GUARD_FAILED
+
+    def test_tier2_guard_no_screen_ctx(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm)
+        # No screen_ctx → empty ScreenContext → guard fails (element not found)
+        out = engine.verify_by_state("s1", {"type": "click"})
+        assert out.result == VerifyResult.DENY
+        assert out.reason == VerifyReason.GUARD_FAILED
+
+
+class TestActionContext:
+    """Tests for action_pred guard evaluation with action_ctx."""
+
+    @pytest.fixture
+    def action_guarded_fsm(self) -> AppFSM:
+        """FSM with an action_pred guard on s1→s2."""
+        fsm = AppFSM(app_package="com.test.app")
+        s1 = AbstractState(
+            state_id="s1",
+            name="Main",
+            fingerprint="fp_main",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+        s2 = AbstractState(
+            state_id="s2",
+            name="WiFi",
+            fingerprint="fp_wifi",
+            hierarchy_level=HierarchyLevel.FRAGMENT,
+        )
+        fsm.add_state(s1)
+        fsm.add_state(s2)
+        fsm.initial_state = "s1"
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s2",
+                action={"type": "click", "target": "e_0001"},
+                guard='action(target_text) == "WiFi"',
+                confidence=0.95,
+                observed_count=10,
+            )
+        )
+        return fsm
+
+    def test_action_context_match(self, action_guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(action_guarded_fsm)
+        action_ctx = {"action_type": "click", "target_text": "WiFi"}
+        out = engine.verify_by_state(
+            "s1",
+            {"type": "click"},
+            action_ctx=action_ctx,
+        )
+        assert out.result == VerifyResult.ALLOW
+
+    def test_action_context_mismatch(self, action_guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(action_guarded_fsm)
+        action_ctx = {"action_type": "click", "target_text": "Bluetooth"}
+        out = engine.verify_by_state(
+            "s1",
+            {"type": "click"},
+            action_ctx=action_ctx,
+        )
+        assert out.result == VerifyResult.DENY
+        assert out.reason == VerifyReason.GUARD_FAILED
+
+
+class TestIntentBinding:
+    """Tests for $intent.* variable resolution in guards."""
+
+    @pytest.fixture
+    def intent_guarded_fsm(self) -> AppFSM:
+        """FSM with an intent-bound guard on s1→s2."""
+        fsm = AppFSM(app_package="com.test.app")
+        s1 = AbstractState(
+            state_id="s1",
+            name="Main",
+            fingerprint="fp_main",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+        s2 = AbstractState(
+            state_id="s2",
+            name="WiFi",
+            fingerprint="fp_wifi",
+            hierarchy_level=HierarchyLevel.FRAGMENT,
+        )
+        fsm.add_state(s1)
+        fsm.add_state(s2)
+        fsm.initial_state = "s1"
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s2",
+                action={"type": "click"},
+                guard="action(target_text) == $intent.wifi_name",
+                confidence=0.95,
+                observed_count=10,
+            )
+        )
+        return fsm
+
+    def test_intent_binding_in_guard(self, intent_guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(intent_guarded_fsm)
+        intent = IntentContext(variables={"wifi_name": "HKU"})
+        action_ctx = {"target_text": "HKU"}
+        out = engine.verify_by_state(
+            "s1",
+            {"type": "click"},
+            intent_ctx=intent,
+            action_ctx=action_ctx,
+        )
+        assert out.result == VerifyResult.ALLOW
+
+    def test_intent_binding_mismatch(self, intent_guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(intent_guarded_fsm)
+        intent = IntentContext(variables={"wifi_name": "HKU"})
+        action_ctx = {"target_text": "CityU"}
+        out = engine.verify_by_state(
+            "s1",
+            {"type": "click"},
+            intent_ctx=intent,
+            action_ctx=action_ctx,
+        )
+        assert out.result == VerifyResult.DENY
+        assert out.reason == VerifyReason.GUARD_FAILED
+
+
+class TestVerifyWithScreen:
+    """Tests for the full verify() path using RawScreen."""
+
+    def test_verify_with_screen(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm)
+        screen = RawScreen(
+            screen_id="scr_001",
+            activity_name="com.test.app.Main",
+            elements=[
+                UIElement(
+                    element_id="wifi_item",
+                    class_name="android.widget.TextView",
+                    text="HKU_WiFi",
+                    is_clickable=True,
+                    is_enabled=True,
+                ),
+            ],
+        )
+        # Mock fingerprint to match s1 (patch class method for Pydantic compat)
+        with patch.object(RawScreen, "get_structural_fingerprint", return_value="fp_main"):
+            out = engine.verify(screen, {"type": "click", "target": "wifi_item"})
+        # Guard: read(wifi_item, text) != "" → "HKU_WiFi" != "" → True
+        assert out.result == VerifyResult.ALLOW
+
+    def test_verify_screen_guard_fail(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm)
+        screen = RawScreen(
+            screen_id="scr_002",
+            activity_name="com.test.app.Main",
+            elements=[
+                UIElement(
+                    element_id="wifi_item",
+                    class_name="android.widget.TextView",
+                    text="",
+                    is_clickable=True,
+                    is_enabled=True,
+                ),
+            ],
+        )
+        with patch.object(RawScreen, "get_structural_fingerprint", return_value="fp_main"):
+            out = engine.verify(screen, {"type": "click", "target": "wifi_item"})
+        # Guard: read(wifi_item, text) != "" → "" != "" → False
+        assert out.result == VerifyResult.DENY
+        assert out.reason == VerifyReason.GUARD_FAILED
+
+    def test_verify_screen_unknown_state(self, guarded_fsm: AppFSM) -> None:
+        engine = DecisionEngine(guarded_fsm)
+        screen = RawScreen(screen_id="scr_003")
+        with patch.object(RawScreen, "get_structural_fingerprint", return_value="fp_unknown"):
+            out = engine.verify(screen, {"type": "click"})
+        assert out.result == VerifyResult.UNCERTAIN
+        assert out.reason == VerifyReason.STATE_UNKNOWN
+
+
+class TestBuildContextHelpers:
+    """Tests for _build_screen_context and _build_action_context."""
+
+    def test_build_screen_context(self) -> None:
+        screen = RawScreen(
+            screen_id="scr_001",
+            elements=[
+                UIElement(
+                    element_id="e_001",
+                    class_name="android.widget.TextView",
+                    resource_id="com.app:id/title",
+                    text="WiFi",
+                    is_enabled=True,
+                ),
+                UIElement(
+                    element_id="e_002",
+                    class_name="android.widget.Switch",
+                    text="",
+                    is_checked=True,
+                    is_enabled=True,
+                ),
+            ],
+        )
+        ctx = DecisionEngine._build_screen_context(screen)
+        # Keyed by element_id
+        assert ctx.elements["e_001"]["text"] == "WiFi"
+        assert ctx.elements["e_002"]["is_checked"] is True
+        # Also keyed by resource_id
+        assert ctx.elements["com.app:id/title"]["text"] == "WiFi"
+
+    def test_build_screen_context_with_children(self) -> None:
+        screen = RawScreen(
+            screen_id="scr_001",
+            elements=[
+                UIElement(
+                    element_id="e_parent",
+                    class_name="android.widget.RecyclerView",
+                    is_scrollable=True,
+                    children=["e_c1", "e_c2"],
+                ),
+                UIElement(
+                    element_id="e_c1",
+                    class_name="android.widget.TextView",
+                    text="HKU_WiFi",
+                ),
+                UIElement(
+                    element_id="e_c2",
+                    class_name="android.widget.TextView",
+                    text="eduroam",
+                ),
+            ],
+        )
+        ctx = DecisionEngine._build_screen_context(screen)
+        parent = ctx.elements["e_parent"]
+        assert parent["children_count"] == 2
+        assert len(parent["children"]) == 2
+        assert parent["children"][0]["text"] == "HKU_WiFi"
+
+    def test_build_action_context(self) -> None:
+        screen = RawScreen(
+            screen_id="scr_001",
+            elements=[
+                UIElement(
+                    element_id="e_001",
+                    class_name="android.widget.TextView",
+                    resource_id="com.app:id/wifi",
+                    text="WiFi",
+                    content_description="WiFi toggle",
+                ),
+            ],
+        )
+        action = {"type": "click", "target": "e_001"}
+        ctx = DecisionEngine._build_action_context(action, screen)
+        assert ctx["action_type"] == "click"
+        assert ctx["target_text"] == "WiFi"
+        assert ctx["target_resource_id"] == "com.app:id/wifi"
+        assert ctx["target_content_desc"] == "WiFi toggle"
+
+    def test_build_action_context_no_target(self) -> None:
+        screen = RawScreen(screen_id="scr_001")
+        action = {"type": "navigate_back"}
+        ctx = DecisionEngine._build_action_context(action, screen)
+        assert ctx["action_type"] == "navigate_back"
+        assert "target_text" not in ctx
