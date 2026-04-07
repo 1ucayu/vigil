@@ -392,3 +392,49 @@ class TestBuildContextHelpers:
         ctx = DecisionEngine._build_action_context(action, screen)
         assert ctx["action_type"] == "navigate_back"
         assert "target_text" not in ctx
+
+    def test_screen_context_has_synthesized_aliases(self) -> None:
+        """Elements without resource_id get synthesized aliases like Switch_0."""
+        screen = RawScreen(
+            screen_id="scr_001",
+            elements=[
+                UIElement(
+                    element_id="e_001",
+                    class_name="android.widget.Switch",
+                    text="",
+                    is_clickable=True,
+                    is_checkable=True,
+                    is_checked=True,
+                    is_enabled=True,
+                ),
+                UIElement(
+                    element_id="e_002",
+                    class_name="android.widget.Switch",
+                    text="",
+                    is_clickable=True,
+                    is_checkable=True,
+                    is_checked=False,
+                    is_enabled=True,
+                ),
+                UIElement(
+                    element_id="e_003",
+                    class_name="android.widget.EditText",
+                    text="hello",
+                    is_clickable=True,
+                    is_editable=True,
+                    is_enabled=True,
+                ),
+            ],
+        )
+        ctx = DecisionEngine._build_screen_context(screen)
+        # Synthesized aliases for elements without resource_id
+        assert "Switch_0" in ctx.elements
+        assert ctx.elements["Switch_0"]["is_checked"] is True
+        assert "Switch_1" in ctx.elements
+        assert ctx.elements["Switch_1"]["is_checked"] is False
+        assert "EditText_0" in ctx.elements
+        assert ctx.elements["EditText_0"]["text"] == "hello"
+        # Original element_ids still work
+        assert "e_001" in ctx.elements
+        assert "e_002" in ctx.elements
+        assert "e_003" in ctx.elements

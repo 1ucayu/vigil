@@ -29,6 +29,7 @@ dependencies = [
     # Logging
     "loguru>=0.7",
     "graphviz>=0.21",
+    "google-genai>=1.70.0",
 ]
 
 [project.optional-dependencies]

@@ -84,6 +84,8 @@ class FsmBuilder:
         # Step 7: Container classification
         if classify_containers:
             self._classify_containers(fsm, raw_screens, trace_path.parent)
+            # Safety net: detect content states via graph fan-out
+            self._detect_content_fanout(fsm)
 
         # Step 8: Sub-FSM template extraction for CONTENT containers
         if classify_containers:
@@ -125,19 +127,8 @@ class FsmBuilder:
                 missing_count += 1
                 continue
 
-            # Resolve path: try relative to trace dir, then relative to project root
-            xml_path = trace_dir / xml_rel_path
-            if not xml_path.exists():
-                # Try as project-relative path
-                project_root = trace_dir
-                while project_root.parent != project_root:
-                    candidate = project_root / xml_rel_path
-                    if candidate.exists():
-                        xml_path = candidate
-                        break
-                    project_root = project_root.parent
-
-            if not xml_path.exists():
+            xml_path = self._resolve_path(xml_rel_path, trace_dir)
+            if xml_path is None:
                 missing_count += 1
                 continue
 
@@ -166,6 +157,33 @@ class FsmBuilder:
             f"Container classification: {classified}/{len(fsm.states)} states classified "
             f"({len(screens)} XML files parsed)"
         )
+
+    @staticmethod
+    def _detect_content_fanout(fsm: AppFSM, min_fanout: int = 3) -> None:
+        """Promote unclassified states to CONTENT when graph structure indicates it.
+
+        If a state has >= min_fanout click transitions to distinct targets,
+        it likely contains dynamic content items. Independent of container_type
+        from XML analysis — acts as a safety net.
+        """
+        promoted = 0
+        for state in fsm.states.values():
+            if state.container_type != ContainerType.NONE:
+                continue
+            click_targets = {
+                t.target
+                for t in fsm.transitions
+                if t.source == state.state_id and t.action.get("type") == "click"
+            }
+            if len(click_targets) >= min_fanout:
+                state.container_type = ContainerType.CONTENT
+                promoted += 1
+                logger.debug(
+                    f"Fan-out promotion: {state.state_id} ({state.name}) "
+                    f"→ CONTENT ({len(click_targets)} click targets)"
+                )
+        if promoted:
+            logger.info(f"Fan-out detection: promoted {promoted} states to CONTENT")
 
     def _build_sub_fsm_templates(
         self,
@@ -641,19 +659,26 @@ class FsmBuilder:
 
     @staticmethod
     def _resolve_path(rel_path: str, trace_dir: Path) -> Path | None:
-        """Resolve a relative path, trying trace_dir then walking up."""
-        xml_path = trace_dir / rel_path
-        if xml_path.exists():
-            return xml_path
-        # Try as absolute or project-relative
-        abs_path = Path(rel_path)
-        if abs_path.exists():
-            return abs_path
-        # Walk up from trace_dir
-        parent = trace_dir
-        while parent.parent != parent:
-            candidate = parent / rel_path
+        """Resolve a path, trying multiple strategies.
+
+        Order: absolute → CWD-relative → trace_dir-relative → trees/ sibling.
+        """
+        p = Path(rel_path)
+        # 1. Absolute path
+        if p.is_absolute() and p.exists():
+            return p
+        # 2. Relative to CWD (covers project-root-relative paths like
+        #    "data/apps/settings/trees/scr_0001.xml")
+        if p.exists():
+            return p
+        # 3. Relative to trace dir
+        candidate = trace_dir / rel_path
+        if candidate.exists():
+            return candidate
+        # 4. Try resolving just the filename in the trees/ sibling directory
+        trees_dir = trace_dir.parent / "trees"
+        if trees_dir.is_dir():
+            candidate = trees_dir / p.name
             if candidate.exists():
                 return candidate
-            parent = parent.parent
         return None

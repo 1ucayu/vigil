@@ -47,6 +47,16 @@ def main() -> None:
         action="store_true",
         help="Skip container classification (STRUCTURAL/CONTENT)",
     )
+    parser.add_argument(
+        "--generate-guards",
+        action="store_true",
+        help="Generate DSL guard expressions for transitions using LLM (Stage 4)",
+    )
+    parser.add_argument(
+        "--no-images",
+        action="store_true",
+        help="Skip screenshot input for guard generation (text-only prompts)",
+    )
 
     args = parser.parse_args()
 
@@ -72,6 +82,18 @@ def main() -> None:
         include_self_loops=args.include_self_loops,
         classify_containers=not args.no_classify,
     )
+
+    # Stage 4: DSL guard generation (optional)
+    if args.generate_guards:
+        from vigil.core.config import VigilConfig
+        from vigil.neuro.dsl_generator import DslGenerator
+
+        config = VigilConfig.from_yaml("configs/default.yaml")
+        generator = DslGenerator(fsm=fsm, config=config)
+        fsm = generator.generate_all_guards(
+            trace_path=trace_path,
+            use_images=not args.no_images,
+        )
 
     # Serialize
     fsm.serialize(output_path)

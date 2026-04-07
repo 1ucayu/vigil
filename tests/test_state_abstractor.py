@@ -658,3 +658,78 @@ class TestBuildSubFsmTemplate:
 
         # Only one template for s1 (even though two items were explored)
         assert len(templates) == 1
+
+
+class TestMajorityVotePreference:
+    """Tie-breaking: prefer CONTENT over STRUCTURAL."""
+
+    def test_tie_breaks_to_content(self):
+        """When votes are tied, CONTENT wins over STRUCTURAL."""
+        abstractor = StateAbstractor()
+        fsm = AppFSM(app_package="com.test")
+        s1 = AbstractState(
+            state_id="s1",
+            name="MixedPage",
+            fingerprint="fp1",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            raw_screens=["scr_a", "scr_b"],
+        )
+        fsm.add_state(s1)
+
+        # scr_a: 4 children all same skeleton → CONTENT (num_unique==1)
+        children_a = [
+            _make_element(f"a_{i}", class_name="android.widget.LinearLayout", is_clickable=True)
+            for i in range(4)
+        ]
+        container_a = _make_element(
+            "cont_a",
+            class_name="RecyclerView",
+            is_scrollable=True,
+            children=[c.element_id for c in children_a],
+        )
+        screen_a = RawScreen(screen_id="scr_a", elements=[container_a, *children_a])
+
+        # scr_b: 4 diverse children → STRUCTURAL (num_unique >=3, len <8)
+        children_b = [
+            _make_element("b_0", class_name="android.widget.Switch", is_clickable=True),
+            _make_element("b_1", class_name="android.widget.Button", is_clickable=True),
+            _make_element("b_2", class_name="android.widget.TextView", is_clickable=True),
+            _make_element("b_3", class_name="android.widget.CheckBox", is_clickable=True),
+        ]
+        container_b = _make_element(
+            "cont_b",
+            class_name="RecyclerView",
+            is_scrollable=True,
+            children=[c.element_id for c in children_b],
+        )
+        screen_b = RawScreen(screen_id="scr_b", elements=[container_b, *children_b])
+
+        abstractor.annotate_fsm_states(fsm, {"scr_a": screen_a, "scr_b": screen_b})
+        assert s1.container_type == ContainerType.CONTENT
+
+
+class TestClassifyMixedContainer:
+    """Mixed container with switch + homogeneous clickable items + button."""
+
+    def test_classify_switch_plus_list_items_plus_button(self):
+        """1 Switch + 5 identical clickable TextViews + 1 Button → CONTENT."""
+        abstractor = StateAbstractor()
+
+        switch = _make_element("sw", class_name="android.widget.Switch", is_clickable=True)
+        items = [
+            _make_element(f"item_{i}", class_name="android.widget.LinearLayout", is_clickable=True)
+            for i in range(5)
+        ]
+        button = _make_element("btn", class_name="android.widget.Button", is_clickable=True)
+
+        container = _make_element(
+            "rv",
+            class_name="RecyclerView",
+            is_scrollable=True,
+            children=[switch.element_id, *[it.element_id for it in items], button.element_id],
+        )
+        all_elements = [container, switch, *items, button]
+        elements_by_id = {e.element_id: e for e in all_elements}
+
+        result = abstractor.classify_container(container, [switch, *items, button], elements_by_id)
+        assert result.container_type == ContainerType.CONTENT

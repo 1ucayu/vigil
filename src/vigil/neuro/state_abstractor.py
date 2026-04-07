@@ -292,9 +292,19 @@ class StateAbstractor:
             if not type_votes:
                 continue
 
-            # Majority vote
+            # Majority vote, preferring CONTENT on ties (CONTENT is a stronger
+            # signal — it means homogeneous items were detected in at least one
+            # snapshot, while STRUCTURAL may just mean too few items were visible).
             vote_counts = Counter(type_votes)
-            winner = vote_counts.most_common(1)[0][0]
+            top = vote_counts.most_common(2)
+            if (
+                len(top) == 2
+                and top[0][1] == top[1][1]
+                and ContainerType.CONTENT in {top[0][0], top[1][0]}
+            ):
+                winner = ContainerType.CONTENT
+            else:
+                winner = top[0][0]
             state.container_type = winner
 
             # Use the first matching resource_id and skeleton_hash

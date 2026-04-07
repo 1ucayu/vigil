@@ -12,8 +12,8 @@ ape:
   ape_mode: "sata"                  # sata (CEGAR) | random
 
 llm:
-  provider: "anthropic"              # anthropic | openai
-  model: "claude-sonnet-4-20250514"
+  provider: "google"                 # anthropic | openai | google
+  model: "gemini-2.5-flash"
   max_tokens: 4096
   temperature: 0.0
 

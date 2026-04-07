@@ -35,7 +35,7 @@ class ApeConfig(BaseModel):
 class LLMConfig(BaseModel):
     """Configuration for LLM client (offline stage only)."""
 
-    provider: Literal["anthropic", "openai"] = "anthropic"
+    provider: Literal["anthropic", "openai", "google"] = "anthropic"
     model: str = "claude-sonnet-4-20250514"
     max_tokens: int = 4096
     temperature: float = 0.0

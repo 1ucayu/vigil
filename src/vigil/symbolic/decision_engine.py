@@ -175,9 +175,10 @@ class DecisionEngine:
     def _build_screen_context(screen: RawScreen) -> ScreenContext:
         """Convert RawScreen elements into ScreenContext for guard evaluation.
 
-        Builds elements dict keyed by both element_id and resource_id.
-        Each value contains text, content_description, checked/enabled state,
-        and children info for container elements.
+        Builds elements dict keyed by element_id, resource_id, and synthesized
+        aliases (e.g., Switch_0, EditText_0) for elements without resource_id.
+        Aliases use the same logic as DslGenerator._build_element_reference_table
+        so that guards generated offline resolve correctly at runtime.
         """
         elements: dict[str, dict[str, Any]] = {}
         elements_by_id = {e.element_id: e for e in screen.elements}
@@ -206,6 +207,23 @@ class DecisionEngine:
             # Also key by resource_id if available
             if e.resource_id:
                 elements[e.resource_id] = props
+
+        # Build synthesized aliases for interactable elements without resource_id.
+        # Must match DslGenerator._build_element_reference_table logic exactly:
+        # only interactable elements, only when resource_id is empty,
+        # counter increments per short class name.
+        class_counts: dict[str, int] = {}
+        for e in screen.elements:
+            is_interactable = e.is_clickable or e.is_scrollable or e.is_editable or e.is_checkable
+            if not is_interactable or e.resource_id:
+                continue
+            cls = e.class_name or ""
+            short = cls.rsplit(".", 1)[-1] if "." in cls else cls
+            if short:
+                idx = class_counts.get(short, 0)
+                class_counts[short] = idx + 1
+                alias = f"{short}_{idx}"
+                elements[alias] = elements[e.element_id]
 
         return ScreenContext(elements=elements)
 
