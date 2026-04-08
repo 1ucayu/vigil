@@ -4,16 +4,14 @@ Annotates FSM transitions with guard conditions using a constrained formal gramm
 (docs/dsl_grammar.lark). Uses LLM + multimodal input (screenshots + element tables)
 to generate syntactically correct guards.
 
-Transitions are classified into categories (content_selection, state_mutation,
-structural_nav, etc.) to determine guard generation strategy — only semantically
-meaningful transitions (content selection, state mutation) trigger LLM calls.
+Every click transition gets a guard via trace-guided LLM prompts showing the
+source → action → target triple. Back/home/scroll transitions are skipped.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -22,21 +20,25 @@ from loguru import logger
 
 from vigil.core.config import VigilConfig
 from vigil.core.llm_client import LlmClient
-from vigil.models.fsm import AbstractState, AppFSM, ContainerType, Transition
+from vigil.models.fsm import AbstractState, AppFSM, Transition
 
 _GRAMMAR_PATH = Path(__file__).parent.parent.parent.parent / "docs" / "dsl_grammar.lark"
 
 _MAX_ELEMENTS_PER_SCREEN = 30
 
+_SKIP_ACTIONS = frozenset({"navigate_back", "navigate_home", "scroll_up", "scroll_down"})
+
 # ---------------------------------------------------------------------------
 # Prompt templates
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT_TEMPLATE = """\
+_SYSTEM_PROMPT = """\
 You are a formal verification expert generating DSL guard expressions \
 for a mobile app's FSM transitions.
 
-A guard is a precondition that must be true before a UI action is allowed. \
+A guard is a precondition that must be true BEFORE a UI action is allowed. \
+Guards verify that the agent's proposed action matches the user's intent.
+
 Guards are written in this grammar:
 
 {grammar}
@@ -46,132 +48,42 @@ Available predicates:
 - value(element) op value — shorthand for read(element, value)
 - action(property) op value — check the proposed action's metadata
 - contains(element, value) — check if element contains a value
-- count(element) op value — check child count of element
+- count(element) op value — check child count
+- in_state(name) — check current FSM state
 - time_in(HH:MM, HH:MM) — time range check
-- in_state(name) — FSM state check
 
-CRITICAL RULES:
-1. For element references, use the Alias from the element table. This is the \
-resource_id (e.g., com.android.settings:id/switchWidget) or a synthesized alias \
-(e.g., Switch_0, EditText_0). Do NOT invent descriptive names.
-2. NEVER use element IDs like e_0000, e_0037, e_0150 — these are session-specific \
-parsing artifacts that change every capture.
-3. Element names and property names are bare identifiers — NEVER wrap them in quotes.
+Use $intent.variable_name for values that depend on the user's instruction \
+and are only known at runtime. Choose descriptive variable names \
+(e.g., $intent.wifi_name, $intent.target_setting, $intent.device_name).
 
-Use $intent.variable_name for values only known at runtime.
+RULES:
+1. For element references, use the Alias from the element table (resource_id \
+or synthesized alias like Switch_0). NEVER use e_XXXX IDs.
+2. Element and property names are bare identifiers — no quotes around them.
+3. For menu/navigation clicks, generate: action(target_text) == $intent.<variable>
+4. For toggles/switches, generate: read(<alias>, is_checked) == true/false
+5. For dialog confirmations (OK/Cancel/Pair), return "null" — no precondition needed.
+6. For clicks on dynamic list items, generate: action(target_text) == $intent.<variable>
 
-Respond with ONLY the guard expression or the word "null" (no guard needed). \
-No explanation, no markdown, no quotes around the expression."""
+Respond with ONLY the guard expression or "null". No explanation, no markdown."""
 
-_USER_PROMPT_TEMPLATE = """\
-## Transition
-Action: {action_type} on element {target_alias}
-Text: "{target_text}"
-From state: {source_name} → To state: {target_name}
+_USER_PROMPT = """\
+## Transition Context
+Source state: {source_name}
+Action: {action_type} on element "{target_text}" (alias: {target_alias})
+Target state: {target_name}
 
-## Source State Elements
+## Source Screen Elements (before action)
 {source_table}
 
-## Target State Elements
+## Target Screen Elements (after action)
 {target_table}
 
-## Guidelines
-- Simple menu navigation (clicking a list item to open a page) → null
-- Toggle/switch/checkbox → read(element_alias, is_checked) == false
-- Selecting a specific item from a dynamic list → action(target_text) == $intent.item_name
-- Confirmation/save buttons → null (or check required fields if visible)
-- Scrolling, back, home → null
+## What changed (source → target)
+{diff_summary}
 
-Your guard expression (or "null"):"""
-
-_CONTENT_SELECTION_SYSTEM_PROMPT = """\
-You are a formal verification expert generating DSL guard expressions \
-for a mobile app's FSM transitions.
-
-Guards are written in this grammar:
-
-{grammar}
-
-This transition clicks an item from a dynamic content list (e.g., WiFi networks, \
-Bluetooth devices, apps). The user's intent determines WHICH item to click.
-
-Generate a guard using: action(target_text) == $intent.<descriptive_variable_name>
-
-Choose a descriptive variable name based on context:
-- WiFi network → $intent.wifi_name
-- Bluetooth device → $intent.device_name
-- App name → $intent.app_name
-- Generic → $intent.selected_item
-
-CRITICAL: You MUST return a guard expression. Do NOT return "null".
-Respond with ONLY the guard expression. No explanation, no markdown, no quotes."""
-
-_CONTENT_SELECTION_USER_PROMPT = """\
-## Transition
-Action: {action_type} on "{target_text}" (alias: {target_alias})
-From state: {source_name} → To state: {target_name}
-
-## Source State Elements (dynamic content list)
-{source_table}
-
-Generate an action(target_text) == $intent.<variable_name> guard.
-Your guard expression:"""
-
-_STATE_MUTATION_SYSTEM_PROMPT = """\
-You are a formal verification expert generating DSL guard expressions \
-for a mobile app's FSM transitions.
-
-Guards are written in this grammar:
-
-{grammar}
-
-This action changes a UI state (toggle, checkbox, text input, confirmation).
-Generate a guard that checks the PRECONDITION — what must be true BEFORE this action.
-
-Common patterns:
-- Toggle on → read(<alias>, is_checked) == false
-- Toggle off → read(<alias>, is_checked) == true
-- Confirm after text input → value(<alias>) == $intent.<variable>
-- Checkbox → read(<alias>, is_checked) == false
-- Dialog confirmation (Pair, Delete, OK/Cancel) → usually no precondition → "null"
-
-Use the element aliases from the provided table. These are either resource_ids \
-(e.g., com.android.settings:id/switchWidget) or synthesized aliases \
-(e.g., Switch_0, EditText_0).
-
-If unsure whether a precondition applies, return "null". \
-A missing guard is safer than a wrong guard.
-
-Respond with ONLY the guard expression or "null". \
-No explanation, no markdown, no quotes."""
-
-_STATE_MUTATION_USER_PROMPT = """\
-## Transition
-Action: {action_type} on element "{target_text}" (alias: {target_alias})
-From state: {source_name} → To state: {target_name}
-Element class: {target_class}
-Checkable: {is_checkable} | Checked: {is_checked}
-
-## Source State Elements
-{source_table}
-
-Generate a precondition guard for this state-changing action.
-Your guard expression:"""
-
-
-# ---------------------------------------------------------------------------
-# Transition classification
-# ---------------------------------------------------------------------------
-
-
-class TransitionCategory(StrEnum):
-    """Classification of FSM transitions for guard generation strategy."""
-
-    CONTENT_SELECTION = "content_selection"
-    STATE_MUTATION = "state_mutation"
-    STRUCTURAL_NAVIGATION = "structural_nav"
-    BACK_NAVIGATION = "back_navigation"
-    SCROLL = "scroll"
+{extra_context}\
+Generate a guard expression (or "null" if no precondition is needed):"""
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +113,7 @@ class DslGenerator:
     ) -> AppFSM:
         """Generate guard templates for all transitions in the FSM.
 
-        Classifies each transition, then generates guards only for
-        CONTENT_SELECTION and STATE_MUTATION transitions.
+        Every click transition gets a guard via LLM. Back/home/scroll are skipped.
 
         Returns:
             The same AppFSM with transition.guard fields populated.
@@ -214,9 +125,16 @@ class DslGenerator:
         generated = 0
         null_count = 0
         failed = 0
-        cat_counts: dict[str, int] = {}
 
         for transition in self._fsm.transitions:
+            action_type = transition.action.get("type", "")
+
+            # Only skip back/home/scroll — everything else gets a guard
+            if action_type in _SKIP_ACTIONS:
+                transition.guard = None
+                skipped += 1
+                continue
+
             source_state = self._fsm.states.get(transition.source)
             target_state = self._fsm.states.get(transition.target)
             if not source_state or not target_state:
@@ -224,25 +142,15 @@ class DslGenerator:
                 continue
 
             source_elements = self._get_elements(source_state, raw_screens)
-            category = self._classify_transition(
-                transition, source_state, target_state, source_elements
-            )
-            cat_counts[category] = cat_counts.get(category, 0) + 1
-            action_type = transition.action.get("type", "")
-            logger.debug(
-                f"  {source_state.name} -> {target_state.name} [{action_type}]: {category.value}"
-            )
-
-            if category in (
-                TransitionCategory.BACK_NAVIGATION,
-                TransitionCategory.SCROLL,
-                TransitionCategory.STRUCTURAL_NAVIGATION,
-            ):
-                transition.guard = None
-                skipped += 1
-                continue
-
             target_elements = self._get_elements(target_state, raw_screens)
+
+            # Compute diff between source and target elements
+            diff_summary = self._compute_diff(source_elements, target_elements)
+
+            # Collect contrastive examples from sibling transitions
+            extra_context = self._collect_sibling_transitions(transition, source_state, raw_screens)
+
+            # Resolve screenshots
             source_ss = self._resolve_screenshot(source_state, trace_data) if use_images else None
             target_ss = self._resolve_screenshot(target_state, trace_data) if use_images else None
 
@@ -255,14 +163,15 @@ class DslGenerator:
                     target_elements,
                     source_ss,
                     target_ss,
-                    category=category,
+                    diff_summary=diff_summary,
+                    extra_context=extra_context,
                 )
             except Exception:
                 logger.exception(f"LLM error for {transition.source}→{transition.target}, skipping")
                 failed += 1
                 continue
-            transition.guard = guard
 
+            transition.guard = guard
             if guard is None:
                 null_count += 1
             else:
@@ -272,7 +181,6 @@ class DslGenerator:
             f"Guard generation: {generated} generated, "
             f"{null_count} null, {skipped} skipped, {failed} failed"
         )
-        logger.info(f"Classification: {cat_counts}")
         return self._fsm
 
     def generate_guard(
@@ -284,13 +192,10 @@ class DslGenerator:
         target_elements: list[dict[str, Any]],
         source_screenshot: Path | None = None,
         target_screenshot: Path | None = None,
-        category: TransitionCategory | None = None,
+        diff_summary: str = "",
+        extra_context: str = "",
     ) -> str | None:
         """Generate a single guard for one transition.
-
-        Args:
-            category: If provided, uses category-specific prompts.
-                CONTENT_SELECTION forces a fallback guard if LLM returns null.
 
         Validation pipeline:
         1. Auto-fix quoted identifiers (common LLM mistake)
@@ -305,31 +210,15 @@ class DslGenerator:
         source_with_aliases = self._build_element_reference_table(source_elements)
         target_with_aliases = self._build_element_reference_table(target_elements)
 
-        # Build prompts based on category
-        if category == TransitionCategory.CONTENT_SELECTION:
-            system_prompt, user_prompt = self._build_content_selection_prompt(
-                transition,
-                source_state,
-                target_state,
-                source_with_aliases,
-                target_with_aliases,
-            )
-        elif category == TransitionCategory.STATE_MUTATION:
-            system_prompt, user_prompt = self._build_state_mutation_prompt(
-                transition,
-                source_state,
-                target_state,
-                source_with_aliases,
-                target_with_aliases,
-            )
-        else:
-            system_prompt, user_prompt = self._build_prompt(
-                transition,
-                source_state,
-                target_state,
-                source_with_aliases,
-                target_with_aliases,
-            )
+        system_prompt, user_prompt = self._build_prompt(
+            transition,
+            source_state,
+            target_state,
+            source_with_aliases,
+            target_with_aliases,
+            diff_summary=diff_summary,
+            extra_context=extra_context,
+        )
 
         valid_ids = self._collect_valid_element_ids(source_with_aliases, target_with_aliases)
 
@@ -348,8 +237,6 @@ class DslGenerator:
             response = self._clean_response(response)
 
             if response.lower() == "null" or response == "":
-                if category == TransitionCategory.CONTENT_SELECTION:
-                    return "action(target_text) == $intent.selected_item"
                 return None
 
             # Step 1: Auto-fix quoted identifiers
@@ -370,8 +257,8 @@ class DslGenerator:
             # Step 3: Reject ephemeral element IDs
             if re.search(r"\be_\d{3,}\b", response):
                 logger.warning(
-                    f"Guard uses ephemeral element ID (attempt {attempt + 1}/{max_retries + 1})"
-                    f": {response}"
+                    f"Guard uses ephemeral element ID "
+                    f"(attempt {attempt + 1}/{max_retries + 1}): {response}"
                 )
                 if attempt < max_retries:
                     user_prompt += (
@@ -399,272 +286,95 @@ class DslGenerator:
 
             return response
 
-        # All retries failed — fallback for content selection
-        if category == TransitionCategory.CONTENT_SELECTION:
-            return "action(target_text) == $intent.selected_item"
         logger.error(f"Failed to generate valid guard for {transition.source}→{transition.target}")
         return None
 
     # ------------------------------------------------------------------
-    # Transition classification
+    # Diff and sibling context
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _classify_transition(
-        transition: Transition,
-        source_state: AbstractState,
-        target_state: AbstractState,
+    def _compute_diff(
         source_elements: list[dict[str, Any]],
-    ) -> TransitionCategory:
-        """Classify a transition to determine guard generation strategy.
+        target_elements: list[dict[str, Any]],
+    ) -> str:
+        """Compute human-readable diff between source and target element states.
 
-        Priority order:
-            1. Action type shortcuts (back/home, scroll)
-            2. Find target element
-            3. Back-arrow buttons (small, top area, no text)
-            4. Checkable elements -> state mutation
-            5. Dialog confirmation states
-            6. Confirmation buttons near input fields
-            7. Content selection from CONTENT containers
-            8. Fallback heuristic for unclassified states (homogeneous siblings)
-            9. Default: structural navigation
-
-        Args:
-            transition: The FSM transition to classify.
-            source_state: The source abstract state.
-            target_state: The target abstract state.
-            source_elements: Interactable elements from the source screen.
-
-        Returns:
-            The classified TransitionCategory.
+        Compares elements by resource_id, reports changes in text, is_checked,
+        is_enabled, and structural additions/removals.
         """
-        action_type = transition.action.get("type", "")
-
-        # Rule 1: Action type shortcuts
-        if action_type in ("navigate_back", "navigate_home"):
-            return TransitionCategory.BACK_NAVIGATION
-        if action_type in ("scroll_up", "scroll_down"):
-            return TransitionCategory.SCROLL
-
-        # Rule 2: Find target element
-        target_el = DslGenerator._find_target_element(transition, source_elements)
-
-        # Rule 3: Back-arrow buttons (small, top area, no text)
-        if target_el and DslGenerator._is_back_button(target_el):
-            return TransitionCategory.BACK_NAVIGATION
-
-        # Rule 4: Checkable elements -> state mutation
-        if target_el and target_el.get("is_checkable"):
-            return TransitionCategory.STATE_MUTATION
-
-        # Rule 5: Dialog confirmation states
-        if DslGenerator._is_dialog_state(source_state, source_elements):
-            return TransitionCategory.STATE_MUTATION
-
-        # Rule 6: Confirmation buttons near input fields
-        has_input = any(
-            e.get("is_editable") or "EditText" in e.get("class_name", "") for e in source_elements
-        )
-        if has_input and target_el:
-            cls = target_el.get("class_name", "")
-            if "Button" in cls or "TextView" in cls:
-                return TransitionCategory.STATE_MUTATION
-
-        # Rule 7: Content selection -- from CONTENT containers
-        if (
-            source_state.container_type == ContainerType.CONTENT
-            and DslGenerator._is_element_in_content_area(target_el, source_elements, source_state)
-        ):
-            return TransitionCategory.CONTENT_SELECTION
-
-        # Rule 8: Fallback heuristic for unclassified states
-        if (
-            source_state.container_type == ContainerType.NONE
-            and target_el
-            and DslGenerator._has_homogeneous_siblings(target_el, source_elements, min_count=5)
-        ):
-            return TransitionCategory.CONTENT_SELECTION
-
-        # Rule 9: Default
-        return TransitionCategory.STRUCTURAL_NAVIGATION
-
-    @staticmethod
-    def _find_target_element(
-        transition: Transition, source_elements: list[dict[str, Any]]
-    ) -> dict[str, Any] | None:
-        """Find the element targeted by this transition's action.
-
-        Args:
-            transition: The transition whose action target to look up.
-            source_elements: Elements from the source screen.
-
-        Returns:
-            The matching element dict, or None if not found.
-        """
-        target_id = transition.action.get("target")
-        if not target_id:
-            return None
+        source_by_rid: dict[str, dict[str, Any]] = {}
         for el in source_elements:
-            if el.get("element_id") == target_id:
-                return el
-        return None
+            rid = el.get("resource_id")
+            if rid:
+                source_by_rid[rid] = el
 
-    @staticmethod
-    def _is_back_button(element: dict[str, Any]) -> bool:
-        """Detect back-arrow buttons by size, position, and absence of text.
+        target_by_rid: dict[str, dict[str, Any]] = {}
+        for el in target_elements:
+            rid = el.get("resource_id")
+            if rid:
+                target_by_rid[rid] = el
 
-        Heuristic: small icon (< 200x200), positioned in the top-left corner
-        (y < 300, x < 300), with no meaningful text label.
+        changes: list[str] = []
+        tracked_props = ("text", "is_checked", "is_enabled")
 
-        Args:
-            element: The element dict to check.
+        for rid, src_el in source_by_rid.items():
+            tgt_el = target_by_rid.get(rid)
+            if tgt_el is None:
+                changes.append(f'- Element "{rid}": removed in target state')
+                continue
+            for prop in tracked_props:
+                src_val = src_el.get(prop)
+                tgt_val = tgt_el.get(prop)
+                if src_val != tgt_val:
+                    changes.append(
+                        f'- Element "{rid}": {prop} changed from {src_val!r} to {tgt_val!r}'
+                    )
 
-        Returns:
-            True if the element looks like a back/navigate-up button.
-        """
-        bounds = element.get("bounds", [])
-        if not bounds or len(bounds) != 4:
-            return False
-        left, top, right, bottom = bounds
-        width = right - left
-        height = bottom - top
-        text = element.get("text") or element.get("content_description") or ""
-        is_small = width < 200 and height < 200
-        is_top = top < 300
-        is_left = left < 300
-        has_no_text = len(text.strip()) == 0 or text.strip().lower() in (
-            "back",
-            "navigate up",
-        )
-        return is_small and is_top and is_left and has_no_text
+        for rid in target_by_rid:
+            if rid not in source_by_rid:
+                changes.append(f'- Element "{rid}": new in target state')
 
-    @staticmethod
-    def _is_dialog_state(state: AbstractState, elements: list[dict[str, Any]]) -> bool:
-        """Detect dialog/confirmation states by name keywords or button patterns.
+        return "\n".join(changes) if changes else "(no significant changes)"
 
-        A state is classified as a dialog if:
-        - Its name contains dialog-related keywords (e.g., "?", "confirm", "delete"), OR
-        - It has few interactable elements (<=5) whose text matches confirm/cancel patterns.
-
-        Args:
-            state: The abstract state to check.
-            elements: Interactable elements from this state.
-
-        Returns:
-            True if the state looks like a dialog or confirmation prompt.
-        """
-        name = state.name.lower()
-        dialog_keywords = [
-            "?",
-            "confirm",
-            "delete",
-            "unblock",
-            "remove",
-            "pair with",
-            "discard",
-            "cancel",
-            "are you sure",
-            "warning",
-        ]
-        if any(kw in name for kw in dialog_keywords):
-            return True
-
-        interactable = [e for e in elements if e.get("is_clickable") or e.get("is_checkable")]
-        if len(interactable) <= 5:
-            button_texts: list[str] = []
-            for e in interactable:
-                text = (e.get("text") or "").lower()
-                if text:
-                    button_texts.append(text)
-            confirm_words = {
-                "ok",
-                "cancel",
-                "yes",
-                "no",
-                "confirm",
-                "pair",
-                "unpair",
-                "unblock",
-                "block",
-                "delete",
-                "remove",
-                "save",
-                "discard",
-                "accept",
-                "deny",
-                "allow",
-            }
-            if any(word in " ".join(button_texts) for word in confirm_words):
-                return True
-        return False
-
-    @staticmethod
-    def _is_element_in_content_area(
-        target_el: dict[str, Any] | None,
-        source_elements: list[dict[str, Any]],
+    def _collect_sibling_transitions(
+        self,
+        current_transition: Transition,
         source_state: AbstractState,
-    ) -> bool:
-        """Check whether an element falls within the content (non-toolbar) area.
+        raw_screens: dict[str, Any],
+    ) -> str:
+        """Find other click transitions from the same source state.
 
-        Uses the container_resource_id depth comparison when available,
-        otherwise falls back to a y-coordinate heuristic (top < 300 is toolbar).
-
-        Args:
-            target_el: The element to check.
-            source_elements: All elements from the source screen.
-            source_state: The source abstract state (for container metadata).
+        Provides contrastive context — showing what OTHER items could be clicked
+        helps the LLM understand this is a list/menu and generate parameterized guards.
 
         Returns:
-            True if the element is in the content area.
+            Formatted string with sibling examples, or empty string.
         """
-        if target_el is None:
-            return False
-        container_rid = source_state.container_resource_id
-        if container_rid:
-            container_el = None
-            for e in source_elements:
-                if e.get("resource_id") == container_rid:
-                    container_el = e
-                    break
-            if container_el:
-                container_depth = container_el.get("depth", 0)
-                target_depth = target_el.get("depth", 0)
-                return target_depth > container_depth
-        bounds = target_el.get("bounds", [])
-        return not (bounds and len(bounds) == 4 and bounds[1] < 300)
-
-    @staticmethod
-    def _has_homogeneous_siblings(
-        target_el: dict[str, Any],
-        source_elements: list[dict[str, Any]],
-        min_count: int = 5,
-    ) -> bool:
-        """Check whether the target has enough same-class, same-depth clickable siblings.
-
-        Used as a fallback heuristic when container_type is NONE: if the element
-        is surrounded by many structurally identical siblings, it is likely a
-        dynamic content list rather than a fixed menu.
-
-        Args:
-            target_el: The element to check siblings for.
-            source_elements: All elements from the source screen.
-            min_count: Minimum number of siblings required (default 5).
-
-        Returns:
-            True if at least ``min_count`` same-class, same-depth clickable elements exist.
-        """
-        target_class = target_el.get("class_name", "")
-        target_depth = target_el.get("depth", -1)
-        if not target_class or target_depth < 0:
-            return False
         siblings = [
-            e
-            for e in source_elements
-            if e.get("class_name") == target_class
-            and e.get("is_clickable")
-            and e.get("depth") == target_depth
+            t
+            for t in self._fsm.transitions
+            if t.source == current_transition.source
+            and t.action.get("type") == "click"
+            and t is not current_transition
         ]
-        return len(siblings) >= min_count
+        if not siblings:
+            return ""
+
+        source_elements = self._get_elements(source_state, raw_screens)
+        lines = ["## Other click targets from the same screen:"]
+        for sib in siblings[:5]:
+            target_state = self._fsm.states.get(sib.target)
+            target_name = target_state.name if target_state else sib.target
+            target_eid = sib.action.get("target", "")
+            clicked_text = ""
+            for el in source_elements:
+                if el.get("element_id") == target_eid:
+                    clicked_text = el.get("text", "") or ""
+                    break
+            lines.append(f'- Click on "{clicked_text}" → {target_name}')
+
+        return "\n".join(lines) + "\n\n"
 
     # ------------------------------------------------------------------
     # Element reference table
@@ -700,7 +410,7 @@ class DslGenerator:
         return result
 
     # ------------------------------------------------------------------
-    # Prompt builders
+    # Prompt builder
     # ------------------------------------------------------------------
 
     def _build_prompt(
@@ -710,8 +420,10 @@ class DslGenerator:
         target_state: AbstractState,
         source_elements: list[dict[str, Any]],
         target_elements: list[dict[str, Any]],
+        diff_summary: str = "",
+        extra_context: str = "",
     ) -> tuple[str, str]:
-        """Build generic (system_prompt, user_prompt) for LLM call."""
+        """Build (system_prompt, user_prompt) for LLM call."""
         action = transition.action
         target_eid = action.get("target", "")
 
@@ -723,8 +435,8 @@ class DslGenerator:
                 target_text = el.get("text", "") or ""
                 break
 
-        system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(grammar=self._grammar_text)
-        user_prompt = _USER_PROMPT_TEMPLATE.format(
+        system_prompt = _SYSTEM_PROMPT.format(grammar=self._grammar_text)
+        user_prompt = _USER_PROMPT.format(
             action_type=action.get("type", ""),
             target_alias=target_alias,
             target_text=target_text,
@@ -732,78 +444,8 @@ class DslGenerator:
             target_name=target_state.name,
             source_table=self._format_elements(source_elements),
             target_table=self._format_elements(target_elements),
-        )
-        return system_prompt, user_prompt
-
-    def _build_content_selection_prompt(
-        self,
-        transition: Transition,
-        source_state: AbstractState,
-        target_state: AbstractState,
-        source_elements: list[dict[str, Any]],
-        _target_elements: list[dict[str, Any]],
-    ) -> tuple[str, str]:
-        """Build prompts for content selection transitions."""
-        action = transition.action
-        target_eid = action.get("target", "")
-
-        target_alias = ""
-        target_text = ""
-        for el in source_elements:
-            if el.get("element_id") == target_eid:
-                target_alias = el.get("_alias", "") or ""
-                target_text = el.get("text", "") or ""
-                break
-
-        system_prompt = _CONTENT_SELECTION_SYSTEM_PROMPT.format(grammar=self._grammar_text)
-        user_prompt = _CONTENT_SELECTION_USER_PROMPT.format(
-            action_type=action.get("type", ""),
-            target_alias=target_alias,
-            target_text=target_text,
-            source_name=source_state.name,
-            target_name=target_state.name,
-            source_table=self._format_elements(source_elements),
-        )
-        return system_prompt, user_prompt
-
-    def _build_state_mutation_prompt(
-        self,
-        transition: Transition,
-        source_state: AbstractState,
-        target_state: AbstractState,
-        source_elements: list[dict[str, Any]],
-        _target_elements: list[dict[str, Any]],
-    ) -> tuple[str, str]:
-        """Build prompts for state mutation transitions."""
-        action = transition.action
-        target_eid = action.get("target", "")
-
-        target_alias = ""
-        target_text = ""
-        target_class = ""
-        is_checkable = False
-        is_checked = False
-        for el in source_elements:
-            if el.get("element_id") == target_eid:
-                target_alias = el.get("_alias", "") or ""
-                target_text = el.get("text", "") or ""
-                cls = el.get("class_name", "")
-                target_class = cls.rsplit(".", 1)[-1] if "." in cls else cls
-                is_checkable = el.get("is_checkable", False)
-                is_checked = el.get("is_checked", False)
-                break
-
-        system_prompt = _STATE_MUTATION_SYSTEM_PROMPT.format(grammar=self._grammar_text)
-        user_prompt = _STATE_MUTATION_USER_PROMPT.format(
-            action_type=action.get("type", ""),
-            target_alias=target_alias,
-            target_text=target_text,
-            source_name=source_state.name,
-            target_name=target_state.name,
-            target_class=target_class,
-            is_checkable=is_checkable,
-            is_checked=is_checked,
-            source_table=self._format_elements(source_elements),
+            diff_summary=diff_summary or "(no significant changes)",
+            extra_context=extra_context,
         )
         return system_prompt, user_prompt
 

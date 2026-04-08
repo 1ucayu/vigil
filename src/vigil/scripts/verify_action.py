@@ -89,9 +89,8 @@ def _cmd_inspect(fsm) -> None:
 
     print(f"\n{_BOLD}States:{_RESET}")
     for s in fsm.states.values():
-        container = f" [{s.container_type}]" if s.container_type != "none" else ""
         activity = f" @ {s.activity_name}" if s.activity_name else ""
-        print(f"  {_CYAN}{s.state_id}{_RESET}  {s.name}{activity}{container}")
+        print(f"  {_CYAN}{s.state_id}{_RESET}  {s.name}{activity}")
         if s.invariants:
             for inv in s.invariants:
                 print(f"    invariant: {inv}")
@@ -102,14 +101,6 @@ def _cmd_inspect(fsm) -> None:
         guard_str = f"  guard={t.guard}" if t.guard else ""
         conf_str = f"  conf={t.confidence:.2f}" if t.confidence > 0 else ""
         print(f"  {t.source} → {t.target}  [{action_type}]{guard_str}{conf_str}")
-
-    if fsm.sub_fsm_templates:
-        print(f"\n{_BOLD}Sub-FSM Templates:{_RESET}")
-        for tid, tmpl in fsm.sub_fsm_templates.items():
-            print(
-                f"  {_CYAN}{tid}{_RESET}  from={tmpl.source_container_state_id}  "
-                f"states={len(tmpl.states)}  params={tmpl.parameters}"
-            )
 
     if fsm.evolution_log:
         print(f"\n{_BOLD}Evolution Log ({len(fsm.evolution_log)} entries):{_RESET}")

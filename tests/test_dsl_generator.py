@@ -12,11 +12,10 @@ from vigil.core.config import VigilConfig
 from vigil.models.fsm import (
     AbstractState,
     AppFSM,
-    ContainerType,
     HierarchyLevel,
     Transition,
 )
-from vigil.neuro.dsl_generator import DslGenerator, TransitionCategory
+from vigil.neuro.dsl_generator import DslGenerator
 
 
 @pytest.fixture()
@@ -37,7 +36,6 @@ def synthetic_fsm_and_trace(tmp_path: Path) -> tuple[AppFSM, Path]:
         fingerprint="fp_wifi",
         hierarchy_level=HierarchyLevel.FRAGMENT,
         raw_screens=["scr_002"],
-        container_type=ContainerType.CONTENT,
     )
     s3 = AbstractState(
         state_id="s3",
@@ -163,12 +161,12 @@ def _make_generator(fsm: AppFSM) -> DslGenerator:
 
 
 # -----------------------------------------------------------------------
-# Test: direct generate_guard calls (backward compat, no category)
+# Test: direct generate_guard calls
 # -----------------------------------------------------------------------
 
 
 class TestGenerateGuard:
-    """Test single guard generation (generic, no category)."""
+    """Test single guard generation."""
 
     def test_generate_valid_guard(self, synthetic_fsm_and_trace: tuple) -> None:
         fsm, trace_path = synthetic_fsm_and_trace
@@ -242,7 +240,7 @@ class TestGenerateGuard:
 
 
 # -----------------------------------------------------------------------
-# Test: skip actions via classification
+# Test: skip actions
 # -----------------------------------------------------------------------
 
 
@@ -282,35 +280,59 @@ class TestSkipActions:
 
 
 class TestGenerateAllGuards:
-    """Test bulk guard generation with classification routing."""
+    """Test bulk guard generation."""
 
-    def test_generate_all_guards(self, synthetic_fsm_and_trace: tuple) -> None:
+    def test_click_transitions_get_guards(self, synthetic_fsm_and_trace: tuple) -> None:
+        """All click transitions call LLM for guard generation."""
         fsm, trace_path = synthetic_fsm_and_trace
         gen = _make_generator(fsm)
         gen._llm = MagicMock()
-        # Only content_selection (t2: s2→s3 in CONTENT state) triggers LLM
-        gen._llm.generate_with_images.return_value = "action(target_text) == $intent.wifi_name"
+        gen._llm.generate_with_images.return_value = "action(target_text) == $intent.target_setting"
 
         result = gen.generate_all_guards(trace_path, use_images=True)
 
         assert result is fsm
         click_trans = [t for t in fsm.transitions if t.action.get("type") == "click"]
-        guards = [t.guard for t in click_trans]
-        # t1 (structural nav) → None, t2 (content selection) → guard
-        assert "action(target_text) == $intent.wifi_name" in guards
-        assert None in guards
+        # Both click transitions should have guards
+        for t in click_trans:
+            assert t.guard is not None
+
+    def test_all_clicks_call_llm(self, synthetic_fsm_and_trace: tuple) -> None:
+        """2 click transitions → 2 LLM calls."""
+        fsm, trace_path = synthetic_fsm_and_trace
+        gen = _make_generator(fsm)
+        gen._llm = MagicMock()
+        gen._llm.generate_with_images.return_value = "action(target_text) == $intent.target_setting"
+
+        gen.generate_all_guards(trace_path, use_images=True)
+
+        assert gen._llm.generate_with_images.call_count == 2
 
     def test_fallback_to_text_only(self, synthetic_fsm_and_trace: tuple) -> None:
         fsm, trace_path = synthetic_fsm_and_trace
         gen = _make_generator(fsm)
         gen._llm = MagicMock()
-        gen._llm.generate.return_value = "action(target_text) == $intent.wifi_name"
+        gen._llm.generate.return_value = "action(target_text) == $intent.target_setting"
 
         gen.generate_all_guards(trace_path, use_images=False)
 
-        # Only content_selection transition calls LLM (1 call, text-only)
-        assert gen._llm.generate.call_count == 1
+        # 2 click transitions → 2 text-only LLM calls
+        assert gen._llm.generate.call_count == 2
         gen._llm.generate_with_images.assert_not_called()
+
+    def test_back_and_scroll_skipped(self, synthetic_fsm_and_trace: tuple) -> None:
+        """navigate_back and scroll_down get guard=None without LLM."""
+        fsm, trace_path = synthetic_fsm_and_trace
+        gen = _make_generator(fsm)
+        gen._llm = MagicMock()
+        gen._llm.generate_with_images.return_value = "null"
+
+        gen.generate_all_guards(trace_path)
+
+        back = [t for t in fsm.transitions if t.action.get("type") == "navigate_back"]
+        scroll = [t for t in fsm.transitions if t.action.get("type") == "scroll_down"]
+        assert back[0].guard is None
+        assert scroll[0].guard is None
 
 
 # -----------------------------------------------------------------------
@@ -351,12 +373,12 @@ class TestScreenshotResolution:
 
 
 # -----------------------------------------------------------------------
-# Test: guard validation pipeline (Problems 1-3)
+# Test: guard validation pipeline
 # -----------------------------------------------------------------------
 
 
 class TestGuardValidationPipeline:
-    """Test the multi-stage guard validation (Problems 1-3)."""
+    """Test the multi-stage guard validation."""
 
     def test_reject_ephemeral_element_id(self, synthetic_fsm_and_trace: tuple) -> None:
         """Ephemeral e_XXXX IDs should be rejected and retried."""
@@ -430,342 +452,6 @@ class TestGuardValidationPipeline:
 
 
 # -----------------------------------------------------------------------
-# Test: transition classification
-# -----------------------------------------------------------------------
-
-
-_DEFAULT_TARGET = AbstractState(
-    state_id="s_tgt",
-    name="Target",
-    fingerprint="fp_tgt",
-    hierarchy_level=HierarchyLevel.FRAGMENT,
-)
-
-
-class TestClassifyTransition:
-    """Test _classify_transition logic."""
-
-    def test_classify_back_navigation(self) -> None:
-        """navigate_back action type -> BACK_NAVIGATION."""
-        t = Transition(source="s1", target="s2", action={"type": "navigate_back"}, confidence=1.0)
-        state = AbstractState(
-            state_id="s1", name="S1", fingerprint="fp", hierarchy_level=HierarchyLevel.ACTIVITY
-        )
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, [])
-            == TransitionCategory.BACK_NAVIGATION
-        )
-
-    def test_classify_scroll(self) -> None:
-        """scroll_up action type -> SCROLL."""
-        t = Transition(source="s1", target="s1", action={"type": "scroll_up"}, confidence=1.0)
-        state = AbstractState(
-            state_id="s1", name="S1", fingerprint="fp", hierarchy_level=HierarchyLevel.ACTIVITY
-        )
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, [])
-            == TransitionCategory.SCROLL
-        )
-
-    def test_classify_content_selection(self) -> None:
-        """Click in a state with container_type=CONTENT -> CONTENT_SELECTION."""
-        t = Transition(
-            source="s1", target="s2", action={"type": "click", "target": "e_001"}, confidence=1.0
-        )
-        state = AbstractState(
-            state_id="s1",
-            name="WiFiList",
-            fingerprint="fp",
-            hierarchy_level=HierarchyLevel.FRAGMENT,
-            container_type=ContainerType.CONTENT,
-        )
-        elements = [
-            {
-                "element_id": "e_001",
-                "class_name": "android.widget.TextView",
-                "is_clickable": True,
-                "bounds": [0, 400, 500, 500],
-            }
-        ]
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.CONTENT_SELECTION
-        )
-
-    def test_classify_state_mutation_toggle(self) -> None:
-        """Click on checkable element -> STATE_MUTATION."""
-        t = Transition(
-            source="s1", target="s1", action={"type": "click", "target": "e_002"}, confidence=1.0
-        )
-        state = AbstractState(
-            state_id="s1", name="S1", fingerprint="fp", hierarchy_level=HierarchyLevel.ACTIVITY
-        )
-        elements = [
-            {
-                "element_id": "e_002",
-                "class_name": "android.widget.Switch",
-                "is_clickable": True,
-                "is_checkable": True,
-            },
-        ]
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.STATE_MUTATION
-        )
-
-    def test_classify_state_mutation_input(self) -> None:
-        """State with EditText + Button click -> STATE_MUTATION (Rule 6)."""
-        t = Transition(
-            source="s1", target="s1", action={"type": "click", "target": "e_004"}, confidence=1.0
-        )
-        state = AbstractState(
-            state_id="s1", name="Rename", fingerprint="fp", hierarchy_level=HierarchyLevel.ACTIVITY
-        )
-        elements = [
-            {
-                "element_id": "e_003",
-                "class_name": "android.widget.EditText",
-                "is_clickable": True,
-                "is_editable": True,
-            },
-            {
-                "element_id": "e_004",
-                "class_name": "android.widget.Button",
-                "is_clickable": True,
-                "text": "OK",
-            },
-        ]
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.STATE_MUTATION
-        )
-
-    def test_classify_structural_navigation(self) -> None:
-        """Click on unique menu item in non-content state -> STRUCTURAL_NAVIGATION."""
-        t = Transition(
-            source="s1", target="s2", action={"type": "click", "target": "e_001"}, confidence=1.0
-        )
-        state = AbstractState(
-            state_id="s1", name="S1", fingerprint="fp", hierarchy_level=HierarchyLevel.ACTIVITY
-        )
-        elements = [
-            {
-                "element_id": "e_001",
-                "class_name": "android.widget.TextView",
-                "is_clickable": True,
-                "text": "Settings",
-            },
-        ]
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.STRUCTURAL_NAVIGATION
-        )
-
-    def test_classify_back_arrow_button(self) -> None:
-        """Small bounds (< 200x200), top-left (y < 300, x < 300), no text -> BACK_NAVIGATION."""
-        t = Transition(
-            source="s1",
-            target="s2",
-            action={"type": "click", "target": "e_001"},
-            confidence=1.0,
-        )
-        state = AbstractState(
-            state_id="s1", name="S1", fingerprint="fp", hierarchy_level=HierarchyLevel.ACTIVITY
-        )
-        elements = [
-            {
-                "element_id": "e_001",
-                "class_name": "android.widget.ImageButton",
-                "is_clickable": True,
-                "text": "",
-                "bounds": [0, 0, 100, 100],
-            },
-        ]
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.BACK_NAVIGATION
-        )
-
-    def test_classify_homogeneous_list(self) -> None:
-        """5+ same-class clickable elements at same depth -> CONTENT_SELECTION."""
-        t = Transition(
-            source="s1", target="s2", action={"type": "click", "target": "e_001"}, confidence=1.0
-        )
-        state = AbstractState(
-            state_id="s1", name="S1", fingerprint="fp", hierarchy_level=HierarchyLevel.ACTIVITY
-        )
-        elements = [
-            {
-                "element_id": f"e_00{i}",
-                "class_name": "android.widget.TextView",
-                "is_clickable": True,
-                "text": f"Item {i}",
-                "depth": 7,
-            }
-            for i in range(1, 6)
-        ]
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.CONTENT_SELECTION
-        )
-
-    def test_classify_dialog_state_by_name(self) -> None:
-        """State named 'Pair with X?' with button elements -> STATE_MUTATION."""
-        t = Transition(
-            source="s1", target="s2", action={"type": "click", "target": "e_010"}, confidence=1.0
-        )
-        state = AbstractState(
-            state_id="s1",
-            name="Pair with U-ACG0AB4?",
-            fingerprint="fp",
-            hierarchy_level=HierarchyLevel.FRAGMENT,
-        )
-        elements = [
-            {
-                "element_id": "e_010",
-                "class_name": "android.widget.Button",
-                "is_clickable": True,
-                "text": "Pair",
-            },
-            {
-                "element_id": "e_011",
-                "class_name": "android.widget.Button",
-                "is_clickable": True,
-                "text": "Cancel",
-            },
-            {
-                "element_id": "e_012",
-                "class_name": "android.widget.CheckBox",
-                "is_clickable": True,
-                "is_checkable": True,
-                "text": "Allow access",
-            },
-        ]
-        # The target element (e_010) is a Button, not checkable.
-        # Rule 5 (dialog by name) fires first because "pair with" is in the name.
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.STATE_MUTATION
-        )
-
-    def test_classify_dialog_state_by_buttons(self) -> None:
-        """State with <=5 elements including OK/Cancel buttons -> STATE_MUTATION."""
-        t = Transition(
-            source="s1", target="s2", action={"type": "click", "target": "e_020"}, confidence=1.0
-        )
-        state = AbstractState(
-            state_id="s1",
-            name="SomeDialog",
-            fingerprint="fp",
-            hierarchy_level=HierarchyLevel.FRAGMENT,
-        )
-        elements = [
-            {
-                "element_id": "e_020",
-                "class_name": "android.widget.Button",
-                "is_clickable": True,
-                "text": "OK",
-            },
-            {
-                "element_id": "e_021",
-                "class_name": "android.widget.Button",
-                "is_clickable": True,
-                "text": "Cancel",
-            },
-        ]
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.STATE_MUTATION
-        )
-
-    def test_classify_input_confirmation(self) -> None:
-        """State with EditText + confirm Button -> STATE_MUTATION (Rule 6)."""
-        t = Transition(
-            source="s1", target="s2", action={"type": "click", "target": "e_031"}, confidence=1.0
-        )
-        state = AbstractState(
-            state_id="s1",
-            name="RenameDevice",
-            fingerprint="fp",
-            hierarchy_level=HierarchyLevel.FRAGMENT,
-        )
-        elements = [
-            {
-                "element_id": "e_030",
-                "class_name": "android.widget.EditText",
-                "is_clickable": True,
-                "is_editable": True,
-                "text": "",
-            },
-            {
-                "element_id": "e_031",
-                "class_name": "android.widget.Button",
-                "is_clickable": True,
-                "text": "Save",
-            },
-            {
-                "element_id": "e_032",
-                "class_name": "android.widget.Button",
-                "is_clickable": True,
-                "text": "Cancel",
-            },
-        ]
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.STATE_MUTATION
-        )
-
-    def test_classify_content_toolbar_excluded(self) -> None:
-        """CONTENT container but element at y<300 -> STRUCTURAL_NAVIGATION (toolbar)."""
-        t = Transition(
-            source="s1", target="s2", action={"type": "click", "target": "e_040"}, confidence=1.0
-        )
-        state = AbstractState(
-            state_id="s1",
-            name="WiFiList",
-            fingerprint="fp",
-            hierarchy_level=HierarchyLevel.FRAGMENT,
-            container_type=ContainerType.CONTENT,
-        )
-        elements = [
-            {
-                "element_id": "e_040",
-                "class_name": "android.widget.ImageView",
-                "is_clickable": True,
-                "text": "",
-                "bounds": [900, 100, 1000, 200],
-            },
-        ]
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.STRUCTURAL_NAVIGATION
-        )
-
-    def test_classify_few_siblings_structural(self) -> None:
-        """Only 3 same-class (< min_count=5) at same depth -> STRUCTURAL_NAVIGATION."""
-        t = Transition(
-            source="s1", target="s2", action={"type": "click", "target": "e_001"}, confidence=1.0
-        )
-        state = AbstractState(
-            state_id="s1", name="S1", fingerprint="fp", hierarchy_level=HierarchyLevel.ACTIVITY
-        )
-        elements = [
-            {
-                "element_id": f"e_00{i}",
-                "class_name": "android.widget.TextView",
-                "is_clickable": True,
-                "text": f"Item {i}",
-                "depth": 7,
-            }
-            for i in range(1, 4)
-        ]
-        assert (
-            DslGenerator._classify_transition(t, state, _DEFAULT_TARGET, elements)
-            == TransitionCategory.STRUCTURAL_NAVIGATION
-        )
-
-
-# -----------------------------------------------------------------------
 # Test: element reference table
 # -----------------------------------------------------------------------
 
@@ -774,7 +460,6 @@ class TestElementReferenceTable:
     """Test _build_element_reference_table alias generation."""
 
     def test_element_with_resource_id(self) -> None:
-        """Element with resource_id → alias = resource_id."""
         elements = [
             {
                 "element_id": "e_001",
@@ -786,7 +471,6 @@ class TestElementReferenceTable:
         assert result[0]["_alias"] == "com.app:id/btn"
 
     def test_element_without_resource_id(self) -> None:
-        """Element without resource_id → alias = ShortClass_0."""
         elements = [
             {"element_id": "e_001", "class_name": "android.widget.Switch"},
         ]
@@ -794,7 +478,6 @@ class TestElementReferenceTable:
         assert result[0]["_alias"] == "Switch_0"
 
     def test_multiple_same_class(self) -> None:
-        """Two Switches without resource_id → Switch_0, Switch_1."""
         elements = [
             {"element_id": "e_001", "class_name": "android.widget.Switch"},
             {"element_id": "e_002", "class_name": "android.widget.Switch"},
@@ -804,7 +487,6 @@ class TestElementReferenceTable:
         assert result[1]["_alias"] == "Switch_1"
 
     def test_mixed_resource_and_synthesized(self) -> None:
-        """Elements with resource_id don't affect synthesized alias counters."""
         elements = [
             {
                 "element_id": "e_001",
@@ -821,139 +503,130 @@ class TestElementReferenceTable:
 
 
 # -----------------------------------------------------------------------
-# Test: category-specific guard generation
+# Test: compute diff
 # -----------------------------------------------------------------------
 
 
-class TestContentSelectionGuard:
-    """Test content selection guard generation."""
+class TestComputeDiff:
+    """Test _compute_diff helper."""
 
-    def test_content_selection_must_have_guard(self, synthetic_fsm_and_trace: tuple) -> None:
-        """Content selection returns guard even if LLM returns null."""
-        fsm, _trace_path = synthetic_fsm_and_trace
+    def test_diff_detects_text_change(self) -> None:
+        source = [{"resource_id": "com.test:id/title", "text": "Hello"}]
+        target = [{"resource_id": "com.test:id/title", "text": "Goodbye"}]
+        diff = DslGenerator._compute_diff(source, target)
+        assert "text changed" in diff
+        assert "Hello" in diff
+        assert "Goodbye" in diff
+
+    def test_diff_detects_checked_change(self) -> None:
+        source = [{"resource_id": "com.test:id/switch", "is_checked": False}]
+        target = [{"resource_id": "com.test:id/switch", "is_checked": True}]
+        diff = DslGenerator._compute_diff(source, target)
+        assert "is_checked changed" in diff
+
+    def test_diff_no_changes(self) -> None:
+        source = [{"resource_id": "com.test:id/btn", "text": "OK"}]
+        target = [{"resource_id": "com.test:id/btn", "text": "OK"}]
+        diff = DslGenerator._compute_diff(source, target)
+        assert diff == "(no significant changes)"
+
+    def test_diff_element_removed(self) -> None:
+        source = [{"resource_id": "com.test:id/btn", "text": "OK"}]
+        target: list[dict[str, str]] = []
+        diff = DslGenerator._compute_diff(source, target)
+        assert "removed" in diff
+
+    def test_diff_element_added(self) -> None:
+        source: list[dict[str, str]] = []
+        target = [{"resource_id": "com.test:id/btn", "text": "OK"}]
+        diff = DslGenerator._compute_diff(source, target)
+        assert "new in target" in diff
+
+
+# -----------------------------------------------------------------------
+# Test: collect sibling transitions
+# -----------------------------------------------------------------------
+
+
+class TestCollectSiblingTransitions:
+    """Test _collect_sibling_transitions helper."""
+
+    def test_collects_siblings(self, synthetic_fsm_and_trace: tuple) -> None:
+        """s1 has 2 click transitions: e_001→s2 and scroll. Only click siblings count."""
+        fsm, trace_path = synthetic_fsm_and_trace
+        # Add another click from s1
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s3",
+                action={"type": "click", "target": "e_002"},
+                confidence=1.0,
+            )
+        )
         gen = _make_generator(fsm)
-        gen._llm = MagicMock()
-        gen._llm.generate.return_value = "null"
+        trace_data = json.loads(trace_path.read_text())
+        raw_screens = trace_data["screens"]
 
-        t = fsm.transitions[1]  # s2→s3 (content state)
-        guard = gen.generate_guard(
-            t,
-            fsm.states["s2"],
-            fsm.states["s3"],
-            [],
-            [],
-            category=TransitionCategory.CONTENT_SELECTION,
-        )
-        assert guard == "action(target_text) == $intent.selected_item"
+        t1 = fsm.transitions[0]  # s1→s2 click
+        result = gen._collect_sibling_transitions(t1, fsm.states["s1"], raw_screens)
 
-    def test_content_selection_llm_guard(self, synthetic_fsm_and_trace: tuple) -> None:
-        """Content selection uses LLM-generated guard when valid."""
-        fsm, _trace_path = synthetic_fsm_and_trace
-        gen = _make_generator(fsm)
-        gen._llm = MagicMock()
-        gen._llm.generate.return_value = "action(target_text) == $intent.wifi_name"
+        assert "Other click targets" in result
+        assert "WiFiDetail" in result  # s3's name
 
-        t = fsm.transitions[1]
-        guard = gen.generate_guard(
-            t,
-            fsm.states["s2"],
-            fsm.states["s3"],
-            [],
-            [],
-            category=TransitionCategory.CONTENT_SELECTION,
-        )
-        assert guard == "action(target_text) == $intent.wifi_name"
-
-
-class TestStateMutationGuard:
-    """Test state mutation guard generation."""
-
-    def test_state_mutation_generates_toggle_guard(self, synthetic_fsm_and_trace: tuple) -> None:
-        """State mutation with Switch_0 alias accepted."""
-        fsm, _trace_path = synthetic_fsm_and_trace
-        gen = _make_generator(fsm)
-        gen._llm = MagicMock()
-        gen._llm.generate.return_value = "read(Switch_0, is_checked) == false"
-
-        elements = [
-            {
-                "element_id": "e_002",
-                "class_name": "android.widget.Switch",
-                "is_clickable": True,
-                "is_checkable": True,
-            },
-        ]
-        t = Transition(
-            source="s1",
-            target="s1",
-            action={"type": "click", "target": "e_002"},
-            confidence=1.0,
-        )
-        guard = gen.generate_guard(
-            t,
-            fsm.states["s1"],
-            fsm.states["s1"],
-            elements,
-            [],
-            category=TransitionCategory.STATE_MUTATION,
-        )
-        assert guard == "read(Switch_0, is_checked) == false"
-
-    def test_state_mutation_generates_input_guard(self, synthetic_fsm_and_trace: tuple) -> None:
-        """State mutation with EditText_0 alias accepted."""
-        fsm, _trace_path = synthetic_fsm_and_trace
-        gen = _make_generator(fsm)
-        gen._llm = MagicMock()
-        gen._llm.generate.return_value = "value(EditText_0) == $intent.device_name"
-
-        elements = [
-            {
-                "element_id": "e_003",
-                "class_name": "android.widget.EditText",
-                "is_clickable": True,
-                "is_editable": True,
-            },
-        ]
-        t = Transition(
-            source="s1",
-            target="s1",
-            action={"type": "click", "target": "e_003"},
-            confidence=1.0,
-        )
-        guard = gen.generate_guard(
-            t,
-            fsm.states["s1"],
-            fsm.states["s1"],
-            elements,
-            [],
-            category=TransitionCategory.STATE_MUTATION,
-        )
-        assert guard == "value(EditText_0) == $intent.device_name"
-
-    def test_structural_nav_skips_llm(self, synthetic_fsm_and_trace: tuple) -> None:
-        """Structural navigation via generate_all_guards skips LLM."""
+    def test_no_siblings_returns_empty(self, synthetic_fsm_and_trace: tuple) -> None:
         fsm, trace_path = synthetic_fsm_and_trace
         gen = _make_generator(fsm)
-        gen._llm = MagicMock()
-        gen._llm.generate_with_images.return_value = "null"
+        trace_data = json.loads(trace_path.read_text())
+        raw_screens = trace_data["screens"]
 
-        gen.generate_all_guards(trace_path)
+        t2 = fsm.transitions[1]  # s2→s3 click (only click from s2)
+        result = gen._collect_sibling_transitions(t2, fsm.states["s2"], raw_screens)
 
-        # t1 (s1→s2 click on menu item) is structural nav → null, no LLM needed
+        assert result == ""
+
+    def test_max_5_siblings(self, synthetic_fsm_and_trace: tuple) -> None:
+        fsm, trace_path = synthetic_fsm_and_trace
+        # Add 7 click transitions from s1
+        for i in range(7):
+            sid = f"sx{i}"
+            fsm.add_state(
+                AbstractState(
+                    state_id=sid,
+                    name=f"Extra{i}",
+                    fingerprint=f"fp_x{i}",
+                    hierarchy_level=HierarchyLevel.ACTIVITY,
+                )
+            )
+            fsm.add_transition(
+                Transition(
+                    source="s1",
+                    target=sid,
+                    action={"type": "click", "target": f"e_x{i}"},
+                    confidence=1.0,
+                )
+            )
+        gen = _make_generator(fsm)
+        trace_data = json.loads(trace_path.read_text())
+        raw_screens = trace_data["screens"]
+
         t1 = fsm.transitions[0]
-        assert t1.guard is None
+        result = gen._collect_sibling_transitions(t1, fsm.states["s1"], raw_screens)
+
+        # Should cap at 5 siblings
+        assert result.count("Click on") <= 5
 
 
 # -----------------------------------------------------------------------
-# Test: integration — classification-based generate_all_guards
+# Test: integration — generate_all_guards with mixed transitions
 # -----------------------------------------------------------------------
 
 
-class TestClassificationIntegration:
-    """Test generate_all_guards with mixed transition categories."""
+class TestGenerateAllGuardsIntegration:
+    """Test generate_all_guards with mixed transition types."""
 
-    def test_generate_all_guards_with_classification(self, tmp_path: Path) -> None:
-        """5 transitions: 1 content, 1 mutation, 1 structural, 1 back, 1 scroll."""
+    def test_five_transitions(self, tmp_path: Path) -> None:
+        """5 transitions: 2 clicks, 1 toggle, 1 back, 1 scroll.
+        3 get LLM calls, 2 skipped."""
         fsm = AppFSM("com.test.app")
 
         s1 = AbstractState(
@@ -969,7 +642,6 @@ class TestClassificationIntegration:
             fingerprint="fp2",
             hierarchy_level=HierarchyLevel.FRAGMENT,
             raw_screens=["scr_002"],
-            container_type=ContainerType.CONTENT,
         )
         s3 = AbstractState(
             state_id="s3",
@@ -983,21 +655,21 @@ class TestClassificationIntegration:
         fsm.initial_state = "s1"
 
         transitions = [
-            # structural nav: menu click (unique class in non-content state)
+            # click: menu navigation
             Transition(
                 source="s1",
                 target="s2",
                 action={"type": "click", "target": "e_001"},
                 confidence=1.0,
             ),
-            # content selection: click in CONTENT state
+            # click: list item
             Transition(
                 source="s2",
                 target="s3",
                 action={"type": "click", "target": "e_010"},
                 confidence=1.0,
             ),
-            # state mutation: toggle switch
+            # click: toggle switch
             Transition(
                 source="s1",
                 target="s1",
@@ -1080,8 +752,9 @@ class TestClassificationIntegration:
 
         gen = _make_generator(fsm)
         gen._llm = MagicMock()
-        # 2 LLM calls: content_selection, state_mutation
+        # 3 LLM calls: 2 menu clicks + 1 toggle
         gen._llm.generate_with_images.side_effect = [
+            "action(target_text) == $intent.target_setting",
             "action(target_text) == $intent.wifi_name",
             "read(Switch_0, is_checked) == false",
         ]
@@ -1089,12 +762,16 @@ class TestClassificationIntegration:
         result = gen.generate_all_guards(trace_path, use_images=True)
 
         assert result is fsm
-        # Verify: 2 guards generated, 3 skipped
         guards = [t.guard for t in fsm.transitions]
-        assert guards[0] is None  # structural nav
-        assert guards[1] == "action(target_text) == $intent.wifi_name"  # content
-        assert guards[2] == "read(Switch_0, is_checked) == false"  # mutation
-        assert guards[3] is None  # back nav
-        assert guards[4] is None  # scroll
-        # LLM called exactly 2 times
-        assert gen._llm.generate_with_images.call_count == 2
+        # click 1: menu nav → guard
+        assert guards[0] == "action(target_text) == $intent.target_setting"
+        # click 2: list item → guard
+        assert guards[1] == "action(target_text) == $intent.wifi_name"
+        # click 3: toggle → guard
+        assert guards[2] == "read(Switch_0, is_checked) == false"
+        # back nav → None
+        assert guards[3] is None
+        # scroll → None
+        assert guards[4] is None
+        # 3 LLM calls total
+        assert gen._llm.generate_with_images.call_count == 3

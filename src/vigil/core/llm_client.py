@@ -14,10 +14,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
 from loguru import logger
 from PIL import Image
 
 from vigil.core.config import LLMConfig
+
+load_dotenv()
 
 _MAX_IMAGE_EDGE = 1280
 _JPEG_QUALITY = 85

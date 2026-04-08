@@ -112,9 +112,6 @@ class FsmEvolver:
             hierarchy_level=similar_state.hierarchy_level,
             parent_state=similar_state.parent_state,
             activity_name=similar_state.activity_name,
-            container_type=similar_state.container_type,
-            container_resource_id=similar_state.container_resource_id,
-            item_skeleton_hash=similar_state.item_skeleton_hash,
         )
         self._fsm.add_state(new_state)
 

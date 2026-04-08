@@ -43,11 +43,6 @@ def main() -> None:
         help="Include self-loop transitions (action doesn't change state)",
     )
     parser.add_argument(
-        "--no-classify",
-        action="store_true",
-        help="Skip container classification (STRUCTURAL/CONTENT)",
-    )
-    parser.add_argument(
         "--generate-guards",
         action="store_true",
         help="Generate DSL guard expressions for transitions using LLM (Stage 4)",
@@ -56,6 +51,11 @@ def main() -> None:
         "--no-images",
         action="store_true",
         help="Skip screenshot input for guard generation (text-only prompts)",
+    )
+    parser.add_argument(
+        "--fsm",
+        default=None,
+        help="Load existing FSM JSON instead of building from trace (use with --generate-guards)",
     )
 
     args = parser.parse_args()
@@ -73,15 +73,24 @@ def main() -> None:
     # Determine output path
     output_path = Path(args.output) if args.output else Path(f"models/bundles/{app_name}/fsm.json")
 
-    # Build FSM
-    from vigil.neuro.fsm_builder import FsmBuilder
+    # Build or load FSM
+    if args.fsm:
+        from vigil.models.fsm import AppFSM
 
-    builder = FsmBuilder(app_package=app_package)
-    fsm = builder.build_from_trace(
-        trace_path=trace_path,
-        include_self_loops=args.include_self_loops,
-        classify_containers=not args.no_classify,
-    )
+        fsm_path = Path(args.fsm)
+        if not fsm_path.exists():
+            logger.error(f"FSM file not found: {fsm_path}")
+            raise SystemExit(1)
+        fsm = AppFSM.deserialize(fsm_path)
+        logger.info(f"Loaded existing FSM from {fsm_path}: {fsm}")
+    else:
+        from vigil.neuro.fsm_builder import FsmBuilder
+
+        builder = FsmBuilder(app_package=app_package)
+        fsm = builder.build_from_trace(
+            trace_path=trace_path,
+            include_self_loops=args.include_self_loops,
+        )
 
     # Stage 4: DSL guard generation (optional)
     if args.generate_guards:

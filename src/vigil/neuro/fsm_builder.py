@@ -17,9 +17,7 @@ from loguru import logger
 
 from vigil.core.ui_parser import parse_hierarchy_xml
 from vigil.models.action import Action
-from vigil.models.fsm import AbstractState, AppFSM, ContainerType, HierarchyLevel, Transition
-from vigil.models.state import RawScreen
-from vigil.neuro.state_abstractor import StateAbstractor
+from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
 
 
 class FsmBuilder:
@@ -36,15 +34,12 @@ class FsmBuilder:
         self,
         trace_path: Path,
         include_self_loops: bool = False,
-        classify_containers: bool = True,
     ) -> AppFSM:
         """Build an FSM from a serialized exploration trace.
 
         Args:
             trace_path: Path to the exploration JSON file.
             include_self_loops: Whether to include transitions where source == target.
-            classify_containers: Whether to classify scrollable containers in each
-                state as STRUCTURAL or CONTENT. Requires xml_tree_path in trace data.
 
         Returns:
             A fully constructed AppFSM.
@@ -81,17 +76,7 @@ class FsmBuilder:
         for t in transitions:
             fsm.add_transition(t)
 
-        # Step 7: Container classification
-        if classify_containers:
-            self._classify_containers(fsm, raw_screens, trace_path.parent)
-            # Safety net: detect content states via graph fan-out
-            self._detect_content_fanout(fsm)
-
-        # Step 8: Sub-FSM template extraction for CONTENT containers
-        if classify_containers:
-            self._build_sub_fsm_templates(fsm, raw_traces, sid_to_state_id, raw_screens)
-
-        # Step 9: Post-processing — merge duplicates and remove error states
+        # Step 7: Post-processing — merge duplicates and remove error states
         merged = self._merge_scroll_duplicates(fsm)
         removed = self._remove_error_states(fsm)
         if merged or removed:
@@ -101,112 +86,9 @@ class FsmBuilder:
 
         logger.info(
             f"FSM built: {len(fsm.states)} states, {len(fsm.transitions)} transitions, "
-            f"initial_state={initial_state}, "
-            f"sub_fsm_templates={len(fsm.sub_fsm_templates)}"
+            f"initial_state={initial_state}"
         )
         return fsm
-
-    def _classify_containers(
-        self,
-        fsm: AppFSM,
-        raw_screens: dict[str, Any],
-        trace_dir: Path,
-    ) -> None:
-        """Classify scrollable containers by parsing XML tree files.
-
-        Reads the full accessibility tree XML for each raw screen (via
-        xml_tree_path in the trace data) to get the complete element hierarchy
-        needed for container analysis.
-        """
-        screens: dict[str, RawScreen] = {}
-        missing_count = 0
-
-        for screen_id, screen_data in raw_screens.items():
-            xml_rel_path = screen_data.get("xml_tree_path")
-            if not xml_rel_path:
-                missing_count += 1
-                continue
-
-            xml_path = self._resolve_path(xml_rel_path, trace_dir)
-            if xml_path is None:
-                missing_count += 1
-                continue
-
-            xml_content = xml_path.read_text(encoding="utf-8")
-            elements = parse_hierarchy_xml(xml_content)
-            if not elements:
-                continue
-
-            screens[screen_id] = RawScreen(
-                screen_id=screen_id,
-                activity_name=screen_data.get("activity_name"),
-                elements=elements,
-            )
-
-        if not screens:
-            logger.warning(
-                f"Container classification skipped: no XML files found "
-                f"({missing_count} screens missing xml_tree_path)"
-            )
-            return
-
-        abstractor = StateAbstractor()
-        abstractor.annotate_fsm_states(fsm, screens)
-        classified = sum(1 for s in fsm.states.values() if s.container_type.value != "none")
-        logger.info(
-            f"Container classification: {classified}/{len(fsm.states)} states classified "
-            f"({len(screens)} XML files parsed)"
-        )
-
-    @staticmethod
-    def _detect_content_fanout(fsm: AppFSM, min_fanout: int = 3) -> None:
-        """Promote unclassified states to CONTENT when graph structure indicates it.
-
-        If a state has >= min_fanout click transitions to distinct targets,
-        it likely contains dynamic content items. Independent of container_type
-        from XML analysis — acts as a safety net.
-        """
-        promoted = 0
-        for state in fsm.states.values():
-            if state.container_type != ContainerType.NONE:
-                continue
-            click_targets = {
-                t.target
-                for t in fsm.transitions
-                if t.source == state.state_id and t.action.get("type") == "click"
-            }
-            if len(click_targets) >= min_fanout:
-                state.container_type = ContainerType.CONTENT
-                promoted += 1
-                logger.debug(
-                    f"Fan-out promotion: {state.state_id} ({state.name}) "
-                    f"→ CONTENT ({len(click_targets)} click targets)"
-                )
-        if promoted:
-            logger.info(f"Fan-out detection: promoted {promoted} states to CONTENT")
-
-    def _build_sub_fsm_templates(
-        self,
-        fsm: AppFSM,
-        raw_traces: list[dict[str, Any]],
-        sid_to_state_id: dict[str, str],
-        raw_screens: dict[str, Any],
-    ) -> None:
-        """Extract sub-FSM templates for CONTENT container states."""
-        content_states = [
-            s for s in fsm.states.values() if s.container_type == ContainerType.CONTENT
-        ]
-        if not content_states:
-            return
-
-        abstractor = StateAbstractor()
-        templates = abstractor.build_sub_fsm_templates(
-            fsm, raw_traces, sid_to_state_id, raw_screens
-        )
-        if templates:
-            logger.info(f"Built {len(templates)} sub-FSM templates")
-        else:
-            logger.debug("No sub-FSM templates extracted (no item clicks in traces)")
 
     # --- Post-processing: duplicate/error state cleanup ---
 

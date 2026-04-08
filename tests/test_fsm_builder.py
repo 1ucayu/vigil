@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from vigil.models.fsm import AbstractState, AppFSM, ContainerType, HierarchyLevel, Transition
+from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
 from vigil.neuro.fsm_builder import FsmBuilder
 
 TRACE_PATH = (
@@ -632,68 +632,3 @@ class TestRemoveErrorStates:
 
         assert removed == 0
         assert "s1" in fsm.states
-
-
-class TestDetectContentFanout:
-    """Tests for graph fan-out based content detection."""
-
-    def test_fanout_promotes_to_content(self) -> None:
-        """State with 4 click transitions to distinct targets → CONTENT."""
-        fsm = AppFSM(app_package="com.test")
-        for i in range(5):
-            fsm.add_state(
-                AbstractState(
-                    state_id=f"s{i}",
-                    name=f"State{i}",
-                    fingerprint=f"fp{i}",
-                    hierarchy_level=HierarchyLevel.ACTIVITY,
-                )
-            )
-        for i in range(1, 5):
-            fsm.add_transition(
-                Transition(source="s0", target=f"s{i}", action={"type": "click"}, observed_count=1)
-            )
-
-        FsmBuilder._detect_content_fanout(fsm, min_fanout=3)
-        assert fsm.states["s0"].container_type == ContainerType.CONTENT
-
-    def test_low_fanout_stays_none(self) -> None:
-        """State with only 2 click transitions → stays NONE."""
-        fsm = AppFSM(app_package="com.test")
-        for i in range(3):
-            fsm.add_state(
-                AbstractState(
-                    state_id=f"s{i}",
-                    name=f"State{i}",
-                    fingerprint=f"fp{i}",
-                    hierarchy_level=HierarchyLevel.ACTIVITY,
-                )
-            )
-        for i in range(1, 3):
-            fsm.add_transition(
-                Transition(source="s0", target=f"s{i}", action={"type": "click"}, observed_count=1)
-            )
-
-        FsmBuilder._detect_content_fanout(fsm, min_fanout=3)
-        assert fsm.states["s0"].container_type == ContainerType.NONE
-
-    def test_already_classified_not_promoted(self) -> None:
-        """State already classified as STRUCTURAL is not changed by fan-out."""
-        fsm = AppFSM(app_package="com.test")
-        for i in range(5):
-            fsm.add_state(
-                AbstractState(
-                    state_id=f"s{i}",
-                    name=f"State{i}",
-                    fingerprint=f"fp{i}",
-                    hierarchy_level=HierarchyLevel.ACTIVITY,
-                )
-            )
-        fsm.states["s0"].container_type = ContainerType.STRUCTURAL
-        for i in range(1, 5):
-            fsm.add_transition(
-                Transition(source="s0", target=f"s{i}", action={"type": "click"}, observed_count=1)
-            )
-
-        FsmBuilder._detect_content_fanout(fsm, min_fanout=3)
-        assert fsm.states["s0"].container_type == ContainerType.STRUCTURAL

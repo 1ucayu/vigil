@@ -28,20 +28,6 @@ class HierarchyLevel(StrEnum):
     COMPONENT = "component"
 
 
-class ContainerType(StrEnum):
-    """Classification for scrollable containers within a state.
-
-    Attributes:
-        STRUCTURAL: Fixed-structure container (e.g., settings menu — items don't change).
-        CONTENT: Dynamic-content container (e.g., WiFi list — items vary at runtime).
-        NONE: State does not contain a classified scrollable container.
-    """
-
-    STRUCTURAL = "structural"
-    CONTENT = "content"
-    NONE = "none"
-
-
 class AbstractState(BaseModel):
     """An abstract UI state in the FSM.
 
@@ -64,10 +50,6 @@ class AbstractState(BaseModel):
     activity_name: str | None = None
     invariants: list[str] = Field(default_factory=list)
     raw_screens: list[str] = Field(default_factory=list)
-    container_type: ContainerType = ContainerType.NONE
-    container_resource_id: str | None = None
-    item_skeleton_hash: str | None = None
-    sub_fsm_template_id: str | None = None
 
 
 class Transition(BaseModel):
@@ -90,32 +72,6 @@ class Transition(BaseModel):
     observed_count: int = 0
 
 
-class SubFsmTemplate(BaseModel):
-    """A parameterized sub-FSM discovered by exploring one representative content item.
-
-    When a CONTENT container's items are clicked, they lead to the same structural
-    sub-tree (e.g., any WiFi network → WiFi Detail → Advanced Settings). This template
-    captures that sub-tree so it can be instantiated with different parameters at runtime.
-
-    Attributes:
-        template_id: Unique identifier (e.g., "tmpl_001").
-        entry_action: Action that enters this sub-FSM from the container state.
-        states: States in the sub-tree.
-        transitions: Transitions in the sub-tree.
-        parameters: Parameter names that vary per item (e.g., ["$item.name"]).
-        source_container_state_id: FSM state ID of the container this was extracted from.
-        item_skeleton_hash: Skeleton hash of the item type this template handles.
-    """
-
-    template_id: str
-    entry_action: dict[str, Any]
-    states: dict[str, AbstractState]
-    transitions: list[Transition]
-    parameters: list[str] = Field(default_factory=list)
-    source_container_state_id: str
-    item_skeleton_hash: str
-
-
 class AppFSM:
     """Per-app hierarchical FSM with DSL guard annotations.
 
@@ -134,16 +90,11 @@ class AppFSM:
         self.initial_state: str | None = None
         self.version: str = "0.1.0"
         self.evolution_log: list[dict[str, Any]] = []
-        self.sub_fsm_templates: dict[str, SubFsmTemplate] = {}
 
     def add_state(self, state: AbstractState) -> None:
         """Add an abstract state to the FSM."""
         self.states[state.state_id] = state
         self.graph.add_node(state.state_id, **state.model_dump())
-
-    def add_sub_fsm_template(self, template: SubFsmTemplate) -> None:
-        """Register a sub-FSM template for container content."""
-        self.sub_fsm_templates[template.template_id] = template
 
     def add_transition(self, transition: Transition) -> None:
         """Add a transition between two states."""
@@ -220,7 +171,6 @@ class AppFSM:
             "states": {sid: s.model_dump() for sid, s in self.states.items()},
             "transitions": [t.model_dump() for t in self.transitions],
             "evolution_log": self.evolution_log,
-            "sub_fsm_templates": {tid: t.model_dump() for tid, t in self.sub_fsm_templates.items()},
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2, default=str))
@@ -240,9 +190,6 @@ class AppFSM:
 
         for trans_data in data.get("transitions", []):
             fsm.add_transition(Transition(**trans_data))
-
-        for tmpl_data in data.get("sub_fsm_templates", {}).values():
-            fsm.add_sub_fsm_template(SubFsmTemplate.model_validate(tmpl_data))
 
         return fsm
 
