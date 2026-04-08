@@ -24,6 +24,7 @@ from vigil.symbolic.fsm_checker import (
     VerifyReason,
     VerifyResult,
 )
+from vigil.symbolic.intent_extractor import IntentExtractor
 
 
 class DecisionEngine:
@@ -46,10 +47,12 @@ class DecisionEngine:
         fsm: AppFSM,
         config: VerificationConfig | None = None,
         grammar_path: str | None = None,
+        intent_extractor: IntentExtractor | None = None,
     ) -> None:
         self._fsm = fsm
         self._checker = FsmChecker(fsm, config)
         self._evaluator: DSLEvaluator | None = None
+        self._intent_extractor = intent_extractor
         try:
             self._evaluator = DSLEvaluator(grammar_path)
         except Exception:
@@ -61,6 +64,7 @@ class DecisionEngine:
         proposed_action: dict[str, Any],
         intent_ctx: IntentContext | None = None,
         goal_state: str | None = None,
+        raw_instruction: str | None = None,
     ) -> VerificationOutput:
         """The master VERIFY function with full screen input.
 
@@ -69,6 +73,8 @@ class DecisionEngine:
             proposed_action: Action dict (e.g., {"type": "click", "target": "e_001"}).
             intent_ctx: User intent variables for guard binding.
             goal_state: Optional goal state for reachability checking.
+            raw_instruction: User's natural language instruction. If provided
+                and intent_ctx is None, triggers auto-extraction via IntentExtractor.
 
         Returns:
             VerificationOutput with decision and reasoning.
@@ -86,6 +92,11 @@ class DecisionEngine:
         transition = self._fsm.get_transition(tier1_result.current_state_id, proposed_action)
         if transition is None or transition.guard is None:
             return tier1_result
+
+        # Auto-extract intent if needed
+        intent_ctx = self._resolve_intent(
+            intent_ctx, raw_instruction, tier1_result.current_state_id
+        )
 
         screen_ctx = self._build_screen_context(current_screen)
         action_ctx = self._build_action_context(proposed_action, current_screen)
@@ -119,6 +130,7 @@ class DecisionEngine:
         screen_ctx: ScreenContext | None = None,
         action_ctx: dict[str, Any] | None = None,
         goal_state: str | None = None,
+        raw_instruction: str | None = None,
     ) -> VerificationOutput:
         """Verify when state is already known (skip localization).
 
@@ -129,6 +141,8 @@ class DecisionEngine:
             screen_ctx: Screen context for guard evaluation.
             action_ctx: Action metadata for action_pred evaluation.
             goal_state: Optional goal state for reachability checking.
+            raw_instruction: User's natural language instruction. If provided
+                and intent_ctx is None, triggers auto-extraction via IntentExtractor.
 
         Returns:
             VerificationOutput with decision and reasoning.
@@ -146,6 +160,9 @@ class DecisionEngine:
         transition = self._fsm.get_transition(current_state_id, proposed_action)
         if transition is None or transition.guard is None:
             return tier1_result
+
+        # Auto-extract intent if needed
+        intent_ctx = self._resolve_intent(intent_ctx, raw_instruction, current_state_id)
 
         if screen_ctx is None:
             screen_ctx = ScreenContext()
@@ -170,6 +187,41 @@ class DecisionEngine:
             )
 
         return tier1_result
+
+    def get_required_variables(self, state_id: str) -> set[str]:
+        """Get $intent.* variable names needed by a state's outgoing guards.
+
+        Convenience method that delegates to IntentExtractor.collect_required_variables.
+
+        Args:
+            state_id: FSM state ID.
+
+        Returns:
+            Set of variable names (without $intent. prefix).
+        """
+        return IntentExtractor.collect_required_variables(self._fsm, state_id)
+
+    def _resolve_intent(
+        self,
+        intent_ctx: IntentContext | None,
+        raw_instruction: str | None,
+        state_id: str,
+    ) -> IntentContext | None:
+        """Resolve intent context: explicit > auto-extract > None.
+
+        Args:
+            intent_ctx: Explicitly provided intent (takes priority).
+            raw_instruction: User instruction for auto-extraction.
+            state_id: Current state ID for variable collection.
+
+        Returns:
+            Resolved IntentContext or None.
+        """
+        if intent_ctx is not None:
+            return intent_ctx
+        if raw_instruction is not None and self._intent_extractor is not None:
+            return self._intent_extractor.extract(raw_instruction, state_id)
+        return None
 
     @staticmethod
     def _build_screen_context(screen: RawScreen) -> ScreenContext:
