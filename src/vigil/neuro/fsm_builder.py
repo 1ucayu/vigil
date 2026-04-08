@@ -53,7 +53,9 @@ class FsmBuilder:
         sid_to_state_id = self._build_screen_mapping(raw_screens, fp_to_state_id)
 
         # Step 2: Build transitions from traces
-        transitions = self._build_transitions(raw_traces, sid_to_state_id, include_self_loops)
+        transitions = self._build_transitions(
+            raw_traces, sid_to_state_id, include_self_loops, raw_screens
+        )
 
         # Step 3: Merge duplicate transitions
         transitions = self._merge_transitions(transitions)
@@ -374,6 +376,7 @@ class FsmBuilder:
         raw_traces: list[dict[str, Any]],
         sid_to_state_id: dict[str, str],
         include_self_loops: bool,
+        raw_screens: dict[str, Any] | None = None,
     ) -> list[Transition]:
         """Convert exploration traces into FSM transitions."""
         transitions: list[Transition] = []
@@ -389,7 +392,11 @@ class FsmBuilder:
             if source_state is None or target_state is None:
                 continue
 
-            if not include_self_loops and source_state == target_state:
+            if (
+                not include_self_loops
+                and source_state == target_state
+                and not (raw_screens and self._is_toggle_action(trace, raw_screens))
+            ):
                 skipped_self_loops += 1
                 continue
 
@@ -410,6 +417,24 @@ class FsmBuilder:
         if skipped_self_loops:
             logger.debug(f"Skipped {skipped_self_loops} self-loop transitions")
         return transitions
+
+    @staticmethod
+    def _is_toggle_action(trace: dict[str, Any], raw_screens: dict[str, Any]) -> bool:
+        """Check if a trace step targets a checkable element (toggle/switch)."""
+        action_data = trace.get("action", {})
+        target_eid = action_data.get("target_element_id")
+        if not target_eid:
+            return False
+
+        source_sid = trace.get("source_screen_id", "")
+        screen = raw_screens.get(source_sid, {})
+        elements = screen.get("interactable_elements", screen.get("elements", []))
+
+        for el in elements:
+            if el.get("element_id") == target_eid:
+                return el.get("is_checkable", False)
+
+        return False
 
     def _merge_transitions(self, transitions: list[Transition]) -> list[Transition]:
         """Merge duplicate transitions by (source, target, action_type).

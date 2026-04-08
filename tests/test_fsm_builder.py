@@ -632,3 +632,132 @@ class TestRemoveErrorStates:
 
         assert removed == 0
         assert "s1" in fsm.states
+
+
+class TestToggleSelfLoops:
+    """Tests for preserving toggle (checkable) self-loop transitions."""
+
+    def test_toggle_self_loop_preserved(self, tmp_path: Path) -> None:
+        """Self-loops targeting checkable elements should be preserved."""
+        data = {
+            "app_package": "com.test.app",
+            "screens": {
+                "scr_001": {
+                    "screen_id": "scr_001",
+                    "activity_name": ".MainActivity",
+                    "interactable_elements": [
+                        {
+                            "element_id": "e_001",
+                            "class_name": "android.widget.Switch",
+                            "resource_id": "com.test:id/bt_switch",
+                            "text": "",
+                            "depth": 1,
+                            "is_clickable": True,
+                            "is_checkable": True,
+                            "is_checked": False,
+                        },
+                        {
+                            "element_id": "e_002",
+                            "class_name": "android.widget.TextView",
+                            "resource_id": "com.test:id/title",
+                            "text": "Bluetooth",
+                            "depth": 1,
+                            "is_clickable": True,
+                        },
+                    ],
+                },
+            },
+            "traces": [
+                {
+                    "step_number": 1,
+                    "source_screen_id": "scr_001",
+                    "target_screen_id": "scr_001",
+                    "action": {"action_type": "click", "target_element_id": "e_001"},
+                    "timestamp": "",
+                },
+                {
+                    "step_number": 2,
+                    "source_screen_id": "scr_001",
+                    "target_screen_id": "scr_001",
+                    "action": {"action_type": "click", "target_element_id": "e_002"},
+                    "timestamp": "",
+                },
+            ],
+        }
+        path = tmp_path / "trace.json"
+        path.write_text(json.dumps(data))
+
+        builder = FsmBuilder("com.test.app")
+        fsm = builder.build_from_trace(path, include_self_loops=False)
+
+        # Toggle self-loop (e_001, checkable) should be preserved
+        # Non-toggle self-loop (e_002, not checkable) should be excluded
+        self_loops = [t for t in fsm.transitions if t.source == t.target]
+        assert len(self_loops) == 1
+        assert self_loops[0].action.get("target") == "e_001"
+
+    def test_non_toggle_self_loop_still_excluded(self, tmp_path: Path) -> None:
+        """Self-loops on non-checkable elements should still be excluded."""
+        data = {
+            "app_package": "com.test.app",
+            "screens": {
+                "scr_001": {
+                    "screen_id": "scr_001",
+                    "activity_name": ".MainActivity",
+                    "interactable_elements": [
+                        {
+                            "element_id": "e_001",
+                            "class_name": "android.widget.TextView",
+                            "resource_id": "com.test:id/title",
+                            "text": "Settings",
+                            "depth": 1,
+                            "is_clickable": True,
+                        },
+                    ],
+                },
+            },
+            "traces": [
+                {
+                    "step_number": 1,
+                    "source_screen_id": "scr_001",
+                    "target_screen_id": "scr_001",
+                    "action": {"action_type": "click", "target_element_id": "e_001"},
+                    "timestamp": "",
+                },
+            ],
+        }
+        path = tmp_path / "trace.json"
+        path.write_text(json.dumps(data))
+
+        builder = FsmBuilder("com.test.app")
+        fsm = builder.build_from_trace(path, include_self_loops=False)
+
+        self_loops = [t for t in fsm.transitions if t.source == t.target]
+        assert len(self_loops) == 0
+
+    def test_is_toggle_action(self) -> None:
+        """_is_toggle_action correctly identifies checkable elements."""
+        raw_screens = {
+            "scr_001": {
+                "interactable_elements": [
+                    {"element_id": "e_001", "is_checkable": True},
+                    {"element_id": "e_002", "is_checkable": False},
+                ],
+            },
+        }
+        trace_toggle = {
+            "source_screen_id": "scr_001",
+            "action": {"target_element_id": "e_001"},
+        }
+        trace_normal = {
+            "source_screen_id": "scr_001",
+            "action": {"target_element_id": "e_002"},
+        }
+        trace_missing = {
+            "source_screen_id": "scr_001",
+            "action": {"target_element_id": "e_999"},
+        }
+
+        assert FsmBuilder._is_toggle_action(trace_toggle, raw_screens) is True
+        assert FsmBuilder._is_toggle_action(trace_normal, raw_screens) is False
+        assert FsmBuilder._is_toggle_action(trace_missing, raw_screens) is False

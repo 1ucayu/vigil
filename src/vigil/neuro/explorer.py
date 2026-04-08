@@ -158,7 +158,6 @@ class AppExplorer:
         skip_actions: set[ActionType] = {
             ActionType.INPUT_TEXT,
             ActionType.NAVIGATE_HOME,
-            ActionType.LONG_PRESS,
         }
 
         # Build frontier: (screen_id, action) pairs.
