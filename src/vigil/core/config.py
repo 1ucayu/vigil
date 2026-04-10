@@ -35,10 +35,13 @@ class ApeConfig(BaseModel):
 class LLMConfig(BaseModel):
     """Configuration for LLM client (offline stage only)."""
 
-    provider: Literal["anthropic", "openai", "google"] = "anthropic"
+    provider: Literal["anthropic", "openai", "google", "proxy"] = "anthropic"
     model: str = "claude-sonnet-4-20250514"
     max_tokens: int = 4096
     temperature: float = 0.0
+    proxy_base_url: str = "http://localhost:4141/v1"
+    proxy_api_key: str = "dummy_key"
+    proxy_model: str = "claude-sonnet-4.5"
 
 
 class StateAbstractionConfig(BaseModel):

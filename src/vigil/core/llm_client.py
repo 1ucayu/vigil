@@ -1,4 +1,4 @@
-"""Unified LLM client wrapper (Google Gemini / Anthropic).
+"""Unified LLM client wrapper (Google Gemini / Anthropic / Proxy).
 
 Used ONLY during offline stages (state abstraction, DSL generation, Tier 3 evolution).
 The online symbolic verifier must NEVER call this client for Tier 1-2.
@@ -34,6 +34,7 @@ class LlmClient:
     Providers:
         - google: Google Gemini via google-genai SDK
         - anthropic: Anthropic Claude via anthropic SDK
+        - proxy: OpenAI-compatible local proxy (text-only, no image support)
     """
 
     _ENV_KEYS: dict[str, str] = {
@@ -46,30 +47,41 @@ class LlmClient:
         self._config = config
         self._provider = config.provider
 
-        env_key = self._ENV_KEYS.get(self._provider, "")
-        api_key = os.environ.get(env_key, "")
-        if not api_key:
-            msg = f"Missing API key: set {env_key} environment variable"
-            raise ValueError(msg)
+        if self._provider == "proxy":
+            import openai
 
-        if self._provider == "google":
-            from google import genai
-
-            self._client = genai.Client(api_key=api_key)
-            self._model = config.model or "gemini-2.0-flash"
-        elif self._provider == "anthropic":
-            import anthropic
-
-            self._client = anthropic.Anthropic(api_key=api_key)
-            self._model = config.model or "claude-sonnet-4-20250514"
+            self._client = openai.OpenAI(
+                base_url=config.proxy_base_url,
+                api_key=config.proxy_api_key,
+            )
+            self._model = config.proxy_model
         else:
-            msg = f"Provider '{self._provider}' not yet implemented"
-            raise NotImplementedError(msg)
+            env_key = self._ENV_KEYS.get(self._provider, "")
+            api_key = os.environ.get(env_key, "")
+            if not api_key:
+                msg = f"Missing API key: set {env_key} environment variable"
+                raise ValueError(msg)
+
+            if self._provider == "google":
+                from google import genai
+
+                self._client = genai.Client(api_key=api_key)
+                self._model = config.model or "gemini-2.0-flash"
+            elif self._provider == "anthropic":
+                import anthropic
+
+                self._client = anthropic.Anthropic(api_key=api_key)
+                self._model = config.model or "claude-sonnet-4-20250514"
+            else:
+                msg = f"Provider '{self._provider}' not yet implemented"
+                raise NotImplementedError(msg)
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         """Text-only generation."""
         if self._provider == "google":
             return self._generate_google(system_prompt, user_prompt, contents=[user_prompt])
+        if self._provider == "proxy":
+            return self._generate_proxy(system_prompt, user_prompt)
         return self._generate_anthropic(system_prompt, user_prompt)
 
     def generate_with_images(
@@ -84,6 +96,10 @@ class LlmClient:
         Each image is loaded, resized to max 1280px longest edge,
         and sent as image content blocks.
         """
+        if self._provider == "proxy":
+            logger.warning("Proxy provider does not support image input, using text-only mode")
+            return self._generate_proxy(system_prompt, text_prompt)
+
         labels = image_labels or [None] * len(images)
         pil_images = [self._preprocess_image(p) for p in images]
 
@@ -180,6 +196,26 @@ class LlmClient:
                 f"output={response.usage.output_tokens}"
             )
         return response.content[0].text
+
+    def _generate_proxy(self, system_prompt: str, user_prompt: str) -> str:
+        def _call() -> Any:
+            return self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=self._config.max_tokens,
+                temperature=self._config.temperature,
+            )
+
+        response = self._call_with_retry(_call)
+        if hasattr(response, "usage") and response.usage:
+            logger.debug(
+                f"Proxy tokens: input={response.usage.prompt_tokens}, "
+                f"output={response.usage.completion_tokens}"
+            )
+        return response.choices[0].message.content or ""
 
     @staticmethod
     def _preprocess_image(path: Path) -> Image.Image:

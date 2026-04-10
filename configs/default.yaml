@@ -12,10 +12,14 @@ ape:
   ape_mode: "sata"                  # sata (CEGAR) | random
 
 llm:
-  provider: "google"                 # anthropic | openai | google
+  provider: "google"                 # anthropic | openai | google | proxy
   model: "gemini-2.5-flash"
   max_tokens: 4096
   temperature: 0.0
+  # Proxy settings (used when provider == "proxy")
+  proxy_base_url: "http://localhost:4141/v1"
+  proxy_api_key: "dummy_key"
+  proxy_model: "claude-sonnet-4.5"
 
 state_abstraction:
   similarity_threshold: 0.85

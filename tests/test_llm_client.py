@@ -191,3 +191,78 @@ class TestGenerateWithImages:
             assert contents[2] == "Target:"
             assert isinstance(contents[3], Image.Image)
             assert contents[4] == "text prompt"
+
+
+class TestProxyProvider:
+    """Test proxy provider (OpenAI-compatible local API)."""
+
+    @patch("openai.OpenAI")
+    def test_proxy_init(self, mock_openai_cls: MagicMock) -> None:
+        config = LLMConfig(
+            provider="proxy",
+            proxy_base_url="http://localhost:4141/v1",
+            proxy_api_key="my_key",
+            proxy_model="claude-sonnet-4.5",
+        )
+        client = LlmClient(config)
+        mock_openai_cls.assert_called_once_with(
+            base_url="http://localhost:4141/v1",
+            api_key="my_key",
+        )
+        assert client._model == "claude-sonnet-4.5"
+
+    @patch("openai.OpenAI")
+    def test_proxy_no_env_key_needed(self, mock_openai_cls: MagicMock) -> None:
+        """Proxy provider should not require any environment variable."""
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("GOOGLE_API_KEY", None)
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            os.environ.pop("OPENAI_API_KEY", None)
+            config = LLMConfig(provider="proxy")
+            LlmClient(config)  # should not raise
+
+    @patch("openai.OpenAI")
+    def test_proxy_generate(self, mock_openai_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="guard result"))]
+        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=5)
+        mock_client.chat.completions.create.return_value = mock_response
+
+        config = LLMConfig(provider="proxy", proxy_model="gpt-5.4")
+        client = LlmClient(config)
+        result = client.generate("system prompt", "user prompt")
+
+        assert result == "guard result"
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["model"] == "gpt-5.4"
+        assert call_kwargs["messages"] == [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "user prompt"},
+        ]
+
+    @patch("openai.OpenAI")
+    def test_proxy_images_fallback(self, mock_openai_cls: MagicMock, tmp_path: Path) -> None:
+        """generate_with_images should fall back to text-only for proxy."""
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="text only"))]
+        mock_response.usage = None
+        mock_client.chat.completions.create.return_value = mock_response
+
+        # Create a dummy image
+        img = Image.new("RGB", (100, 100))
+        img_path = tmp_path / "test.png"
+        img.save(img_path)
+
+        config = LLMConfig(provider="proxy")
+        client = LlmClient(config)
+
+        result = client.generate_with_images("system", "text prompt", images=[img_path])
+
+        assert result == "text only"
+        # Should use chat completions (text-only), not process images
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["messages"][1]["content"] == "text prompt"
