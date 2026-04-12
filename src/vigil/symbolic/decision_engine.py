@@ -3,7 +3,10 @@
 Orchestrates the three-tier verification pipeline:
   Tier 1 (FSM structural) → Tier 2 (DSL semantic) → Tier 3 (micro-evolution)
 
-Returns ALLOW / DENY / UNCERTAIN for each proposed action.
+Returns ALLOW / DENY / UNCERTAIN for each proposed action. If an LlmFallback
+is configured, any UNCERTAIN result is routed through the LLM to produce a
+final ALLOW/DENY; LLM failures preserve the UNCERTAIN result.
+
 Tier 3 (evolution) is handled externally — DecisionEngine returns UNCERTAIN
 for unknown states, and the caller decides whether to invoke evolution.
 """
@@ -25,6 +28,7 @@ from vigil.symbolic.fsm_checker import (
     VerifyResult,
 )
 from vigil.symbolic.intent_extractor import IntentExtractor
+from vigil.symbolic.llm_fallback import LlmFallback
 
 
 class DecisionEngine:
@@ -40,6 +44,12 @@ class DecisionEngine:
         fsm: The app's verified FSM.
         config: Verification config (for confidence_threshold).
         grammar_path: Path to DSL grammar file. If None, uses default.
+        intent_extractor: Optional IntentExtractor for auto-resolving
+            $intent.* variables from a raw user instruction.
+        llm_fallback: Optional LlmFallback. When present, any UNCERTAIN
+            result produced by Tier 1-2 is routed through the LLM to
+            produce a final ALLOW/DENY. On LLM failure the original
+            UNCERTAIN result is preserved.
     """
 
     def __init__(
@@ -48,11 +58,13 @@ class DecisionEngine:
         config: VerificationConfig | None = None,
         grammar_path: str | None = None,
         intent_extractor: IntentExtractor | None = None,
+        llm_fallback: LlmFallback | None = None,
     ) -> None:
         self._fsm = fsm
         self._checker = FsmChecker(fsm, config)
         self._evaluator: DSLEvaluator | None = None
         self._intent_extractor = intent_extractor
+        self._llm_fallback = llm_fallback
         try:
             self._evaluator = DSLEvaluator(grammar_path)
         except Exception:
@@ -82,6 +94,10 @@ class DecisionEngine:
         # Tier 1: structural FSM check (includes state localization)
         tier1_result = self._checker.verify(current_screen, proposed_action, goal_state)
 
+        if tier1_result.result == VerifyResult.UNCERTAIN:
+            return self._apply_llm_fallback(
+                tier1_result, current_screen, proposed_action, raw_instruction
+            )
         if tier1_result.result != VerifyResult.ALLOW:
             return tier1_result
 
@@ -150,6 +166,8 @@ class DecisionEngine:
         # Tier 1: structural check
         tier1_result = self._checker.verify_by_state(current_state_id, proposed_action, goal_state)
 
+        if tier1_result.result == VerifyResult.UNCERTAIN:
+            return self._apply_llm_fallback(tier1_result, None, proposed_action, raw_instruction)
         if tier1_result.result != VerifyResult.ALLOW:
             return tier1_result
 
@@ -200,6 +218,28 @@ class DecisionEngine:
             Set of variable names (without $intent. prefix).
         """
         return IntentExtractor.collect_required_variables(self._fsm, state_id)
+
+    def _apply_llm_fallback(
+        self,
+        uncertain_result: VerificationOutput,
+        current_screen: RawScreen | None,
+        proposed_action: dict[str, Any],
+        raw_instruction: str | None,
+    ) -> VerificationOutput:
+        """Route an UNCERTAIN result through the LLM fallback if configured.
+
+        If no fallback is attached, returns the input unchanged — preserving
+        the default "user" fallback semantics where callers handle UNCERTAIN
+        themselves.
+        """
+        if self._llm_fallback is None:
+            return uncertain_result
+        return self._llm_fallback.resolve(
+            uncertain_result,
+            current_screen,
+            proposed_action,
+            raw_instruction=raw_instruction,
+        )
 
     def _resolve_intent(
         self,

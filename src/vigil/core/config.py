@@ -62,7 +62,6 @@ class VerificationConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Configuration for the online runtime verifier."""
 
-    latency_budget_ms: int = 25
     fallback_on_uncertain: Literal["user", "llm", "deny"] = "user"
 
 

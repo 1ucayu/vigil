@@ -1,4 +1,4 @@
-"""Tier 1: FSM Structural Verification (< 5 ms).
+"""Tier 1: FSM Structural Verification.
 
 Pure symbolic checks against the FSM graph:
 - Transition validity: is the proposed action legal from the current state?
@@ -39,6 +39,7 @@ class VerifyReason(StrEnum):
     LOW_CONFIDENCE = "low_confidence"
     STATE_SIMILAR = "state_similar_fuzzy_match"
     GUARD_FAILED = "guard_failed"
+    LLM_FALLBACK = "llm_fallback"
 
 
 class VerificationOutput(BaseModel):

@@ -4,7 +4,7 @@ Self-Evolving Neuro-Symbolic Runtime Verification for Mobile GUI Agents.
 
 ## Overview
 
-Vigil is a neuro-symbolic runtime verification system for mobile GUI agents. It constructs per-app hierarchical Finite State Machines (FSMs) offline using LLMs, then performs lightweight symbolic verification at runtime with zero LLM calls and < 25 ms latency.
+Vigil is a neuro-symbolic runtime verification system for mobile GUI agents. It constructs per-app hierarchical Finite State Machines (FSMs) offline using LLMs, then performs lightweight symbolic verification at runtime, falling back to an LLM only when the symbolic layer is uncertain.
 
 ## Quick Start
 

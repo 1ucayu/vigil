@@ -22,7 +22,7 @@
 
 ## 2. One-Paragraph Summary
 
-Vigil is a **neuro-symbolic runtime verification system** for mobile GUI agents. In the **offline (neuro) phase**, an LLM systematically explores a target Android app via Accessibility Service, abstracts raw screens into states, and constructs a **per-app hierarchical Finite State Machine (FSM)** annotated with **DSL semantic guards**. The FSM is then verified via test-case generation and on-device replay. In the **online (symbolic) phase**, a lightweight engine performs **dual-layer formal verification** — FSM structural checks (transition validity, reachability, invariants) and DSL semantic checks (guard condition evaluation) — achieving **zero runtime LLM calls** and **< 25 ms latency**. Crucially, Vigil is **self-evolving**: when encountering previously unseen UI states (e.g., dynamic content in food-delivery or e-commerce apps), it degrades gracefully through a **three-tier verification** strategy (structural FSM → parameterized guards → online micro-evolution) and caches evolution results back into the FSM bundle, achieving **monotonically increasing coverage over time**.
+Vigil is a **neuro-symbolic runtime verification system** for mobile GUI agents. In the **offline (neuro) phase**, an LLM systematically explores a target Android app via Accessibility Service, abstracts raw screens into states, and constructs a **per-app hierarchical Finite State Machine (FSM)** annotated with **DSL semantic guards**. The FSM is then verified via test-case generation and on-device replay. In the **online (symbolic) phase**, a lightweight engine performs **dual-layer formal verification** — FSM structural checks (transition validity, reachability, invariants) and DSL semantic checks (guard condition evaluation) — with an optional **LLM fallback** invoked only when the symbolic layer cannot produce a definitive ALLOW/DENY. Crucially, Vigil is **self-evolving**: when encountering previously unseen UI states (e.g., dynamic content in food-delivery or e-commerce apps), it degrades gracefully through a **three-tier verification** strategy (structural FSM → parameterized guards → online micro-evolution) and caches evolution results back into the FSM bundle, achieving **monotonically increasing coverage over time**.
 
 ---
 
@@ -99,7 +99,7 @@ LLM-generated DSL guards         →     Model checking (formal verification)
 
 This is the key architectural evolution responding to advisor feedback about dynamic apps.
 
-**Tier 1: Structural FSM Verification (pure symbolic, < 5 ms)**
+**Tier 1: Structural FSM Verification (pure symbolic)**
 - State localization: accessibility tree fingerprinting → FSM state
 - Transition validity: is action legal from current state?
 - Reachability: can we still reach goal state? O(V+E)
@@ -107,13 +107,13 @@ This is the key architectural evolution responding to advisor feedback about dyn
 - Confidence check: is this transition well-tested?
 - Coverage: Settings ~99%, dynamic apps ~60%
 
-**Tier 2: Parameterized Guard Verification (< 15 ms)**
+**Tier 2: Parameterized Guard Verification (pure symbolic)**
 - DSL guard templates cached offline, parameters bound at runtime
 - Task State Machine tracks multi-step progress (solves sequential dependency)
 - Example: milk-tea ordering uses intent checklist to verify each step fulfills user goal
 - Predicate evaluation is O(R), R = number of rules
 
-**Tier 3: Online LLM Micro-Evolution (~200–500 ms, infrequent)**
+**Tier 3: Online LLM Micro-Evolution (infrequent)**
 - Triggered only for truly unseen content patterns
 - Most "unseen" states are structurally similar to known states → `inherit_and_bind` (no LLM needed)
 - When LLM is needed: generate new state + guards → cache back into FSM bundle
@@ -211,8 +211,9 @@ VERIFY(current_screen, proposed_action, user_goal):
 - Solves: static verification can't handle dynamic apps
 - Novel: formal verification model that self-evolves (no existing work does this)
 
-**C4: Lightweight On-Device Deployment (< 25 ms, No Runtime LLM for Tier 1-2)**
-- Solves: all existing verifiers need runtime LLM
+**C4: Lightweight On-Device Deployment (No Runtime LLM for Tier 1-2; Optional LLM Fallback on Uncertain)**
+- Solves: existing verifiers need a runtime LLM on every action
+- Tier 1-2 remain pure-symbolic; LLM is consulted only when the symbolic layer returns UNCERTAIN
 
 **C5: Central Agent for FSM+DSL Lifecycle Management**
 - Solves: no existing work discusses model maintenance
@@ -540,7 +541,6 @@ verification:
   max_path_length: 10                # bounded path enumeration
 
 runtime:
-  latency_budget_ms: 25
   fallback_on_uncertain: "user"      # user | llm | deny
 
 evolution:
@@ -688,7 +688,7 @@ Create files in this sequence:
 1. **Start with Settings app** — deterministic, no login, no network dependency, ideal for debugging
 2. **`src/` layout is mandatory** — all code under `src/vigil/`, never import from repo root
 3. **Core novelty = FSM pipeline + self-evolution** — don't over-engineer Android infrastructure early
-4. **Keep symbolic verifier in pure Python first** — graph lookups + predicate eval should meet 25 ms; only optimize to Kotlin/C++ if not
+4. **Keep symbolic verifier in pure Python first** — graph lookups + predicate eval are fast enough; only port to Kotlin/C++ if profiling justifies it
 5. **Verifier is agent-agnostic** — wraps ANY GUI agent as safety layer, does not replace agent
 6. **Replay non-determinism is expected** — use confidence scores, don't chase 100% reliability
 7. **State explosion mitigation**: hierarchy + bounded exploration (max 500 steps per app initially)

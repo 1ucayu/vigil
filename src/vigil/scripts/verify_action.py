@@ -150,6 +150,34 @@ def _cmd_trajectory(fsm, args) -> None:
     print(f"  Furthest valid step: {result.furthest_valid_step}")
 
 
+def _build_llm_fallback(fsm, args):
+    """Build an LlmFallback from the default config, or None on failure."""
+    if not args.llm_fallback:
+        return None
+    from vigil.core.config import VigilConfig
+    from vigil.core.llm_client import LlmClient
+    from vigil.symbolic.llm_fallback import LlmFallback
+
+    config_path = Path(args.config) if args.config else Path("configs/default.yaml")
+    if not config_path.exists():
+        print(
+            f"{_YELLOW}Warning: {config_path} not found, using default LLM config{_RESET}",
+            file=sys.stderr,
+        )
+        vigil_config = VigilConfig()
+    else:
+        vigil_config = VigilConfig.from_yaml(config_path)
+    try:
+        llm = LlmClient(vigil_config.llm)
+    except Exception as exc:  # missing API key, proxy not running, etc.
+        print(
+            f"{_RED}Error: could not init LlmClient for fallback: {exc}{_RESET}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return LlmFallback(llm, fsm)
+
+
 def _cmd_verify(fsm, args) -> None:
     """Verify a single action."""
     from vigil.symbolic.decision_engine import DecisionEngine
@@ -167,7 +195,8 @@ def _cmd_verify(fsm, args) -> None:
         from vigil.core.config import VerificationConfig
 
         config = VerificationConfig(confidence_threshold=args.confidence)
-    engine = DecisionEngine(fsm, config=config)
+    llm_fallback = _build_llm_fallback(fsm, args)
+    engine = DecisionEngine(fsm, config=config, llm_fallback=llm_fallback)
 
     if args.state:
         result = engine.verify_by_state(args.state, action, intent_ctx=intent_ctx, goal_state=goal)
@@ -216,6 +245,16 @@ def main() -> None:
         type=float,
         default=None,
         help="Override confidence threshold (default: 0.7). Use 0 to skip confidence checks.",
+    )
+    parser.add_argument(
+        "--llm-fallback",
+        action="store_true",
+        help="On UNCERTAIN, consult the LLM for a final ALLOW/DENY call.",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to VigilConfig YAML (for --llm-fallback). Default: configs/default.yaml",
     )
 
     args = parser.parse_args()

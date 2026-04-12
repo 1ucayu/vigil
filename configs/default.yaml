@@ -12,8 +12,8 @@ ape:
   ape_mode: "sata"                  # sata (CEGAR) | random
 
 llm:
-  provider: "google"                 # anthropic | openai | google | proxy
-  model: "gemini-2.5-flash"
+  provider: "proxy"                 # anthropic | openai | google | proxy
+  model: "gpt-4o"
   max_tokens: 4096
   temperature: 0.0
   # Proxy settings (used when provider == "proxy")
@@ -31,7 +31,6 @@ verification:
   max_path_length: 10                # bounded path enumeration
 
 runtime:
-  latency_budget_ms: 25
   fallback_on_uncertain: "user"      # user | llm | deny
 
 evolution:
