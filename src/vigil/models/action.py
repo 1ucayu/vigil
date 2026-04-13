@@ -54,6 +54,7 @@ class Action(BaseModel):
     action_type: ActionType
     target_element_id: str | None = None
     target_bounds: list[int] | None = None
+    target_resource_id: str | None = None
     input_text: str | None = None
     metadata: dict[str, Any] = {}
 

@@ -610,25 +610,44 @@ class TestExplorationResultCoverage:
 
 
 class TestActionSignature:
-    def test_same_action_same_activity(self) -> None:
+    def test_resource_id_preferred_over_bounds(self) -> None:
         sig1 = _action_signature(
-            "com.android.settings.WifiSettings",
-            Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
+            "WifiSettings",
+            Action(
+                action_type=ActionType.CLICK,
+                target_bounds=[100, 200, 300, 400],
+                target_resource_id="com.android.settings:id/vpn",
+            ),
         )
         sig2 = _action_signature(
-            "com.android.settings.WifiSettings",
-            Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
+            "WifiSettings",
+            Action(
+                action_type=ActionType.CLICK,
+                target_bounds=[105, 248, 305, 448],
+                target_resource_id="com.android.settings:id/vpn",
+            ),
         )
         assert sig1 == sig2
 
-    def test_different_bounds(self) -> None:
+    def test_quantized_bounds_tolerate_small_shift(self) -> None:
         sig1 = _action_signature(
-            "com.android.settings.WifiSettings",
+            "WifiSettings",
             Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
         )
         sig2 = _action_signature(
-            "com.android.settings.WifiSettings",
-            Action(action_type=ActionType.CLICK, target_bounds=[500, 600, 700, 800]),
+            "WifiSettings",
+            Action(action_type=ActionType.CLICK, target_bounds=[120, 215, 320, 415]),
+        )
+        assert sig1 == sig2
+
+    def test_quantized_bounds_detect_large_shift(self) -> None:
+        sig1 = _action_signature(
+            "WifiSettings",
+            Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
+        )
+        sig2 = _action_signature(
+            "WifiSettings",
+            Action(action_type=ActionType.CLICK, target_bounds=[100, 600, 300, 800]),
         )
         assert sig1 != sig2
 
@@ -650,6 +669,72 @@ class TestActionSignature:
         )
         assert "navigate_back" in sig
         assert "global" in sig
+
+
+class TestLeaveAppBlacklist:
+    def test_blacklisted_action_detected(self) -> None:
+        blacklist: set[str] = set()
+        action = Action(
+            action_type=ActionType.CLICK,
+            target_resource_id="com.android.settings:id/search",
+        )
+        sig = _action_signature("Settings", action)
+        blacklist.add(sig)
+        assert sig in blacklist
+
+    def test_different_rid_not_blacklisted(self) -> None:
+        blacklist: set[str] = set()
+        sig1 = _action_signature(
+            "Settings",
+            Action(action_type=ActionType.CLICK, target_resource_id="id/search"),
+        )
+        blacklist.add(sig1)
+        sig2 = _action_signature(
+            "Settings",
+            Action(action_type=ActionType.CLICK, target_resource_id="id/bluetooth"),
+        )
+        assert sig2 not in blacklist
+
+
+class TestFingerprintSimilarity:
+    def test_identical_screens(self) -> None:
+        elements = [
+            UIElement(element_id="e1", class_name="TextView", resource_id="id/title"),
+            UIElement(element_id="e2", class_name="Button", resource_id="id/btn"),
+        ]
+        a = RawScreen(screen_id="s1", elements=elements)
+        b = RawScreen(screen_id="s2", elements=elements)
+        assert AppExplorer._fingerprint_similarity(a, b) == 1.0
+
+    def test_slightly_different(self) -> None:
+        a = RawScreen(
+            screen_id="s1",
+            elements=[
+                UIElement(element_id="e1", class_name="TextView", resource_id="id/title"),
+                UIElement(element_id="e2", class_name="Button", resource_id="id/btn"),
+            ],
+        )
+        b = RawScreen(
+            screen_id="s2",
+            elements=[
+                UIElement(element_id="e1", class_name="TextView", resource_id="id/title"),
+                UIElement(element_id="e2", class_name="Button", resource_id="id/btn"),
+                UIElement(element_id="e3", class_name="Switch", resource_id="id/toggle"),
+            ],
+        )
+        sim = AppExplorer._fingerprint_similarity(a, b)
+        assert 0.5 < sim < 1.0
+
+    def test_completely_different(self) -> None:
+        a = RawScreen(
+            screen_id="s1",
+            elements=[UIElement(element_id="e1", class_name="A", resource_id="id/a")],
+        )
+        b = RawScreen(
+            screen_id="s2",
+            elements=[UIElement(element_id="e2", class_name="B", resource_id="id/b")],
+        )
+        assert AppExplorer._fingerprint_similarity(a, b) == 0.0
 
 
 # ============================================================

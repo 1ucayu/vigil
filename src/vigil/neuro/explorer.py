@@ -201,15 +201,20 @@ def _match_activity(activity_name: str, declared: set[str]) -> str | None:
 def _action_signature(activity_name: str, action: Action) -> str:
     """Compute a stable signature for an action on a screen.
 
-    Uses activity_name (stable across visits) instead of fingerprint
-    (which can drift due to dynamic content).
+    Priority: resource_id (survives layout changes) > quantized bounds
+    (tolerates small shifts from dynamic content) > element_id fallback.
     """
     short_activity = activity_name.rsplit(".", 1)[-1] if activity_name else "unknown"
-    bounds_str = (
-        ",".join(str(b) for b in action.target_bounds) if action.target_bounds else "global"
-    )
-    eid = action.target_element_id or ""
-    return f"{short_activity}|{action.action_type.value}|{eid}|{bounds_str}"
+
+    if action.target_resource_id:
+        return f"{short_activity}|{action.action_type.value}|rid:{action.target_resource_id}"
+
+    if action.target_bounds:
+        qb = [round(b / 50) * 50 for b in action.target_bounds]
+        bounds_str = ",".join(str(b) for b in qb)
+        return f"{short_activity}|{action.action_type.value}|qb:{bounds_str}"
+
+    return f"{short_activity}|{action.action_type.value}|global"
 
 
 class ExplorationTrace(BaseModel):
@@ -349,6 +354,9 @@ class AppExplorer:
         # Track action signatures currently in the frontier to avoid duplicates
         frontier_sigs: set[str] = set()
 
+        # Actions that caused the app to exit — permanently skip
+        leave_app_blacklist: set[str] = set()
+
         # Adjacency graph for local navigation
         forward_edges: dict[str, list[tuple[Action, str]]] = {}
         back_edges: dict[str, str] = {}
@@ -365,12 +373,26 @@ class AppExplorer:
             "replay_ok": 0,
             "replay_fail": 0,
             "actions_deduped": 0,
+            "blacklisted_skips": 0,
+            "deferred_actions": 0,
+            "replenished_actions": 0,
+            "depth_skips": 0,
+            "fuzzy_matches": 0,
         }
 
         skip_actions: set[ActionType] = {
             ActionType.INPUT_TEXT,
             ActionType.NAVIGATE_HOME,
+            ActionType.SCROLL_UP,
+            ActionType.LONG_PRESS,
         }
+
+        # Screen depth tracking
+        screen_depth: dict[str, int] = {initial_screen.screen_id: 0}
+        max_depth = 4
+
+        # Deferred frontier for nav-failed screens
+        deferred_frontier: deque[tuple[str, Action]] = deque()
 
         # Build initial frontier
         frontier: deque[tuple[str, Action]] = deque()
@@ -417,6 +439,18 @@ class AppExplorer:
         )
 
         while frontier and step < max_steps:
+            # Replenish from deferred if main frontier is low
+            if len(frontier) < 5 and deferred_frontier:
+                batch = min(10, len(deferred_frontier))
+                retried_sids: set[str] = set()
+                for _ in range(batch):
+                    item = deferred_frontier.popleft()
+                    frontier.append(item)
+                    retried_sids.add(item[0])
+                for sid in retried_sids:
+                    nav_failures.pop(sid, None)
+                nav_stats["replenished_actions"] += batch
+
             source_screen_id, action, pop_tier = self._pop_frontier_prefer_current(
                 frontier,
                 fp_to_sid.get(current_fp, ""),
@@ -438,6 +472,15 @@ class AppExplorer:
             if source_screen_id in screens:
                 pop_sig = _action_signature(screens[source_screen_id].activity_name or "", action)
                 frontier_sigs.discard(pop_sig)
+
+            # Skip blacklisted actions
+            source_activity_name = ""
+            if source_screen_id in screens:
+                source_activity_name = screens[source_screen_id].activity_name or ""
+            bl_sig = _action_signature(source_activity_name, action)
+            if bl_sig in leave_app_blacklist:
+                nav_stats["blacklisted_skips"] += 1
+                continue
 
             # Navigate to source screen if we're not already there
             source_fp = screens[source_screen_id].get_structural_fingerprint()
@@ -474,19 +517,20 @@ class AppExplorer:
                     current_fp = self._identify_current_fp()
                     nav_failures[source_screen_id] = nav_failures.get(source_screen_id, 0) + 1
                     if nav_failures[source_screen_id] >= max_nav_failures:
-                        before = len(frontier)
-                        for sid, act in frontier:
-                            if sid == source_screen_id and sid in screens:
-                                drain_sig = _action_signature(screens[sid].activity_name or "", act)
-                                frontier_sigs.discard(drain_sig)
+                        deferred = [(sid, act) for sid, act in frontier if sid == source_screen_id]
+                        for sid, act in deferred:
+                            if sid in screens:
+                                d_sig = _action_signature(screens[sid].activity_name or "", act)
+                                frontier_sigs.discard(d_sig)
                         frontier = deque(
                             (sid, act) for sid, act in frontier if sid != source_screen_id
                         )
-                        drained = before - len(frontier)
-                        if drained > 0:
-                            logger.warning(
-                                f"Drained {drained} actions for unreachable "
-                                f"screen {source_screen_id}"
+                        if deferred:
+                            deferred_frontier.extend(deferred)
+                            nav_stats["deferred_actions"] += len(deferred)
+                            logger.info(
+                                f"Deferred {len(deferred)} actions for "
+                                f"{source_screen_id} (will retry later)"
                             )
                     continue
 
@@ -504,6 +548,8 @@ class AppExplorer:
 
             if not self._is_within_app():
                 logger.debug("Left target app, recovering")
+                bl_act_sig = _action_signature(source_activity_name, action)
+                leave_app_blacklist.add(bl_act_sig)
                 self._restart_app()
                 current_fp = self._identify_current_fp()
                 continue
@@ -557,6 +603,7 @@ class AppExplorer:
 
                 source_path = nav_paths.get(source_screen_id, [])
                 nav_paths[canonical_target_id] = source_path + [(action, canonical_target_id)]
+                screen_depth[canonical_target_id] = screen_depth.get(source_screen_id, 0) + 1
 
                 logger.info(
                     f"New screen discovered: {target_screen.screen_id} "
@@ -595,19 +642,27 @@ class AppExplorer:
                     current_fp = self._identify_current_fp()
 
             # --- Action enumeration (EVERY visit, dedup-filtered) ---
-            target_activity = target_screen.activity_name or ""
-            new_actions_list = list(enumerate_actions(target_screen, exclude=skip_actions))
-            new_actions_list = apply_smart_stopping(target_screen, new_actions_list, smart_ctx)
-            added = 0
-            for new_action in new_actions_list:
-                sig = _action_signature(target_activity, new_action)
-                if sig not in executed_actions and sig not in frontier_sigs:
-                    frontier.append((canonical_target_id, new_action))
-                    frontier_sigs.add(sig)
-                    added += 1
-            skipped = len(new_actions_list) - added
-            if skipped > 0:
-                nav_stats["actions_deduped"] += skipped
+            depth = screen_depth.get(canonical_target_id, 0)
+            if depth > max_depth:
+                nav_stats["depth_skips"] += 1
+            else:
+                target_activity = target_screen.activity_name or ""
+                new_actions_list = list(enumerate_actions(target_screen, exclude=skip_actions))
+                new_actions_list = apply_smart_stopping(target_screen, new_actions_list, smart_ctx)
+                added = 0
+                for new_action in new_actions_list:
+                    sig = _action_signature(target_activity, new_action)
+                    if (
+                        sig not in executed_actions
+                        and sig not in frontier_sigs
+                        and sig not in leave_app_blacklist
+                    ):
+                        frontier.append((canonical_target_id, new_action))
+                        frontier_sigs.add(sig)
+                        added += 1
+                skipped = len(new_actions_list) - added
+                if skipped > 0:
+                    nav_stats["actions_deduped"] += skipped
 
         elapsed = time.monotonic() - start_time
 
@@ -836,7 +891,7 @@ class AppExplorer:
         self._restart_app()
 
         if not path:
-            return self._verify_arrived_at(target_fp)
+            return self._verify_arrived_at(target_fp, target_screen)
 
         for replay_action, _ in path:
             if not self._is_within_app():
@@ -845,7 +900,7 @@ class AppExplorer:
             self._execute_action(replay_action)
             self._wait_for_stability()
 
-        arrived = self._verify_arrived_at(target_fp)
+        arrived = self._verify_arrived_at(target_fp, target_screen)
         if not arrived:
             logger.debug(f"Replay ended at wrong screen (expected {target_fp[:12]})")
         return arrived
@@ -863,7 +918,8 @@ class AppExplorer:
         Attempts: forward click, back press, or back + forward (sibling).
         """
         assert self._device is not None
-        source_fp = screens[source_screen_id].get_structural_fingerprint()
+        source_screen = screens[source_screen_id]
+        source_fp = source_screen.get_structural_fingerprint()
 
         # Forward click
         if current_screen_id in forward_edges:
@@ -872,7 +928,7 @@ class AppExplorer:
                     logger.debug(f"Local nav: forward to {source_screen_id}")
                     self._execute_action(edge_action)
                     self._wait_for_stability()
-                    return self._verify_arrived_at(source_fp)
+                    return self._verify_arrived_at(source_fp, source_screen)
 
         # Back press to parent
         parent = back_edges.get(current_screen_id, "")
@@ -881,7 +937,7 @@ class AppExplorer:
             self._execute_action(Action(action_type=ActionType.NAVIGATE_BACK))
             self._wait_for_stability()
             self._dismiss_keyboard_if_showing()
-            return self._verify_arrived_at(source_fp)
+            return self._verify_arrived_at(source_fp, source_screen)
 
         # Back to parent + forward to sibling
         if parent and parent in forward_edges:
@@ -893,22 +949,51 @@ class AppExplorer:
                     self._dismiss_keyboard_if_showing()
 
                     if parent in screens:
-                        parent_fp = screens[parent].get_structural_fingerprint()
-                        if not self._verify_arrived_at(parent_fp):
+                        parent_screen = screens[parent]
+                        parent_fp = parent_screen.get_structural_fingerprint()
+                        if not self._verify_arrived_at(parent_fp, parent_screen):
                             return False
 
                     self._execute_action(edge_action)
                     self._wait_for_stability()
-                    return self._verify_arrived_at(source_fp)
+                    return self._verify_arrived_at(source_fp, source_screen)
 
         return False
 
-    def _verify_arrived_at(self, expected_fp: str) -> bool:
-        """Capture current screen and check if fingerprint matches."""
+    def _verify_arrived_at(
+        self,
+        expected_fp: str,
+        target_screen: RawScreen | None = None,
+    ) -> bool:
+        """Check if current screen matches expected, with fuzzy fallback."""
         screen = self._capture_screen()
         if screen is None:
             return False
-        return screen.get_structural_fingerprint() == expected_fp
+        fp = screen.get_structural_fingerprint()
+        if fp == expected_fp:
+            return True
+        if target_screen is not None:
+            same_activity = (
+                screen.activity_name and screen.activity_name == target_screen.activity_name
+            )
+            if same_activity and self._fingerprint_similarity(screen, target_screen) >= 0.75:
+                return True
+        return False
+
+    @staticmethod
+    def _fingerprint_similarity(screen_a: RawScreen, screen_b: RawScreen) -> float:
+        """Jaccard similarity of structural element sets between two screens."""
+
+        def _structural_set(scr: RawScreen) -> set[str]:
+            return {f"{e.class_name}|{e.resource_id or ''}" for e in scr.elements}
+
+        set_a = _structural_set(screen_a)
+        set_b = _structural_set(screen_b)
+        if not set_a and not set_b:
+            return 1.0
+        if not set_a or not set_b:
+            return 0.0
+        return len(set_a & set_b) / len(set_a | set_b)
 
     def _handle_scroll_discovery(self, screen: RawScreen) -> list[RawScreen]:
         """Scroll scrollable elements to discover hidden content."""
@@ -919,7 +1004,17 @@ class AppExplorer:
         if not scrollable_elements:
             return discovered
 
-        prev_fp = screen.get_structural_fingerprint()
+        def _element_ids(scr: RawScreen) -> set[str]:
+            ids: set[str] = set()
+            for e in scr.elements:
+                if e.resource_id:
+                    ids.add(f"rid:{e.resource_id}")
+                elif e.bounds:
+                    qb = tuple(round(b / 50) * 50 for b in e.bounds)
+                    ids.add(f"{e.class_name}:{qb}")
+            return ids
+
+        prev_elements = _element_ids(screen)
 
         for element in scrollable_elements:
             for _ in range(self.MAX_SCROLLS_PER_ELEMENT):
@@ -938,12 +1033,12 @@ class AppExplorer:
                 if new_screen is None:
                     break
 
-                new_fp = new_screen.get_structural_fingerprint()
-                if new_fp == prev_fp:
+                new_elements = _element_ids(new_screen)
+                if not (new_elements - prev_elements):
                     break
 
                 discovered.append(new_screen)
-                prev_fp = new_fp
+                prev_elements = prev_elements | new_elements
 
         return discovered
 

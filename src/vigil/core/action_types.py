@@ -84,6 +84,7 @@ def enumerate_element_actions(
                     action_type=action_type,
                     target_element_id=element.element_id,
                     target_bounds=element.bounds,
+                    target_resource_id=element.resource_id,
                     input_text="test input" if action_type == ActionType.INPUT_TEXT else None,
                 )
                 actions.append(action)
