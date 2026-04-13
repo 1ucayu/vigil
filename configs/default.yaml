@@ -2,7 +2,7 @@ app:
   max_exploration_steps: 500
   screenshot_format: "png"
   exploration_strategy: "bfs"       # bfs | dfs | hybrid
-  exploration_backend: "droidbot"   # droidbot | native | ape
+  exploration_backend: "native"      # native | ape
 
 ape:
   jar_path: "libs/ape.jar"
@@ -38,13 +38,3 @@ evolution:
   similarity_threshold_inherit: 0.80  # above this, inherit_and_bind without LLM
   max_evolution_cache_size: 1000
   evolution_log_path: "data/evolution_log.jsonl"
-
-droidbot:
-  policy: "dfs_greedy"
-  count: 500
-  timeout: 600
-  grant_perm: true
-  keep_app: true
-  keep_env: false
-  ignore_ad: true
-  extra_args: []

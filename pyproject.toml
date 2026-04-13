@@ -32,7 +32,6 @@ dependencies = [
     "google-genai>=1.70.0",
     "python-dotenv>=1.2.2",
     "charset-normalizer>=3.4.6",
-    "droidbot>=1.0.0a2",
 ]
 
 [project.optional-dependencies]

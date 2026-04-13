@@ -19,7 +19,7 @@ class AppConfig(BaseModel):
     max_exploration_steps: int = 500
     screenshot_format: str = "png"
     exploration_strategy: Literal["bfs", "dfs", "hybrid"] = "bfs"
-    exploration_backend: Literal["native", "ape", "droidbot"] = "droidbot"
+    exploration_backend: Literal["native", "ape"] = "native"
 
 
 class ApeConfig(BaseModel):
@@ -95,19 +95,6 @@ class EvolutionConfig(BaseModel):
     evolution_log_path: str = "data/evolution_log.jsonl"
 
 
-class DroidBotConfig(BaseModel):
-    """Configuration for DroidBot exploration backend."""
-
-    policy: Literal["dfs_greedy", "bfs_greedy", "dfs_naive", "bfs_naive"] = "dfs_greedy"
-    count: int = 500
-    timeout: int = 600
-    grant_perm: bool = True
-    keep_app: bool = True
-    keep_env: bool = False
-    ignore_ad: bool = True
-    extra_args: list[str] = Field(default_factory=list)
-
-
 class VigilConfig(BaseModel):
     """Root configuration model for Vigil.
 
@@ -121,7 +108,6 @@ class VigilConfig(BaseModel):
     verification: VerificationConfig = Field(default_factory=VerificationConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
-    droidbot: DroidBotConfig = Field(default_factory=DroidBotConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path, override_path: str | Path | None = None) -> VigilConfig:
