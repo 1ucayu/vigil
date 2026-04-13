@@ -42,6 +42,17 @@ SMART_STOP_HOMOGENEITY_THRESHOLD = 0.6
 SMART_STOP_MIN_ITEMS = 3
 SMART_STOP_REPRESENTATIVES = 2
 
+TOGGLE_CLASSES: frozenset[str] = frozenset(
+    {
+        "android.widget.Switch",
+        "android.widget.ToggleButton",
+        "android.widget.CheckBox",
+        "android.widget.CompoundButton",
+        "miui.widget.SlidingButton",
+        "androidx.appcompat.widget.SwitchCompat",
+    }
+)
+
 
 @dataclass
 class SmartStoppingContext:
@@ -217,6 +228,25 @@ def _action_signature(activity_name: str, action: Action) -> str:
     return f"{short_activity}|{action.action_type.value}|global"
 
 
+def _filter_toggle_actions(actions: list[Action], screen: RawScreen) -> tuple[list[Action], int]:
+    """Remove actions targeting toggle/switch/checkbox elements.
+
+    Returns:
+        (filtered_actions, num_removed)
+    """
+    elements_by_id = {e.element_id: e for e in screen.elements}
+    filtered = [
+        a
+        for a in actions
+        if not (
+            a.target_element_id
+            and a.target_element_id in elements_by_id
+            and elements_by_id[a.target_element_id].class_name in TOGGLE_CLASSES
+        )
+    ]
+    return filtered, len(actions) - len(filtered)
+
+
 class ExplorationTrace(BaseModel):
     """A single exploration step: source screen -> action -> target screen."""
 
@@ -378,6 +408,7 @@ class AppExplorer:
             "replenished_actions": 0,
             "depth_skips": 0,
             "fuzzy_matches": 0,
+            "toggle_skips": 0,
         }
 
         skip_actions: set[ActionType] = {
@@ -400,6 +431,8 @@ class AppExplorer:
         initial_actions = enumerate_actions(initial_screen, exclude=skip_actions)
         initial_actions = [a for a in initial_actions if a.action_type != ActionType.NAVIGATE_BACK]
         initial_actions = apply_smart_stopping(initial_screen, initial_actions, smart_ctx)
+        initial_actions, toggle_removed = _filter_toggle_actions(initial_actions, initial_screen)
+        nav_stats["toggle_skips"] += toggle_removed
         initial_activity = initial_screen.activity_name or ""
         for action in initial_actions:
             sig = _action_signature(initial_activity, action)
@@ -540,9 +573,12 @@ class AppExplorer:
                 f"{action.action_type.value} on {action.target_element_id or 'global'} "
                 f"from {source_screen_id}"
             )
-            self._execute_action(action)
+            executed = self._execute_action(action)
             self._wait_for_stability()
             step += 1
+
+            if not executed:
+                continue
 
             self._dismiss_keyboard_if_showing()
 
@@ -550,7 +586,9 @@ class AppExplorer:
                 logger.debug("Left target app, recovering")
                 bl_act_sig = _action_signature(source_activity_name, action)
                 leave_app_blacklist.add(bl_act_sig)
-                self._restart_app()
+                if not self._restart_app():
+                    logger.error("Cannot recover app, stopping exploration")
+                    break
                 current_fp = self._identify_current_fp()
                 continue
 
@@ -649,6 +687,8 @@ class AppExplorer:
                 target_activity = target_screen.activity_name or ""
                 new_actions_list = list(enumerate_actions(target_screen, exclude=skip_actions))
                 new_actions_list = apply_smart_stopping(target_screen, new_actions_list, smart_ctx)
+                new_actions_list, tr = _filter_toggle_actions(new_actions_list, target_screen)
+                nav_stats["toggle_skips"] += tr
                 added = 0
                 for new_action in new_actions_list:
                     sig = _action_signature(target_activity, new_action)
@@ -760,22 +800,29 @@ class AppExplorer:
             logger.exception(f"Failed to capture screen {screen_id}")
             return None
 
-    def _execute_action(self, action: Action) -> None:
-        """Execute an action on the device."""
+    def _execute_action(self, action: Action) -> bool:
+        """Execute an action on the device.
+
+        Returns:
+            True if executed, False if it couldn't be performed.
+        """
         assert self._device is not None
 
         try:
             if action.action_type == ActionType.CLICK:
-                if action.target_bounds:
-                    cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
-                    cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
-                    self._device.click(cx, cy)
+                if not action.target_bounds:
+                    logger.debug(f"Skipping click: no bounds for {action.target_element_id}")
+                    return False
+                cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
+                cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
+                self._device.click(cx, cy)
 
             elif action.action_type == ActionType.LONG_PRESS:
-                if action.target_bounds:
-                    cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
-                    cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
-                    self._device.long_click(cx, cy)
+                if not action.target_bounds:
+                    return False
+                cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
+                cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
+                self._device.long_click(cx, cy)
 
             elif action.action_type == ActionType.INPUT_TEXT:
                 if action.target_bounds:
@@ -810,8 +857,11 @@ class AppExplorer:
             elif action.action_type == ActionType.NAVIGATE_HOME:
                 self._device.press("home")
 
+            return True
+
         except Exception:
             logger.warning(f"Failed to execute action: {action.action_type.value}")
+            return False
 
     def _wait_for_stability(self) -> None:
         """Wait for the screen to stabilize after an action."""
@@ -888,7 +938,8 @@ class AppExplorer:
             return False
 
         logger.debug(f"Navigating to {target_screen_id} via replay ({len(path)} steps)")
-        self._restart_app()
+        if not self._restart_app():
+            return False
 
         if not path:
             return self._verify_arrived_at(target_fp, target_screen)
@@ -1042,20 +1093,34 @@ class AppExplorer:
 
         return discovered
 
-    def _restart_app(self) -> None:
-        """Restart the target app (stop + start) and wait for it to load."""
+    def _restart_app(self) -> bool:
+        """Restart the target app and wait for it to load.
+
+        Returns:
+            True if the app came to foreground, False otherwise.
+        """
         assert self._device is not None
         self._device.app_start(self._app_package, stop=True)
-        self._wait_for_app_foreground()
+        if self._wait_for_app_foreground():
+            return True
+        logger.warning(f"App {self._app_package} did not come to foreground, retrying")
+        self._device.app_start(self._app_package, stop=True)
+        time.sleep(3.0)
+        return self._wait_for_app_foreground()
+
+    def _identify_current_screen(self) -> tuple[str, RawScreen | None]:
+        """Capture the current screen and return (fingerprint, screen)."""
+        if not self._is_within_app() and not self._restart_app():
+            return "", None
+        screen = self._capture_screen()
+        if screen is None:
+            return "", None
+        return screen.get_structural_fingerprint(), screen
 
     def _identify_current_fp(self) -> str:
         """Capture the current screen and return its fingerprint."""
-        if not self._is_within_app():
-            self._restart_app()
-        screen = self._capture_screen()
-        if screen is None:
-            return ""
-        return screen.get_structural_fingerprint()
+        fp, _ = self._identify_current_screen()
+        return fp
 
     # --- Frontier management ---
 

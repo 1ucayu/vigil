@@ -14,11 +14,13 @@ from vigil.core.ui_parser import parse_bounds, parse_hierarchy_xml
 from vigil.models.action import Action, ActionType
 from vigil.models.state import RawScreen, UIElement
 from vigil.neuro.explorer import (
+    TOGGLE_CLASSES,
     AppExplorer,
     ExplorationResult,
     ExplorationTrace,
     SmartStoppingContext,
     _action_signature,
+    _filter_toggle_actions,
     _match_activity,
     analyze_container_homogeneity,
     apply_smart_stopping,
@@ -920,3 +922,143 @@ class TestFrontierReplenishment:
 
         # Second add attempt blocked
         assert sig in frontier_sigs
+
+
+# ============================================================
+# Toggle skip tests
+# ============================================================
+
+
+class TestToggleSkip:
+    def test_toggle_classes_constant(self) -> None:
+        assert "android.widget.Switch" in TOGGLE_CLASSES
+        assert "android.widget.CheckBox" in TOGGLE_CLASSES
+        assert "android.widget.ToggleButton" in TOGGLE_CLASSES
+
+    def test_filter_toggle_actions(self) -> None:
+        switch = UIElement(
+            element_id="e_switch",
+            class_name="android.widget.Switch",
+            is_clickable=True,
+            is_checkable=True,
+            is_enabled=True,
+            bounds=[900, 300, 1040, 440],
+        )
+        text = UIElement(
+            element_id="e_text",
+            class_name="android.widget.TextView",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[40, 290, 500, 350],
+        )
+        screen = RawScreen(screen_id="scr_1", elements=[switch, text])
+        actions = [
+            Action(
+                action_type=ActionType.CLICK,
+                target_element_id="e_switch",
+                target_bounds=[900, 300, 1040, 440],
+            ),
+            Action(
+                action_type=ActionType.CLICK,
+                target_element_id="e_text",
+                target_bounds=[40, 290, 500, 350],
+            ),
+            Action(action_type=ActionType.NAVIGATE_BACK),
+        ]
+        filtered, removed = _filter_toggle_actions(actions, screen)
+        assert len(filtered) == 2
+        assert removed == 1
+        assert all(a.target_element_id != "e_switch" for a in filtered)
+
+
+# ============================================================
+# Scroll filter tests
+# ============================================================
+
+
+class TestScrollFilterSmallContainer:
+    def test_small_container_no_scroll(self) -> None:
+        container = UIElement(
+            element_id="e_list",
+            class_name="RecyclerView",
+            is_scrollable=True,
+            is_enabled=True,
+            bounds=[0, 0, 1080, 500],
+            children=["e_1", "e_2"],
+        )
+        child1 = UIElement(
+            element_id="e_1",
+            class_name="TextView",
+            is_clickable=True,
+            bounds=[0, 0, 1080, 100],
+        )
+        child2 = UIElement(
+            element_id="e_2",
+            class_name="TextView",
+            is_clickable=True,
+            bounds=[0, 100, 1080, 200],
+        )
+        all_elements = [container, child1, child2]
+
+        actions = enumerate_element_actions(container, all_elements=all_elements)
+        action_types = {a.action_type for a in actions}
+        assert ActionType.SCROLL_DOWN not in action_types
+        assert ActionType.SCROLL_UP not in action_types
+
+    def test_large_container_gets_scroll(self) -> None:
+        children_ids = [f"e_{i}" for i in range(8)]
+        container = UIElement(
+            element_id="e_list",
+            class_name="RecyclerView",
+            is_scrollable=True,
+            is_enabled=True,
+            bounds=[0, 0, 1080, 1920],
+            children=children_ids,
+        )
+        children = [
+            UIElement(
+                element_id=cid,
+                class_name="TextView",
+                is_clickable=True,
+                bounds=[0, i * 100, 1080, (i + 1) * 100],
+            )
+            for i, cid in enumerate(children_ids)
+        ]
+        all_elements = [container, *children]
+
+        actions = enumerate_element_actions(
+            container, exclude={ActionType.SCROLL_UP}, all_elements=all_elements
+        )
+        action_types = {a.action_type for a in actions}
+        assert ActionType.SCROLL_DOWN in action_types
+
+
+# ============================================================
+# Execute action return value tests
+# ============================================================
+
+
+class TestExecuteActionReturnValue:
+    @pytest.fixture
+    def explorer_with_device(self, tmp_path: Path) -> AppExplorer:
+        config = VigilConfig()
+        mock_device = MagicMock()
+        mock_device.info = {"productName": "test", "sdkInt": 30}
+        mock_device.app_current.return_value = {"package": "com.test", "activity": "Main"}
+        with patch("vigil.neuro.explorer.u2") as mock_u2:
+            mock_u2.connect.return_value = mock_device
+            exp = AppExplorer("serial", "com.test", config, output_dir=tmp_path)
+            exp._connect_device()
+        return exp
+
+    def test_click_without_bounds_returns_false(self, explorer_with_device: AppExplorer) -> None:
+        action = Action(action_type=ActionType.CLICK, target_element_id="e_001")
+        assert explorer_with_device._execute_action(action) is False
+
+    def test_click_with_bounds_returns_true(self, explorer_with_device: AppExplorer) -> None:
+        action = Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400])
+        assert explorer_with_device._execute_action(action) is True
+
+    def test_back_returns_true(self, explorer_with_device: AppExplorer) -> None:
+        action = Action(action_type=ActionType.NAVIGATE_BACK)
+        assert explorer_with_device._execute_action(action) is True

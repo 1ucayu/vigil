@@ -19,21 +19,15 @@ def enumerate_actions(
 
     For each interactable element, generates actions based on ACTION_TEMPLATES.
     Also includes GLOBAL_ACTIONS (navigate_back, navigate_home).
-
-    Args:
-        screen: The current screen with parsed UI elements.
-        exclude: Action types to skip (e.g., {ActionType.INPUT_TEXT} during
-            exploration, since typing doesn't discover new screens).
-
-    Returns:
-        List of candidate Action objects to try.
     """
     actions: list[Action] = []
+    all_elements = screen.elements
 
     for element in screen.get_interactable_elements():
-        actions.extend(enumerate_element_actions(element, exclude=exclude))
+        actions.extend(
+            enumerate_element_actions(element, exclude=exclude, all_elements=all_elements)
+        )
 
-    # Add global actions (back, home) — these don't target a specific element
     for action_type in GLOBAL_ACTIONS:
         if exclude and action_type in exclude:
             continue
@@ -45,20 +39,22 @@ def enumerate_actions(
 def enumerate_element_actions(
     element: UIElement,
     exclude: set[ActionType] | None = None,
+    all_elements: list[UIElement] | None = None,
 ) -> list[Action]:
     """Enumerate candidate actions for a single UI element.
-
-    Maps element properties (is_clickable, is_scrollable, etc.) to
-    action types via ACTION_TEMPLATES.
 
     Args:
         element: A single interactable UI element.
         exclude: Action types to skip.
-
-    Returns:
-        List of Action objects targeting this element.
+        all_elements: Full element list from the screen. When provided,
+            scroll actions are suppressed for containers with <5 children.
     """
     actions: list[Action] = []
+
+    child_count = 0
+    if all_elements is not None and element.is_scrollable:
+        child_ids = set(element.children)
+        child_count = sum(1 for e in all_elements if e.element_id in child_ids)
 
     property_map: dict[str, bool] = {
         "clickable": element.is_clickable,
@@ -73,11 +69,15 @@ def enumerate_element_actions(
             for action_type in ACTION_TEMPLATES[prop_name]:
                 if exclude and action_type in exclude:
                     continue
-                # Skip click/long_press on editable elements to avoid
-                # triggering the soft keyboard during exploration
                 if element.is_editable and action_type in (
                     ActionType.CLICK,
                     ActionType.LONG_PRESS,
+                ):
+                    continue
+                if (
+                    action_type in (ActionType.SCROLL_UP, ActionType.SCROLL_DOWN)
+                    and all_elements is not None
+                    and child_count < 5
                 ):
                     continue
                 action = Action(
