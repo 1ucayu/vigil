@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections import Counter, deque
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,20 +38,8 @@ from vigil.models.action import Action, ActionType
 from vigil.models.state import RawScreen, UIElement
 from vigil.neuro.app_prior import AppPrior
 
-SMART_STOP_HOMOGENEITY_THRESHOLD = 0.6
-SMART_STOP_MIN_ITEMS = 3
-SMART_STOP_REPRESENTATIVES = 2
-
-TOGGLE_CLASSES: frozenset[str] = frozenset(
-    {
-        "android.widget.Switch",
-        "android.widget.ToggleButton",
-        "android.widget.CheckBox",
-        "android.widget.CompoundButton",
-        "miui.widget.SlidingButton",
-        "androidx.appcompat.widget.SwitchCompat",
-    }
-)
+STRUCTURAL_GROUP_MIN_SIZE = 4
+STRUCTURAL_GROUP_REPRESENTATIVES = 2
 
 _ACTION_WAIT: dict[ActionType, float] = {
     ActionType.NAVIGATE_BACK: 0.3,
@@ -65,148 +53,131 @@ _ACTION_WAIT: dict[ActionType, float] = {
 
 
 @dataclass
-class SmartStoppingContext:
-    """Tracks dynamic container verification state during exploration."""
+class StructuralGroupingContext:
+    """Tracks structural equivalence groups and behavioral verification.
+
+    Lifecycle: PENDING → CONFIRMED_EQUIVALENT or CONFIRMED_HETEROGENEOUS.
+    """
 
     pending: dict[str, dict[str, Any]] = field(default_factory=dict)
-    verified_dynamic: set[str] = field(default_factory=set)
-    verified_static: set[str] = field(default_factory=set)
+    confirmed_equivalent: set[str] = field(default_factory=set)
+    confirmed_heterogeneous: set[str] = field(default_factory=set)
+    deferred_actions: dict[str, list[tuple[str, Action]]] = field(default_factory=dict)
 
 
-def analyze_container_homogeneity(
-    container: UIElement,
-    elements_by_id: dict[str, UIElement],
-) -> tuple[Any, float, list[UIElement]]:
-    """Compute dominant skeleton and homogeneity ratio for a container's children.
-
-    Returns:
-        (dominant_skeleton, ratio, children_with_dominant_skeleton)
-        ratio is 0.0 if the container has fewer than SMART_STOP_MIN_ITEMS children.
-    """
-    children = [elements_by_id[cid] for cid in container.children if cid in elements_by_id]
-    if len(children) < SMART_STOP_MIN_ITEMS:
-        return None, 0.0, []
-
-    skeletons = [c.get_skeleton(elements_by_id) for c in children]
-    counts = Counter(skeletons)
-    dominant_skeleton, dominant_count = counts.most_common(1)[0]
-    ratio = dominant_count / len(children)
-
-    matching = [c for c, sk in zip(children, skeletons, strict=True) if sk == dominant_skeleton]
-    return dominant_skeleton, ratio, matching
-
-
-def pick_representatives(matching_children: list[UIElement]) -> list[UIElement]:
-    """Pick first and last children with the dominant skeleton."""
-    if len(matching_children) <= SMART_STOP_REPRESENTATIVES:
-        return list(matching_children)
-    return [matching_children[0], matching_children[-1]]
-
-
-def apply_smart_stopping(
+def apply_structural_grouping(
     screen: RawScreen,
     actions: list[Action],
-    ctx: SmartStoppingContext,
+    ctx: StructuralGroupingContext,
+    screen_id: str,
 ) -> list[Action]:
-    """Filter actions via smart stopping — skip redundant item clicks in homogeneous containers.
+    """Layer 1: Structural Equivalence Prediction.
 
-    Pure function: mutates `ctx` (records pending info) but does not touch the device.
-
-    Returns:
-        Filtered list of actions.
+    Groups click actions by (parent_id, grouping_skeleton). Large groups
+    keep only 2 representatives; rest are deferred for behavioral verification.
+    Subsumes smart stopping + toggle filtering under one principle.
     """
     elements_by_id = {e.element_id: e for e in screen.elements}
-    scrollable = [e for e in screen.elements if e.is_scrollable and e.children]
 
-    skip_element_ids: set[str] = set()
+    groups: dict[str, list[tuple[Action, UIElement]]] = defaultdict(list)
+    ungrouped: list[Action] = []
 
-    for container in scrollable:
-        container_fp = _container_fingerprint(screen, container)
-
-        if container_fp in ctx.verified_dynamic:
-            for cid in container.children:
-                child = elements_by_id.get(cid)
-                if child and child.is_clickable:
-                    skip_element_ids.add(cid)
+    for action in actions:
+        if action.action_type != ActionType.CLICK or not action.target_element_id:
+            ungrouped.append(action)
             continue
 
-        if container_fp in ctx.verified_static:
+        element = elements_by_id.get(action.target_element_id)
+        if element is None or element.parent_id is None:
+            ungrouped.append(action)
             continue
 
-        dominant, ratio, matching = analyze_container_homogeneity(container, elements_by_id)
-        if ratio < SMART_STOP_HOMOGENEITY_THRESHOLD:
+        skeleton = element.get_grouping_skeleton()
+        group_key = f"{element.parent_id}|{skeleton}"
+
+        if group_key in ctx.confirmed_equivalent:
             continue
 
-        reps = pick_representatives(matching)
-        rep_ids = {r.element_id for r in reps}
+        groups[group_key].append((action, element))
 
-        for cid in container.children:
-            child = elements_by_id.get(cid)
-            if child and child.is_clickable and cid not in rep_ids:
-                skip_element_ids.add(cid)
+    kept: list[Action] = list(ungrouped)
 
-        ctx.pending[container_fp] = {
-            "source_screen_id": screen.screen_id,
-            "dominant_skeleton": str(dominant),
-            "total_items": len(container.children),
-            "representative_element_ids": [r.element_id for r in reps],
+    for group_key, members in groups.items():
+        if len(members) < STRUCTURAL_GROUP_MIN_SIZE:
+            kept.extend(a for a, _ in members)
+            continue
+
+        if group_key in ctx.confirmed_heterogeneous:
+            kept.extend(a for a, _ in members)
+            continue
+
+        members.sort(key=lambda pair: pair[1].element_id)
+        reps = [members[0], members[-1]]
+        rep_ids = {el.element_id for _, el in reps}
+
+        deferred: list[tuple[str, Action]] = []
+        for action, el in members:
+            if el.element_id in rep_ids:
+                kept.append(action)
+            else:
+                deferred.append((screen_id, action))
+
+        ctx.pending[group_key] = {
+            "source_screen_id": screen_id,
+            "representative_element_ids": [el.element_id for _, el in reps],
+            "total_members": len(members),
             "detail_fingerprints": [],
         }
+        ctx.deferred_actions[group_key] = deferred
 
-    if not skip_element_ids:
-        return actions
-    return [a for a in actions if a.target_element_id not in skip_element_ids]
+    return kept
 
 
-def record_detail_fingerprint(
-    ctx: SmartStoppingContext,
+def record_behavioral_result(
+    ctx: StructuralGroupingContext,
     source_screen_id: str,
     target_element_id: str,
-    detail_fingerprint: str,
-) -> None:
-    """Record the fingerprint of a detail page reached from a representative click."""
-    for fp, info in ctx.pending.items():
+    target_fingerprint: str,
+) -> list[tuple[str, Action]]:
+    """Layer 2: Behavioral Equivalence Verification.
+
+    After a representative is executed, record its target fingerprint.
+    When all representatives are done: same fp → EQUIVALENT (skip rest),
+    different fps → HETEROGENEOUS (replenish rest).
+    """
+    replenish: list[tuple[str, Action]] = []
+
+    for group_key, info in list(ctx.pending.items()):
         if source_screen_id != info["source_screen_id"]:
             continue
-        if target_element_id in info["representative_element_ids"]:
-            info["detail_fingerprints"].append(detail_fingerprint)
-            if len(info["detail_fingerprints"]) >= SMART_STOP_REPRESENTATIVES:
-                verify_dynamic_container(ctx, fp)
-            return
+        if target_element_id not in info["representative_element_ids"]:
+            continue
 
+        info["detail_fingerprints"].append(target_fingerprint)
 
-def verify_dynamic_container(ctx: SmartStoppingContext, container_fp: str) -> None:
-    """After both representatives explored, compare detail fingerprints."""
-    info = ctx.pending.get(container_fp)
-    if info is None:
-        return
-    fps = info["detail_fingerprints"]
-    if len(fps) >= 2 and len(set(fps)) == 1:
-        ctx.verified_dynamic.add(container_fp)
-        logger.info(
-            f"Container {container_fp[:12]} confirmed DYNAMIC "
-            f"({info['total_items']} items, detail_fp={fps[0][:12]})"
-        )
-    else:
-        ctx.verified_static.add(container_fp)
-        logger.info(f"Container {container_fp[:12]} confirmed STATIC (heterogeneous detail pages)")
-    del ctx.pending[container_fp]
+        if len(info["detail_fingerprints"]) >= STRUCTURAL_GROUP_REPRESENTATIVES:
+            unique_fps = set(info["detail_fingerprints"])
 
+            if len(unique_fps) == 1:
+                ctx.confirmed_equivalent.add(group_key)
+                logger.info(f"Group {group_key[:30]} EQUIVALENT ({info['total_members']} members)")
+            else:
+                ctx.confirmed_heterogeneous.add(group_key)
+                replenish.extend(ctx.deferred_actions.get(group_key, []))
+                logger.info(
+                    f"Group {group_key[:30]} HETEROGENEOUS — replenishing {len(replenish)} actions"
+                )
 
-def _container_fingerprint(screen: RawScreen, container: UIElement) -> str:
-    """Stable fingerprint for a scrollable container within a screen."""
-    import hashlib
+            del ctx.pending[group_key]
+            ctx.deferred_actions.pop(group_key, None)
 
-    key = f"{screen.activity_name}:{container.resource_id}:{container.class_name}:{container.depth}"
-    return hashlib.sha256(key.encode()).hexdigest()[:16]
+        return replenish
+
+    return replenish
 
 
 def _match_activity(activity_name: str, declared: set[str]) -> str | None:
-    """Match an observed activity_name against declared Activity names.
-
-    Handles the common mismatch between accessibility tree names (may be short
-    or partial) and manifest names (fully qualified).
-    """
+    """Match an observed activity_name against declared Activity names."""
     if activity_name in declared:
         return activity_name
     for d in declared:
@@ -234,25 +205,6 @@ def _action_signature(action: Action) -> str:
         return f"{action.action_type.value}|qb:{bounds_str}"
 
     return f"{action.action_type.value}|global"
-
-
-def _filter_toggle_actions(actions: list[Action], screen: RawScreen) -> tuple[list[Action], int]:
-    """Remove actions targeting toggle/switch/checkbox elements.
-
-    Returns:
-        (filtered_actions, num_removed)
-    """
-    elements_by_id = {e.element_id: e for e in screen.elements}
-    filtered = [
-        a
-        for a in actions
-        if not (
-            a.target_element_id
-            and a.target_element_id in elements_by_id
-            and elements_by_id[a.target_element_id].class_name in TOGGLE_CLASSES
-        )
-    ]
-    return filtered, len(actions) - len(filtered)
 
 
 class ExplorationTrace(BaseModel):
@@ -416,7 +368,9 @@ class AppExplorer:
             "replenished_actions": 0,
             "depth_skips": 0,
             "fuzzy_matches": 0,
-            "toggle_skips": 0,
+            "groups_formed": 0,
+            "groups_equivalent": 0,
+            "groups_heterogeneous": 0,
             "back_chain_ok": 0,
             "back_chain_fail": 0,
             "keyboard_checks": 0,
@@ -438,12 +392,12 @@ class AppExplorer:
 
         # Build initial frontier
         frontier: deque[tuple[str, Action]] = deque()
-        smart_ctx = SmartStoppingContext()
+        grouping_ctx = StructuralGroupingContext()
         initial_actions = enumerate_actions(initial_screen, exclude=skip_actions)
         initial_actions = [a for a in initial_actions if a.action_type != ActionType.NAVIGATE_BACK]
-        initial_actions = apply_smart_stopping(initial_screen, initial_actions, smart_ctx)
-        initial_actions, toggle_removed = _filter_toggle_actions(initial_actions, initial_screen)
-        nav_stats["toggle_skips"] += toggle_removed
+        initial_actions = apply_structural_grouping(
+            initial_screen, initial_actions, grouping_ctx, initial_screen.screen_id
+        )
         for action in initial_actions:
             sig = _action_signature(action)
             frontier.append((initial_screen.screen_id, action))
@@ -657,10 +611,18 @@ class AppExplorer:
             if action.action_type == ActionType.CLICK and canonical_target_id != source_screen_id:
                 back_edges[canonical_target_id] = source_screen_id
 
-            # Record detail fingerprint for smart stopping
-            record_detail_fingerprint(
-                smart_ctx, source_screen_id, action.target_element_id or "", target_fp
+            # Behavioral verification for structural grouping
+            replenished = record_behavioral_result(
+                grouping_ctx, source_screen_id, action.target_element_id or "", target_fp
             )
+            if replenished:
+                for r_sid, r_action in replenished:
+                    sig = _action_signature(r_action)
+                    if sig not in executed_actions and sig not in frontier_sigs:
+                        frontier.append((r_sid, r_action))
+                        frontier_sigs.add(sig)
+                nav_stats["groups_heterogeneous"] += 1
+                nav_stats["replenished_actions"] += len(replenished)
 
             # --- Screen registration (first visit only) ---
             if target_fp not in visited:
@@ -713,9 +675,9 @@ class AppExplorer:
                 nav_stats["depth_skips"] += 1
             else:
                 new_actions_list = list(enumerate_actions(target_screen, exclude=skip_actions))
-                new_actions_list = apply_smart_stopping(target_screen, new_actions_list, smart_ctx)
-                new_actions_list, tr = _filter_toggle_actions(new_actions_list, target_screen)
-                nav_stats["toggle_skips"] += tr
+                new_actions_list = apply_structural_grouping(
+                    target_screen, new_actions_list, grouping_ctx, canonical_target_id
+                )
                 added = 0
                 for new_action in new_actions_list:
                     sig = _action_signature(new_action)

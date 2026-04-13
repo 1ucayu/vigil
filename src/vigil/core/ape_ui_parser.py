@@ -87,6 +87,7 @@ def _parse_node(
     counter: list[int],
     elements: list[UIElement],
     app_package: str | None = None,
+    parent_id: str | None = None,
 ) -> str | None:
     """Recursively parse an APE <node> element into UIElement(s).
 
@@ -104,7 +105,9 @@ def _parse_node(
     child_ids = []
     for child in node:
         if child.tag == "node":
-            child_id = _parse_node(child, depth + 1, counter, elements, app_package)
+            child_id = _parse_node(
+                child, depth + 1, counter, elements, app_package, parent_id=element_id
+            )
             if child_id is not None:
                 child_ids.append(child_id)
 
@@ -113,13 +116,11 @@ def _parse_node(
 
     class_name = node.attrib.get("class", "")
 
-    # APE uses scroll-type attribute instead of (or in addition to) scrollable
     scroll_type = node.attrib.get("scroll-type", "none")
     is_scrollable = _bool("scrollable") or scroll_type != "none"
 
     is_editable = _bool("focusable") and class_name.endswith("EditText")
 
-    # APE XML does NOT have bounds — default to [0,0,0,0]
     element = UIElement(
         element_id=element_id,
         class_name=class_name,
@@ -136,6 +137,7 @@ def _parse_node(
         is_enabled=_bool("enabled"),
         depth=depth,
         children=child_ids,
+        parent_id=parent_id,
     )
     elements.append(element)
     return element_id

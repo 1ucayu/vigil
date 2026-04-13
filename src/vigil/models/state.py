@@ -47,6 +47,23 @@ class UIElement(BaseModel):
     is_enabled: bool = True
     depth: int = 0
     children: list[str] = Field(default_factory=list)
+    parent_id: str | None = None
+
+    def get_grouping_skeleton(self) -> tuple:
+        """Return a coarse structural skeleton for equivalence grouping.
+
+        Unlike get_skeleton(), this EXCLUDES resource_id so that sibling
+        elements with the same widget type and interactability but different
+        resource_ids (e.g., digit_0 through digit_9) are grouped together.
+        """
+        interactability = (
+            self.is_clickable,
+            self.is_long_clickable,
+            self.is_scrollable,
+            self.is_editable,
+            self.is_checkable,
+        )
+        return (self.class_name, self.depth, interactability)
 
     def get_skeleton(self, elements_by_id: dict[str, UIElement] | None = None) -> tuple:
         """Return the structural skeleton of this element.

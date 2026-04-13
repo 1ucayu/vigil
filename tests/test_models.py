@@ -91,6 +91,32 @@ class TestUIElementSkeleton:
         assert e1.get_skeleton() == e2.get_skeleton()
 
 
+class TestGroupingSkeleton:
+    def test_same_class_depth_interactability(self):
+        e1 = _make_element("e1", class_name="Button", is_clickable=True, depth=3)
+        e2 = _make_element("e2", class_name="Button", is_clickable=True, depth=3)
+        assert e1.get_grouping_skeleton() == e2.get_grouping_skeleton()
+
+    def test_different_resource_id_same_skeleton(self):
+        e1 = _make_element("e1", class_name="Button", resource_id="id/btn_0", depth=3)
+        e2 = _make_element("e2", class_name="Button", resource_id="id/btn_9", depth=3)
+        assert e1.get_grouping_skeleton() == e2.get_grouping_skeleton()
+
+    def test_different_class_different_skeleton(self):
+        e1 = _make_element("e1", class_name="Button", depth=3)
+        e2 = _make_element("e2", class_name="Switch", depth=3)
+        assert e1.get_grouping_skeleton() != e2.get_grouping_skeleton()
+
+    def test_different_depth_different_skeleton(self):
+        e1 = _make_element("e1", class_name="Button", depth=3)
+        e2 = _make_element("e2", class_name="Button", depth=5)
+        assert e1.get_grouping_skeleton() != e2.get_grouping_skeleton()
+
+    def test_parent_id_defaults_none(self):
+        e = _make_element("e1")
+        assert e.parent_id is None
+
+
 # --- AppFSM serialization ---
 
 

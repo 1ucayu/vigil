@@ -85,6 +85,7 @@ def _parse_node(
     counter: list[int],
     elements: list[UIElement],
     app_package: str | None = None,
+    parent_id: str | None = None,
 ) -> str | None:
     """Recursively parse a <node> element into UIElement(s).
 
@@ -94,12 +95,11 @@ def _parse_node(
         counter: Mutable counter for sequential element_id assignment.
         elements: Accumulator list for parsed elements.
         app_package: If set, skip subtrees belonging to SYSTEM_PACKAGES.
+        parent_id: Element ID of the parent node.
 
     Returns:
         The element_id of the parsed node, or None if the node was filtered.
     """
-    # Filter out system UI subtrees (status bar, nav bar) — these are not
-    # part of the target app and add noise to fingerprinting + actions.
     if app_package:
         pkg = node.attrib.get("package", "")
         if pkg in SYSTEM_PACKAGES:
@@ -108,11 +108,12 @@ def _parse_node(
     element_id = f"e_{counter[0]:04d}"
     counter[0] += 1
 
-    # Recurse into children first to collect child IDs
     child_ids = []
     for child in node:
         if child.tag == "node":
-            child_id = _parse_node(child, depth + 1, counter, elements, app_package)
+            child_id = _parse_node(
+                child, depth + 1, counter, elements, app_package, parent_id=element_id
+            )
             if child_id is not None:
                 child_ids.append(child_id)
 
@@ -120,8 +121,6 @@ def _parse_node(
         return node.attrib.get(attr_name, "false") == "true"
 
     class_name = node.attrib.get("class", "")
-
-    # Infer is_editable: EditText class + focusable
     is_editable = _bool("focusable") and class_name.endswith("EditText")
 
     element = UIElement(
@@ -140,6 +139,7 @@ def _parse_node(
         is_enabled=_bool("enabled"),
         depth=depth,
         children=child_ids,
+        parent_id=parent_id,
     )
     elements.append(element)
     return element_id
