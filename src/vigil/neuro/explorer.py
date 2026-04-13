@@ -399,9 +399,6 @@ class AppExplorer:
         forward_edges: dict[str, list[tuple[Action, str]]] = {}
         back_edges: dict[str, str] = {}
 
-        # Track which screens have had actions enumerated (skip on revisit)
-        enumerated_screens: set[str] = set()
-
         # Navigation statistics
         nav_stats: dict[str, int] = {
             "p1_current": 0,
@@ -710,12 +707,11 @@ class AppExplorer:
                 if scroll_screens:
                     current_fp = self._identify_current_fp()
 
-            # --- Action enumeration (first visit only, dedup handles revisits) ---
+            # --- Action enumeration (every visit, dedup prevents re-execution) ---
             depth = screen_depth.get(canonical_target_id, 0)
             if depth > max_depth:
                 nav_stats["depth_skips"] += 1
-            elif canonical_target_id not in enumerated_screens:
-                enumerated_screens.add(canonical_target_id)
+            else:
                 new_actions_list = list(enumerate_actions(target_screen, exclude=skip_actions))
                 new_actions_list = apply_smart_stopping(target_screen, new_actions_list, smart_ctx)
                 new_actions_list, tr = _filter_toggle_actions(new_actions_list, target_screen)
