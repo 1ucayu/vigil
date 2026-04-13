@@ -41,6 +41,35 @@ from vigil.neuro.app_prior import AppPrior
 STRUCTURAL_GROUP_MIN_SIZE = 4
 STRUCTURAL_GROUP_REPRESENTATIVES = 2
 
+SEARCH_RID_PATTERNS: frozenset[str] = frozenset(
+    {
+        "search_bar",
+        "search_view",
+        "search_src_text",
+        "search_button",
+        "search_edit",
+        "search_plate",
+        "search_close_btn",
+        "search_action",
+    }
+)
+
+
+def _filter_search_actions(actions: list[Action], screen: RawScreen) -> tuple[list[Action], int]:
+    """Remove actions targeting search bar elements."""
+    elements_by_id = {e.element_id: e for e in screen.elements}
+
+    def _is_search(eid: str) -> bool:
+        el = elements_by_id.get(eid)
+        if el is None:
+            return False
+        rid = (el.resource_id or "").lower()
+        return any(p in rid for p in SEARCH_RID_PATTERNS)
+
+    filtered = [a for a in actions if not (a.target_element_id and _is_search(a.target_element_id))]
+    return filtered, len(actions) - len(filtered)
+
+
 _ACTION_WAIT: dict[ActionType, float] = {
     ActionType.NAVIGATE_BACK: 0.3,
     ActionType.NAVIGATE_HOME: 0.3,
@@ -375,6 +404,7 @@ class AppExplorer:
             "back_chain_fail": 0,
             "keyboard_checks": 0,
             "direct_launches": 0,
+            "search_skips": 0,
         }
 
         skip_actions: set[ActionType] = {
@@ -403,6 +433,8 @@ class AppExplorer:
         initial_actions = apply_structural_grouping(
             initial_screen, initial_actions, grouping_ctx, initial_screen.screen_id
         )
+        initial_actions, sr = _filter_search_actions(initial_actions, initial_screen)
+        nav_stats["search_skips"] += sr
         for action in initial_actions:
             sig = _action_signature(action)
             frontier.append((initial_screen.screen_id, action))
@@ -719,6 +751,8 @@ class AppExplorer:
                 new_actions_list = apply_structural_grouping(
                     target_screen, new_actions_list, grouping_ctx, canonical_target_id
                 )
+                new_actions_list, sr = _filter_search_actions(new_actions_list, target_screen)
+                nav_stats["search_skips"] += sr
                 added = 0
                 for new_action in new_actions_list:
                     sig = _action_signature(new_action)
@@ -1259,6 +1293,7 @@ class AppExplorer:
             new_actions = apply_structural_grouping(
                 screen, new_actions, grouping_ctx, canonical_sid
             )
+            new_actions, _ = _filter_search_actions(new_actions, screen)
 
             added = 0
             for action in new_actions:
