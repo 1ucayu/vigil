@@ -384,6 +384,29 @@ class AppExplorer:
             frontier.append((initial_screen.screen_id, action))
             frontier_sigs.add(sig)
 
+        # Discover hidden content via scrolling on initial screen
+        scroll_screens = self._handle_scroll_discovery(initial_screen)
+        for ss in scroll_screens:
+            ss_fp = ss.get_structural_fingerprint()
+            if ss_fp not in visited:
+                visited.add(ss_fp)
+                screens[ss.screen_id] = ss
+                fp_to_sid[ss_fp] = ss.screen_id
+                ss_activity = initial_screen.activity_name or ""
+                for new_action in enumerate_actions(ss, exclude=skip_actions):
+                    sig = _action_signature(ss_activity, new_action)
+                    if sig not in executed_actions and sig not in frontier_sigs:
+                        frontier.append((initial_screen.screen_id, new_action))
+                        frontier_sigs.add(sig)
+
+        if scroll_screens:
+            logger.info(
+                f"Initial screen scroll discovery: found {len(scroll_screens)} "
+                f"additional scroll positions, frontier now has {len(frontier)} actions"
+            )
+            self._restart_app()
+            current_fp = initial_fp
+
         max_steps = self._config.app.max_exploration_steps
         step = 0
         current_fp = initial_fp
