@@ -18,7 +18,8 @@ from vigil.models.fsm import (
 from vigil.neuro.fsm_builder import FsmBuilder
 
 TRACE_PATH = (
-    Path(__file__).parent.parent / "data/apps/settings/traces/exploration_20260401_022151.json"
+    Path(__file__).parent.parent
+    / "data/apps/com_android_settings/traces/exploration_20260401_022151.json"
 )
 
 

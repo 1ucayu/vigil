@@ -99,7 +99,7 @@ def main() -> None:
 
     trace_data = json.loads(trace_path.read_text(encoding="utf-8"))
     app_package = args.app or trace_data.get("app_package", "unknown")
-    app_name = app_package.rsplit(".", maxsplit=1)[-1]
+    app_name = app_package.replace(".", "_")
 
     output_path = Path(args.output) if args.output else Path(f"models/bundles/{app_name}/fsm.json")
 

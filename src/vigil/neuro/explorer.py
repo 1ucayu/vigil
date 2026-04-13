@@ -316,7 +316,7 @@ class AppExplorer:
         self._app_prior = app_prior
 
         if output_dir is None:
-            app_name = app_package.rsplit(".", maxsplit=1)[-1]
+            app_name = app_package.replace(".", "_")
             self._output_dir = Path(f"data/apps/{app_name}")
         else:
             self._output_dir = output_dir

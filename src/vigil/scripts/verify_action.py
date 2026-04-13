@@ -4,21 +4,21 @@ Demonstrates Vigil's end-to-end runtime verification.
 
 Usage:
     # Verify a single action by state ID:
-    vigil-verify-action --fsm models/bundles/settings/fsm.json \\
+    vigil-verify-action --fsm models/bundles/com_android_settings/fsm.json \\
         --state s_001 --action '{"type": "click"}' --goal s_003
 
     # Verify with intent context:
-    vigil-verify-action --fsm models/bundles/settings/fsm.json \\
+    vigil-verify-action --fsm models/bundles/com_android_settings/fsm.json \\
         --state s_005 --action '{"type": "click", "target": "e_0042"}' \\
         --intent '{"wifi_name": "HKU_WiFi"}'
 
     # Verify a full trajectory:
-    vigil-verify-action --fsm models/bundles/settings/fsm.json \\
+    vigil-verify-action --fsm models/bundles/com_android_settings/fsm.json \\
         --state s_001 \\
         --trajectory '[{"type":"click"},{"type":"click"},{"type":"navigate_back"}]'
 
     # List all states and transitions (inspect mode):
-    vigil-verify-action --fsm models/bundles/settings/fsm.json --inspect
+    vigil-verify-action --fsm models/bundles/com_android_settings/fsm.json --inspect
 """
 
 from __future__ import annotations
