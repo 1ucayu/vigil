@@ -29,7 +29,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--trace",
-        default=None,
+        required=True,
         help="Path to exploration trace JSON file",
     )
     parser.add_argument(
@@ -41,12 +41,6 @@ def main() -> None:
         "--app",
         default=None,
         help="Override app package name (auto-detected from trace)",
-    )
-    parser.add_argument(
-        "--from-droidbot",
-        default=None,
-        metavar="DIR",
-        help="Parse DroidBot output directory and build FSM from it",
     )
     parser.add_argument(
         "--include-self-loops",
@@ -98,45 +92,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Handle --from-droidbot: parse DroidBot output into a Vigil trace first
-    if args.from_droidbot:
-        from vigil.core.config import VigilConfig
-        from vigil.neuro.droidbot_explorer import DroidBotExplorer
-        from vigil.neuro.droidbot_parser import DroidBotParser
-
-        db_dir = Path(args.from_droidbot)
-        if not db_dir.exists():
-            logger.error(f"DroidBot output not found: {db_dir}")
-            raise SystemExit(1)
-
-        app_package = args.app or "unknown"
-        parser_obj = DroidBotParser(db_dir, app_package)
-        exploration_result = parser_obj.parse()
-        app_package = exploration_result.app_package or app_package
-
-        app_name = app_package.rsplit(".", maxsplit=1)[-1]
-        out_dir = Path(f"data/apps/{app_name}")
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        saver = DroidBotExplorer.__new__(DroidBotExplorer)
-        saver._serial = ""
-        saver._app_package = app_package
-        saver._config = VigilConfig()
-        saver._output_dir = out_dir
-        saver._save_trace(exploration_result)
-
-        trace_files = sorted((out_dir / "traces").glob("exploration_*.json"))
-        if not trace_files:
-            logger.error("Failed to save DroidBot trace")
-            raise SystemExit(1)
-        trace_path = trace_files[-1]
-        logger.info(f"DroidBot output converted to trace: {trace_path}")
-    elif args.trace:
-        trace_path = Path(args.trace)
-    else:
-        logger.error("Either --trace or --from-droidbot is required")
-        raise SystemExit(1)
-
+    trace_path = Path(args.trace)
     if not trace_path.exists():
         logger.error(f"Trace file not found: {trace_path}")
         raise SystemExit(1)
