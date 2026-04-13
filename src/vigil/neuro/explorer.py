@@ -374,6 +374,7 @@ class AppExplorer:
             "back_chain_ok": 0,
             "back_chain_fail": 0,
             "keyboard_checks": 0,
+            "direct_launches": 0,
         }
 
         skip_actions: set[ActionType] = {
@@ -389,6 +390,10 @@ class AppExplorer:
 
         # Deferred frontier for nav-failed screens
         deferred_frontier: deque[tuple[str, Action]] = deque()
+
+        # Direct Activity launch tracking
+        failed_launches: set[str] = set()
+        direct_launch_screens: set[str] = set()
 
         # Build initial frontier
         frontier: deque[tuple[str, Action]] = deque()
@@ -434,7 +439,40 @@ class AppExplorer:
             f"(max {max_steps} steps, {len(frontier)} initial actions)"
         )
 
-        while frontier and step < max_steps:
+        if not self._app_prior:
+            logger.info(
+                "No app prior — direct Activity launch disabled. "
+                "Use --prior-from-device for better coverage."
+            )
+
+        while step < max_steps:
+            # Frontier refill: direct Activity launch when both queues empty
+            if not frontier and not deferred_frontier and declared_activities:
+                launched = self._launch_uncovered_activity(
+                    declared_activities=declared_activities,
+                    covered_activities=covered_activities,
+                    screens=screens,
+                    fp_to_sid=fp_to_sid,
+                    nav_paths=nav_paths,
+                    screen_depth=screen_depth,
+                    frontier=frontier,
+                    frontier_sigs=frontier_sigs,
+                    executed_actions=executed_actions,
+                    skip_actions=skip_actions,
+                    failed_launches=failed_launches,
+                    direct_launch_screens=direct_launch_screens,
+                    grouping_ctx=grouping_ctx,
+                )
+                if launched:
+                    nav_stats["direct_launches"] += 1
+                    current_fp = self._identify_current_fp()
+                    continue
+                else:
+                    break
+
+            if not frontier and not deferred_frontier:
+                break
+
             # Replenish from deferred if main frontier is low
             if len(frontier) < 5 and deferred_frontier:
                 batch = min(10, len(deferred_frontier))
@@ -447,6 +485,9 @@ class AppExplorer:
                 for sid in retried_sids:
                     nav_failures.pop(sid, None)
                 nav_stats["replenished_actions"] += batch
+
+            if not frontier:
+                continue
 
             source_screen_id, action, pop_tier = self._pop_frontier_prefer_current(
                 frontier,
@@ -504,7 +545,7 @@ class AppExplorer:
 
                 if not nav_ok:
                     nav_ok = self._navigate_to_screen_via_replay(
-                        source_screen_id, screens, nav_paths
+                        source_screen_id, screens, nav_paths, direct_launch_screens
                     )
                     if nav_ok:
                         nav_stats["replay_ok"] += 1
@@ -919,12 +960,29 @@ class AppExplorer:
         target_screen_id: str,
         screens: dict[str, RawScreen],
         nav_paths: dict[str, list[tuple[Action, str]]],
+        direct_launch_screens: set[str] | None = None,
     ) -> bool:
         """Navigate to a target screen by restarting the app and replaying actions."""
         assert self._device is not None
         target_screen = screens.get(target_screen_id)
         if target_screen is None:
             return False
+
+        target_fp = target_screen.get_structural_fingerprint()
+
+        # Direct-launched screens: use am start instead of replay
+        if (
+            direct_launch_screens
+            and target_screen_id in direct_launch_screens
+            and target_screen.activity_name
+        ):
+            component = f"{self._app_package}/{target_screen.activity_name}"
+            try:
+                self._device.shell(f"am start -n {component}")
+                time.sleep(2.0)
+            except Exception:
+                return False
+            return self._verify_arrived_at(target_fp, target_screen)
 
         target_fp = target_screen.get_structural_fingerprint()
         path = nav_paths.get(target_screen_id)
@@ -1123,6 +1181,99 @@ class AppExplorer:
                 return False
             if self._verify_arrived_at(target_fp, target_screen):
                 return True
+        return False
+
+    def _launch_uncovered_activity(
+        self,
+        declared_activities: set[str],
+        covered_activities: set[str],
+        screens: dict[str, RawScreen],
+        fp_to_sid: dict[str, str],
+        nav_paths: dict[str, list[tuple[Action, str]]],
+        screen_depth: dict[str, int],
+        frontier: deque[tuple[str, Action]],
+        frontier_sigs: set[str],
+        executed_actions: set[str],
+        skip_actions: set[ActionType],
+        failed_launches: set[str],
+        direct_launch_screens: set[str],
+        grouping_ctx: StructuralGroupingContext,
+    ) -> bool:
+        """Directly launch an uncovered Activity when the frontier is empty.
+
+        Tries each uncovered Activity via am start. On success, captures the
+        screen, enumerates actions, and refills the frontier.
+        """
+        assert self._device is not None
+
+        uncovered = declared_activities - covered_activities - failed_launches
+        if not uncovered:
+            return False
+
+        candidates = sorted(uncovered, key=lambda a: (len(a), a))
+
+        for activity_name in candidates:
+            component = f"{self._app_package}/{activity_name}"
+            logger.info(f"Direct-launching Activity: {component}")
+
+            try:
+                self._device.shell(f"am start -n {component}")
+                time.sleep(2.5)
+            except Exception:
+                failed_launches.add(activity_name)
+                continue
+
+            if not self._is_within_app():
+                failed_launches.add(activity_name)
+                self._restart_app()
+                continue
+
+            screen = self._capture_screen()
+            if screen is None:
+                failed_launches.add(activity_name)
+                continue
+
+            fp = screen.get_structural_fingerprint()
+            covered_activities.add(activity_name)
+            if screen.activity_name and declared_activities:
+                matched = _match_activity(screen.activity_name, declared_activities)
+                if matched:
+                    covered_activities.add(matched)
+
+            canonical_sid = fp_to_sid.get(fp)
+            if canonical_sid is None:
+                canonical_sid = screen.screen_id
+                fp_to_sid[fp] = canonical_sid
+                screens[canonical_sid] = screen
+                screen_depth[canonical_sid] = 0
+                nav_paths[canonical_sid] = []
+                direct_launch_screens.add(canonical_sid)
+
+                logger.info(
+                    f"New screen from direct launch: {canonical_sid} "
+                    f"(activity={screen.activity_name}, total={len(screens)})"
+                )
+
+            new_actions = list(enumerate_actions(screen, exclude=skip_actions))
+            new_actions = [a for a in new_actions if a.action_type != ActionType.NAVIGATE_BACK]
+            new_actions = apply_structural_grouping(
+                screen, new_actions, grouping_ctx, canonical_sid
+            )
+
+            added = 0
+            for action in new_actions:
+                sig = _action_signature(action)
+                if sig not in executed_actions and sig not in frontier_sigs:
+                    frontier.append((canonical_sid, action))
+                    frontier_sigs.add(sig)
+                    added += 1
+
+            if added > 0:
+                logger.info(
+                    f"Direct launch refilled frontier: {added} actions from {activity_name}"
+                )
+                return True
+
         return False
 
     def _identify_current_screen(self) -> tuple[str, RawScreen | None]:
