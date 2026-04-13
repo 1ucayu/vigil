@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import deque
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,6 +18,8 @@ from vigil.neuro.explorer import (
     ExplorationResult,
     ExplorationTrace,
     SmartStoppingContext,
+    _action_signature,
+    _match_activity,
     analyze_container_homogeneity,
     apply_smart_stopping,
     pick_representatives,
@@ -554,3 +558,280 @@ class TestVerifyDynamicContainer:
         record_detail_fingerprint(ctx, "scr_list", "e_009", "fp_detail_B")
         assert "cfp_2" not in ctx.pending
         assert "cfp_2" in ctx.verified_static
+
+
+# ============================================================
+# Activity coverage tracking tests
+# ============================================================
+
+
+class TestMatchActivity:
+    def test_exact_match(self) -> None:
+        declared = {"com.android.settings.Settings", "com.android.settings.wifi.WifiSettings"}
+        assert _match_activity("com.android.settings.Settings", declared) == (
+            "com.android.settings.Settings"
+        )
+
+    def test_suffix_match(self) -> None:
+        declared = {"com.android.settings.Settings"}
+        assert _match_activity(".Settings", declared) is not None
+
+    def test_short_class_match(self) -> None:
+        declared = {"com.android.settings.wifi.WifiSettings"}
+        assert _match_activity("com.other.WifiSettings", declared) is not None
+
+    def test_no_match(self) -> None:
+        declared = {"com.android.settings.Settings"}
+        assert _match_activity("com.totally.different.Activity", declared) is None
+
+    def test_empty_declared(self) -> None:
+        assert _match_activity("com.app.Main", set()) is None
+
+
+class TestExplorationResultCoverage:
+    def test_coverage_fields_default_empty(self) -> None:
+        result = ExplorationResult(app_package="com.test")
+        assert result.declared_activities == []
+        assert result.covered_activities == []
+
+    def test_coverage_fields_populated(self) -> None:
+        result = ExplorationResult(
+            app_package="com.test",
+            declared_activities=["A", "B", "C"],
+            covered_activities=["A", "B"],
+        )
+        assert len(result.declared_activities) == 3
+        assert len(result.covered_activities) == 2
+
+
+# ============================================================
+# Action signature + dedup tests
+# ============================================================
+
+
+class TestActionSignature:
+    def test_same_action_same_activity(self) -> None:
+        sig1 = _action_signature(
+            "com.android.settings.WifiSettings",
+            Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
+        )
+        sig2 = _action_signature(
+            "com.android.settings.WifiSettings",
+            Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
+        )
+        assert sig1 == sig2
+
+    def test_different_bounds(self) -> None:
+        sig1 = _action_signature(
+            "com.android.settings.WifiSettings",
+            Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
+        )
+        sig2 = _action_signature(
+            "com.android.settings.WifiSettings",
+            Action(action_type=ActionType.CLICK, target_bounds=[500, 600, 700, 800]),
+        )
+        assert sig1 != sig2
+
+    def test_different_activity(self) -> None:
+        sig1 = _action_signature(
+            "com.android.settings.WifiSettings",
+            Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
+        )
+        sig2 = _action_signature(
+            "com.android.settings.BluetoothSettings",
+            Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
+        )
+        assert sig1 != sig2
+
+    def test_back_action_signature(self) -> None:
+        sig = _action_signature(
+            "com.android.settings.WifiSettings",
+            Action(action_type=ActionType.NAVIGATE_BACK),
+        )
+        assert "navigate_back" in sig
+        assert "global" in sig
+
+
+# ============================================================
+# Locality-aware frontier tests
+# ============================================================
+
+
+class TestLocalityAwareFrontier:
+    @staticmethod
+    def _make_explorer() -> AppExplorer:
+        config = VigilConfig()
+        config.app.max_exploration_steps = 5
+        config.app.exploration_strategy = "bfs"
+        with patch("vigil.neuro.explorer.u2"):
+            return AppExplorer(
+                device_serial="test",
+                app_package="com.test",
+                config=config,
+                output_dir=Path("/tmp/test_explorer_locality"),
+            )
+
+    def test_p1_current_screen(self) -> None:
+        explorer = self._make_explorer()
+        frontier = deque(
+            [
+                ("other", Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 10, 10])),
+                ("current", Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 10, 10])),
+            ]
+        )
+        sid, _act, tier = explorer._pop_frontier_prefer_current(frontier, "current", 0, 100)
+        assert sid == "current"
+        assert tier == 1
+
+    def test_p2_forward_adjacent(self) -> None:
+        explorer = self._make_explorer()
+        fwd = {
+            "current": [
+                (Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 10, 10]), "neighbor")
+            ]
+        }
+        frontier = deque(
+            [
+                ("far_away", Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 10, 10])),
+                ("neighbor", Action(action_type=ActionType.CLICK, target_bounds=[20, 20, 30, 30])),
+            ]
+        )
+        sid, _act, tier = explorer._pop_frontier_prefer_current(
+            frontier, "current", 0, 100, forward_edges=fwd
+        )
+        assert sid == "neighbor"
+        assert tier == 2
+
+    def test_p3_back_to_parent(self) -> None:
+        explorer = self._make_explorer()
+        back = {"current": "parent"}
+        frontier = deque(
+            [
+                ("far_away", Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 10, 10])),
+                ("parent", Action(action_type=ActionType.CLICK, target_bounds=[20, 20, 30, 30])),
+            ]
+        )
+        sid, _act, tier = explorer._pop_frontier_prefer_current(
+            frontier, "current", 0, 100, back_edges=back
+        )
+        assert sid == "parent"
+        assert tier == 3
+
+    def test_p4_sibling(self) -> None:
+        explorer = self._make_explorer()
+        back = {"current": "parent"}
+        fwd = {
+            "parent": [
+                (Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 10, 10]), "current"),
+                (Action(action_type=ActionType.CLICK, target_bounds=[20, 20, 30, 30]), "sibling"),
+            ]
+        }
+        frontier = deque(
+            [
+                ("far_away", Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 10, 10])),
+                ("sibling", Action(action_type=ActionType.CLICK, target_bounds=[50, 50, 60, 60])),
+            ]
+        )
+        sid, _act, tier = explorer._pop_frontier_prefer_current(
+            frontier, "current", 0, 100, forward_edges=fwd, back_edges=back
+        )
+        assert sid == "sibling"
+        assert tier == 4
+
+    def test_p5_fallback(self) -> None:
+        explorer = self._make_explorer()
+        frontier = deque(
+            [
+                ("far_away", Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 10, 10])),
+            ]
+        )
+        sid, _act, tier = explorer._pop_frontier_prefer_current(frontier, "current", 0, 100)
+        assert sid == "far_away"
+        assert tier == 5
+
+    def test_p2_skipped_if_no_forward_edges(self) -> None:
+        explorer = self._make_explorer()
+        fwd = {
+            "other_screen": [
+                (Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 10, 10]), "neighbor")
+            ]
+        }
+        frontier = deque(
+            [
+                ("neighbor", Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 10, 10])),
+            ]
+        )
+        _sid, _act, tier = explorer._pop_frontier_prefer_current(
+            frontier, "current", 0, 100, forward_edges=fwd
+        )
+        assert tier == 5
+
+
+class TestNavStats:
+    def test_nav_stats_field_on_result(self) -> None:
+        result = ExplorationResult(
+            app_package="com.test",
+            nav_stats={"p1_current": 10, "p5_replay": 2},
+        )
+        assert result.nav_stats["p1_current"] == 10
+        assert result.nav_stats["p5_replay"] == 2
+
+    def test_nav_stats_default_empty(self) -> None:
+        result = ExplorationResult(app_package="com.test")
+        assert result.nav_stats == {}
+
+
+class TestFrontierReplenishment:
+    def test_revisited_screen_adds_unexecuted_actions(self) -> None:
+        executed: set[str] = set()
+        frontier_sigs: set[str] = set()
+
+        activity = "com.android.settings.WifiSettings"
+        actions = [
+            Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 100, 100]),
+            Action(action_type=ActionType.CLICK, target_bounds=[0, 100, 100, 200]),
+            Action(action_type=ActionType.CLICK, target_bounds=[0, 200, 100, 300]),
+        ]
+
+        # First visit: all 3 added
+        added_first = 0
+        for a in actions:
+            sig = _action_signature(activity, a)
+            if sig not in executed and sig not in frontier_sigs:
+                frontier_sigs.add(sig)
+                added_first += 1
+        assert added_first == 3
+
+        # Execute VPN (first action)
+        vpn_sig = _action_signature(activity, actions[0])
+        executed.add(vpn_sig)
+        frontier_sigs.discard(vpn_sig)
+
+        # Simulate: frontier for Bluetooth and Hotspot drained (nav failure)
+        bt_sig = _action_signature(activity, actions[1])
+        hs_sig = _action_signature(activity, actions[2])
+        frontier_sigs.discard(bt_sig)
+        frontier_sigs.discard(hs_sig)
+
+        # Second visit: should re-add Bluetooth + Hotspot, NOT VPN
+        added_second = 0
+        for a in actions:
+            sig = _action_signature(activity, a)
+            if sig not in executed and sig not in frontier_sigs:
+                frontier_sigs.add(sig)
+                added_second += 1
+        assert added_second == 2
+
+    def test_frontier_sigs_prevents_duplicates(self) -> None:
+        executed: set[str] = set()
+        frontier_sigs: set[str] = set()
+
+        activity = "com.android.settings.WifiSettings"
+        action = Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 100, 100])
+        sig = _action_signature(activity, action)
+
+        assert sig not in executed and sig not in frontier_sigs
+        frontier_sigs.add(sig)
+
+        # Second add attempt blocked
+        assert sig in frontier_sigs

@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
 _ANDROID_NS = "http://schemas.android.com/apk/res/android"
@@ -78,6 +79,28 @@ class AppPriorExtractor:
         """Extract app info from a connected device via adb dumpsys."""
         output = device.shell(f"dumpsys package {package}")
         return self._parse_dumpsys(package, output)
+
+    def extract_from_device_serial(self, serial: str, package: str) -> AppPrior:
+        """Extract app info from a connected device via adb shell.
+
+        Doesn't require uiautomator2 — uses subprocess + adb directly.
+        This is the fallback for system apps that don't have a standalone APK/manifest.
+        """
+        try:
+            result = subprocess.run(
+                ["adb", "-s", serial, "shell", "dumpsys", "package", package],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logger.warning(f"adb dumpsys failed: {exc}")
+            return AppPrior(package_name=package)
+        if result.returncode != 0:
+            logger.warning(f"dumpsys failed: {result.stderr}")
+            return AppPrior(package_name=package)
+        return self._parse_dumpsys(package, result.stdout)
 
     def _parse_manifest_tree(self, tree: ET.ElementTree) -> AppPrior:
         root = tree.getroot()

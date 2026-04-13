@@ -70,6 +70,17 @@ def main() -> None:
         default=None,
         help="Output directory (default: data/apps/<app_name>/)",
     )
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        help="Path to AndroidManifest.xml for Activity coverage guidance",
+    )
+    parser.add_argument(
+        "--prior-from-device",
+        action="store_true",
+        help="Extract Activity prior from connected device via 'adb dumpsys' "
+        "(for system apps without standalone manifest)",
+    )
 
     args = parser.parse_args()
 
@@ -110,6 +121,23 @@ def main() -> None:
     # Run exploration with selected backend
     output_dir = Path(args.output_dir) if args.output_dir else None
 
+    # Extract Activity prior (optional)
+    app_prior = None
+    if args.manifest:
+        from vigil.neuro.app_prior import AppPriorExtractor
+
+        manifest_path = Path(args.manifest)
+        if manifest_path.exists():
+            app_prior = AppPriorExtractor().extract_from_manifest(manifest_path)
+            logger.info(f"Prior loaded from manifest: {len(app_prior.activities)} Activities")
+        else:
+            logger.warning(f"Manifest not found: {manifest_path}")
+    elif args.prior_from_device:
+        from vigil.neuro.app_prior import AppPriorExtractor
+
+        app_prior = AppPriorExtractor().extract_from_device_serial(serial, args.app)
+        logger.info(f"Prior loaded from device: {len(app_prior.activities)} Activities")
+
     if backend == "ape":
         from vigil.neuro.ape_explorer import ApeExplorer
 
@@ -127,6 +155,7 @@ def main() -> None:
             app_package=args.app,
             config=config,
             output_dir=output_dir,
+            app_prior=app_prior,
         )
 
     result = explorer.explore()

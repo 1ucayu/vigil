@@ -82,6 +82,13 @@ def main() -> None:
         action="store_true",
         help="Run invariant mining in grounding (requires multi-visit data)",
     )
+    parser.add_argument(
+        "--prior-from-device",
+        default=None,
+        metavar="SERIAL",
+        help="Extract Activity prior from connected device (provide ADB serial). "
+        "For system apps without standalone manifest.",
+    )
 
     args = parser.parse_args()
 
@@ -107,9 +114,26 @@ def main() -> None:
             raise SystemExit(1)
         prior = AppPriorExtractor().extract_from_manifest(manifest_path)
         logger.info(
-            f"Stage 0: extracted prior for {prior.package_name} "
+            f"Stage 0: extracted prior from manifest for {prior.package_name} "
             f"({len(prior.activities)} activities, entry={prior.entry_activity})"
         )
+    elif args.prior_from_device:
+        from vigil.neuro.app_prior import AppPriorExtractor
+
+        prior = AppPriorExtractor().extract_from_device_serial(args.prior_from_device, app_package)
+        logger.info(
+            f"Stage 0: extracted prior from device for {prior.package_name} "
+            f"({len(prior.activities)} activities)"
+        )
+    else:
+        prior_path = trace_path.parent.parent / "prior.json"
+        if prior_path.exists():
+            from vigil.neuro.app_prior import AppPrior
+
+            prior = AppPrior(**json.loads(prior_path.read_text(encoding="utf-8")))
+            logger.info(
+                f"Stage 0: loaded prior from {prior_path} ({len(prior.activities)} activities)"
+            )
 
     # Stages 1-3: Build or load FSM
     if args.fsm:

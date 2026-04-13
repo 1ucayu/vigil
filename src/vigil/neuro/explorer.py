@@ -4,9 +4,17 @@ BFS/DFS traversal of Android app screens. At each screen, enumerates interactabl
 elements, executes each action, and records the resulting screen (accessibility tree
 XML + screenshot PNG + element list).
 
-Smart stopping: when a scrollable container has homogeneous children (≥60% share
-the same element skeleton AND ≥3 such children), only 2 representative item clicks
+Smart stopping: when a scrollable container has homogeneous children (>=60% share
+the same element skeleton AND >=3 such children), only 2 representative item clicks
 are explored instead of all N — reducing per-container cost from O(N) to O(1).
+
+Locality-aware scheduling: 5-tier frontier priority minimizes costly replay navigation
+by preferring actions from the current screen, forward-adjacent, back-reachable,
+or sibling screens before falling back to full app restart + replay.
+
+Action dedup: tracks executed actions by (activity_name, action_type, bounds) signature
+to prevent re-exploring the same action when fingerprint drift causes a revisited
+screen to appear "new".
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ from vigil.core.config import VigilConfig
 from vigil.core.ui_parser import parse_hierarchy_xml
 from vigil.models.action import Action, ActionType
 from vigil.models.state import RawScreen, UIElement
+from vigil.neuro.app_prior import AppPrior
 
 SMART_STOP_HOMOGENEITY_THRESHOLD = 0.6
 SMART_STOP_MIN_ITEMS = 3
@@ -171,6 +180,38 @@ def _container_fingerprint(screen: RawScreen, container: UIElement) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
+def _match_activity(activity_name: str, declared: set[str]) -> str | None:
+    """Match an observed activity_name against declared Activity names.
+
+    Handles the common mismatch between accessibility tree names (may be short
+    or partial) and manifest names (fully qualified).
+    """
+    if activity_name in declared:
+        return activity_name
+    for d in declared:
+        if d.endswith(activity_name) or activity_name.endswith(d):
+            return d
+        short = d.rsplit(".", 1)[-1]
+        obs_short = activity_name.rsplit(".", 1)[-1]
+        if short == obs_short:
+            return d
+    return None
+
+
+def _action_signature(activity_name: str, action: Action) -> str:
+    """Compute a stable signature for an action on a screen.
+
+    Uses activity_name (stable across visits) instead of fingerprint
+    (which can drift due to dynamic content).
+    """
+    short_activity = activity_name.rsplit(".", 1)[-1] if activity_name else "unknown"
+    bounds_str = (
+        ",".join(str(b) for b in action.target_bounds) if action.target_bounds else "global"
+    )
+    eid = action.target_element_id or ""
+    return f"{short_activity}|{action.action_type.value}|{eid}|{bounds_str}"
+
+
 class ExplorationTrace(BaseModel):
     """A single exploration step: source screen -> action -> target screen."""
 
@@ -191,6 +232,9 @@ class ExplorationResult(BaseModel):
     unique_screens: int = 0
     duration_seconds: float = 0.0
     output_dir: str = ""
+    declared_activities: list[str] = Field(default_factory=list)
+    covered_activities: list[str] = Field(default_factory=list)
+    nav_stats: dict[str, int] = Field(default_factory=dict)
 
 
 class AppExplorer:
@@ -205,15 +249,12 @@ class AppExplorer:
         app_package: Android package name to explore.
         config: Vigil configuration.
         output_dir: Base output directory (default: data/apps/<app_name>/).
+        app_prior: Optional AppPrior for Activity coverage guidance.
     """
 
-    # Max back-presses to attempt when navigating to a source screen
     MAX_BACK_PRESSES = 10
-    # Max scroll attempts per scrollable element
     MAX_SCROLLS_PER_ELEMENT = 3
-    # Seconds to wait after an action for the screen to stabilize
-    STABILITY_WAIT = 1.5
-    # Max retries for device calls
+    STABILITY_WAIT = 0.8
     DEVICE_RETRIES = 3
 
     def __init__(
@@ -222,50 +263,42 @@ class AppExplorer:
         app_package: str,
         config: VigilConfig,
         output_dir: Path | None = None,
+        app_prior: AppPrior | None = None,
     ) -> None:
         self._serial = device_serial
         self._app_package = app_package
         self._config = config
         self._device: u2.Device | None = None
         self._screen_counter = 0
+        self._app_prior = app_prior
 
         if output_dir is None:
-            # Extract short app name from package (last segment)
             app_name = app_package.rsplit(".", maxsplit=1)[-1]
             self._output_dir = Path(f"data/apps/{app_name}")
         else:
             self._output_dir = output_dir
 
-        # Ensure output directories exist
         (self._output_dir / "screens").mkdir(parents=True, exist_ok=True)
         (self._output_dir / "trees").mkdir(parents=True, exist_ok=True)
         (self._output_dir / "traces").mkdir(parents=True, exist_ok=True)
 
     def explore(self) -> ExplorationResult:
-        """Run the exploration and return structured results.
-
-        Returns:
-            ExplorationResult containing all discovered screens and traces.
-        """
+        """Run the exploration and return structured results."""
         start_time = time.monotonic()
         self._connect_device()
         assert self._device is not None
 
-        # Start the target app and wait for it to come to foreground
         logger.info(f"Starting app: {self._app_package}")
         self._device.app_start(self._app_package, stop=True)
         if not self._wait_for_app_foreground():
             logger.error("App did not come to foreground")
             return ExplorationResult(app_package=self._app_package)
 
-        # Capture initial screen
         initial_screen = self._capture_screen()
         if initial_screen is None:
             logger.error("Failed to capture initial screen")
             return ExplorationResult(app_package=self._app_package)
 
-        # Validate the initial screen has meaningful content (not just
-        # system chrome). If the app is still loading, retry.
         min_elements = 3
         if len(initial_screen.get_interactable_elements()) < min_elements:
             logger.warning(
@@ -291,30 +324,65 @@ class AppExplorer:
         screens: dict[str, RawScreen] = {initial_screen.screen_id: initial_screen}
         traces: list[ExplorationTrace] = []
 
-        # fingerprint -> canonical screen_id (first time we saw this fingerprint)
+        # Activity coverage tracking
+        declared_activities: set[str] = set()
+        if self._app_prior:
+            declared_activities = {a.name for a in self._app_prior.activities}
+            logger.info(
+                f"Activity prior loaded: {len(declared_activities)} declared Activities, "
+                f"entry={self._app_prior.entry_activity}"
+            )
+        covered_activities: set[str] = set()
+        if initial_screen.activity_name and declared_activities:
+            matched = _match_activity(initial_screen.activity_name, declared_activities)
+            if matched:
+                covered_activities.add(matched)
+
         fp_to_sid: dict[str, str] = {initial_fp: initial_screen.screen_id}
-        # screen_id -> list of (action, target_screen_id) describing how to reach it
-        # from the initial screen (empty list = initial screen itself)
         nav_paths: dict[str, list[tuple[Action, str]]] = {initial_screen.screen_id: []}
-        nav_failures: dict[str, int] = {}  # screen_id -> consecutive failure count
+        nav_failures: dict[str, int] = {}
         max_nav_failures = 3
 
-        # During exploration, text input doesn't discover new screens and
-        # pollutes text fields — exclude it from candidate actions.
+        # Action dedup: track executed actions by stable signature
+        executed_actions: set[str] = set()
+
+        # Track action signatures currently in the frontier to avoid duplicates
+        frontier_sigs: set[str] = set()
+
+        # Adjacency graph for local navigation
+        forward_edges: dict[str, list[tuple[Action, str]]] = {}
+        back_edges: dict[str, str] = {}
+
+        # Navigation statistics
+        nav_stats: dict[str, int] = {
+            "p1_current": 0,
+            "p2_forward": 0,
+            "p3_back": 0,
+            "p4_sibling": 0,
+            "p5_replay": 0,
+            "local_nav_ok": 0,
+            "local_nav_fail": 0,
+            "replay_ok": 0,
+            "replay_fail": 0,
+            "actions_deduped": 0,
+        }
+
         skip_actions: set[ActionType] = {
             ActionType.INPUT_TEXT,
             ActionType.NAVIGATE_HOME,
         }
 
-        # Build frontier: (screen_id, action) pairs.
-        # Exclude navigate_back for initial screen — it exits the app.
+        # Build initial frontier
         frontier: deque[tuple[str, Action]] = deque()
         smart_ctx = SmartStoppingContext()
         initial_actions = enumerate_actions(initial_screen, exclude=skip_actions)
         initial_actions = [a for a in initial_actions if a.action_type != ActionType.NAVIGATE_BACK]
         initial_actions = apply_smart_stopping(initial_screen, initial_actions, smart_ctx)
+        initial_activity = initial_screen.activity_name or ""
         for action in initial_actions:
+            sig = _action_signature(initial_activity, action)
             frontier.append((initial_screen.screen_id, action))
+            frontier_sigs.add(sig)
 
         max_steps = self._config.app.max_exploration_steps
         step = 0
@@ -326,15 +394,56 @@ class AppExplorer:
         )
 
         while frontier and step < max_steps:
-            # Pop next item, preferring actions from the current screen
-            source_screen_id, action = self._pop_frontier_prefer_current(
-                frontier, fp_to_sid.get(current_fp, ""), step, max_steps
+            source_screen_id, action, pop_tier = self._pop_frontier_prefer_current(
+                frontier,
+                fp_to_sid.get(current_fp, ""),
+                step,
+                max_steps,
+                forward_edges=forward_edges,
+                back_edges=back_edges,
             )
+            tier_keys = {
+                1: "p1_current",
+                2: "p2_forward",
+                3: "p3_back",
+                4: "p4_sibling",
+                5: "p5_replay",
+            }
+            nav_stats[tier_keys[pop_tier]] += 1
+
+            # Remove from frontier membership tracking
+            if source_screen_id in screens:
+                pop_sig = _action_signature(screens[source_screen_id].activity_name or "", action)
+                frontier_sigs.discard(pop_sig)
 
             # Navigate to source screen if we're not already there
             source_fp = screens[source_screen_id].get_structural_fingerprint()
             if current_fp != source_fp:
-                nav_ok = self._navigate_to_screen_via_replay(source_screen_id, screens, nav_paths)
+                nav_ok = False
+                current_sid = fp_to_sid.get(current_fp, "")
+
+                if pop_tier in (2, 3, 4):
+                    nav_ok = self._try_local_navigation(
+                        source_screen_id=source_screen_id,
+                        current_screen_id=current_sid,
+                        screens=screens,
+                        forward_edges=forward_edges,
+                        back_edges=back_edges,
+                    )
+                    if nav_ok:
+                        nav_stats["local_nav_ok"] += 1
+                    else:
+                        nav_stats["local_nav_fail"] += 1
+
+                if not nav_ok:
+                    nav_ok = self._navigate_to_screen_via_replay(
+                        source_screen_id, screens, nav_paths
+                    )
+                    if nav_ok:
+                        nav_stats["replay_ok"] += 1
+                    else:
+                        nav_stats["replay_fail"] += 1
+
                 if nav_ok:
                     current_fp = source_fp
                     nav_failures.pop(source_screen_id, None)
@@ -343,21 +452,19 @@ class AppExplorer:
                     nav_failures[source_screen_id] = nav_failures.get(source_screen_id, 0) + 1
                     if nav_failures[source_screen_id] >= max_nav_failures:
                         before = len(frontier)
+                        for sid, act in frontier:
+                            if sid == source_screen_id and sid in screens:
+                                drain_sig = _action_signature(screens[sid].activity_name or "", act)
+                                frontier_sigs.discard(drain_sig)
                         frontier = deque(
                             (sid, act) for sid, act in frontier if sid != source_screen_id
                         )
                         drained = before - len(frontier)
-                        logger.warning(
-                            f"Screen {source_screen_id} unreachable after "
-                            f"{max_nav_failures} attempts, "
-                            f"draining {drained} remaining actions"
-                        )
-                    else:
-                        logger.debug(
-                            f"Navigation to {source_screen_id} failed "
-                            f"(attempt {nav_failures[source_screen_id]}"
-                            f"/{max_nav_failures})"
-                        )
+                        if drained > 0:
+                            logger.warning(
+                                f"Drained {drained} actions for unreachable "
+                                f"screen {source_screen_id}"
+                            )
                     continue
 
             # Execute the action
@@ -370,24 +477,19 @@ class AppExplorer:
             self._wait_for_stability()
             step += 1
 
-            # Dismiss keyboard if it popped up
             self._dismiss_keyboard_if_showing()
 
-            # Check if we're still in the target app
             if not self._is_within_app():
                 logger.debug("Left target app, recovering")
                 self._restart_app()
                 current_fp = self._identify_current_fp()
                 continue
 
-            # Capture the resulting screen
             target_screen = self._capture_screen()
             if target_screen is None:
                 continue
 
             target_fp = target_screen.get_structural_fingerprint()
-
-            # Resolve to canonical screen_id for trace recording
             canonical_target_id = fp_to_sid.get(target_fp, target_screen.screen_id)
 
             # Record trace
@@ -401,22 +503,37 @@ class AppExplorer:
             traces.append(trace)
             current_fp = target_fp
 
-            # Record detail fingerprint for smart stopping verification
+            # Record executed action signature for dedup
+            source_activity = screens[source_screen_id].activity_name or ""
+            exec_sig = _action_signature(source_activity, action)
+            executed_actions.add(exec_sig)
+
+            # Update adjacency graph
+            if source_screen_id not in forward_edges:
+                forward_edges[source_screen_id] = []
+            if not any(
+                a.action_type == action.action_type
+                and a.target_bounds == action.target_bounds
+                and tid == canonical_target_id
+                for a, tid in forward_edges[source_screen_id]
+            ):
+                forward_edges[source_screen_id].append((action, canonical_target_id))
+            if action.action_type == ActionType.CLICK and canonical_target_id != source_screen_id:
+                back_edges[canonical_target_id] = source_screen_id
+
+            # Record detail fingerprint for smart stopping
             record_detail_fingerprint(
                 smart_ctx, source_screen_id, action.target_element_id or "", target_fp
             )
 
-            # Check if this is a new screen
+            # --- Screen registration (first visit only) ---
             if target_fp not in visited:
                 visited.add(target_fp)
                 screens[target_screen.screen_id] = target_screen
                 fp_to_sid[target_fp] = target_screen.screen_id
 
-                # Record navigation path: path to source + this action
                 source_path = nav_paths.get(source_screen_id, [])
-                nav_paths[target_screen.screen_id] = source_path + [
-                    (action, target_screen.screen_id)
-                ]
+                nav_paths[canonical_target_id] = source_path + [(action, canonical_target_id)]
 
                 logger.info(
                     f"New screen discovered: {target_screen.screen_id} "
@@ -424,13 +541,19 @@ class AppExplorer:
                     f"total={len(screens)})"
                 )
 
-                # Enumerate actions for the new screen and add to frontier
-                new_actions = enumerate_actions(target_screen, exclude=skip_actions)
-                new_actions = apply_smart_stopping(target_screen, new_actions, smart_ctx)
-                for new_action in new_actions:
-                    frontier.append((target_screen.screen_id, new_action))
+                # Track Activity coverage
+                if target_screen.activity_name and declared_activities:
+                    matched = _match_activity(target_screen.activity_name, declared_activities)
+                    if matched and matched not in covered_activities:
+                        covered_activities.add(matched)
+                        remaining = len(declared_activities) - len(covered_activities)
+                        logger.info(
+                            f"Activity covered: {matched} "
+                            f"({len(covered_activities)}/{len(declared_activities)}, "
+                            f"{remaining} remaining)"
+                        )
 
-                # Handle scrollable content
+                # Handle scrollable content (only on first visit)
                 scroll_screens = self._handle_scroll_discovery(target_screen)
                 for ss in scroll_screens:
                     ss_fp = ss.get_structural_fingerprint()
@@ -438,23 +561,57 @@ class AppExplorer:
                         visited.add(ss_fp)
                         screens[ss.screen_id] = ss
                         fp_to_sid[ss_fp] = ss.screen_id
-                        # Add actions from scroll-revealed elements to frontier.
-                        # Use the original screen_id as source since we're still
-                        # on the same logical page, just scrolled down.
-                        new_actions = enumerate_actions(ss, exclude=skip_actions)
-                        new_actions = apply_smart_stopping(ss, new_actions, smart_ctx)
-                        for new_action in new_actions:
-                            frontier.append((target_screen.screen_id, new_action))
-                        logger.info(
-                            f"Scroll revealed {ss.screen_id}, "
-                            f"added {len(new_actions)} actions to frontier"
-                        )
+                        ss_activity = target_screen.activity_name or ""
+                        for scroll_action in enumerate_actions(ss, exclude=skip_actions):
+                            sig = _action_signature(ss_activity, scroll_action)
+                            if sig not in executed_actions and sig not in frontier_sigs:
+                                frontier.append((target_screen.screen_id, scroll_action))
+                                frontier_sigs.add(sig)
 
-                # Update current_fp after scroll discovery may have changed screen
                 if scroll_screens:
                     current_fp = self._identify_current_fp()
 
+            # --- Action enumeration (EVERY visit, dedup-filtered) ---
+            target_activity = target_screen.activity_name or ""
+            new_actions_list = list(enumerate_actions(target_screen, exclude=skip_actions))
+            new_actions_list = apply_smart_stopping(target_screen, new_actions_list, smart_ctx)
+            added = 0
+            for new_action in new_actions_list:
+                sig = _action_signature(target_activity, new_action)
+                if sig not in executed_actions and sig not in frontier_sigs:
+                    frontier.append((canonical_target_id, new_action))
+                    frontier_sigs.add(sig)
+                    added += 1
+            skipped = len(new_actions_list) - added
+            if skipped > 0:
+                nav_stats["actions_deduped"] += skipped
+
         elapsed = time.monotonic() - start_time
+
+        # Log navigation statistics
+        total_pops = sum(nav_stats[k] for k in tier_keys.values())
+        local_keys = ["p1_current", "p2_forward", "p3_back", "p4_sibling"]
+        local_pops = sum(nav_stats[k] for k in local_keys)
+        if total_pops > 0:
+            logger.info(
+                f"Nav stats: {total_pops} pops — "
+                f"P1={nav_stats['p1_current']} P2={nav_stats['p2_forward']} "
+                f"P3={nav_stats['p3_back']} P4={nav_stats['p4_sibling']} "
+                f"P5={nav_stats['p5_replay']} | "
+                f"deduped={nav_stats['actions_deduped']} actions"
+            )
+            pct = local_pops / total_pops * 100
+            logger.info(f"Locality ratio: {pct:.0f}% of pops avoided replay")
+
+        if declared_activities:
+            uncovered = declared_activities - covered_activities
+            logger.info(
+                f"Activity coverage: {len(covered_activities)}/{len(declared_activities)} "
+                f"({len(covered_activities) / len(declared_activities) * 100:.0f}%)"
+            )
+            if uncovered:
+                logger.warning(f"Uncovered Activities: {sorted(uncovered)}")
+
         result = ExplorationResult(
             app_package=self._app_package,
             screens=screens,
@@ -463,9 +620,14 @@ class AppExplorer:
             unique_screens=len(screens),
             duration_seconds=round(elapsed, 2),
             output_dir=str(self._output_dir),
+            declared_activities=sorted(declared_activities),
+            covered_activities=sorted(covered_activities),
+            nav_stats=nav_stats,
         )
 
         self._save_result(result)
+        if self._app_prior:
+            self._save_prior()
 
         logger.info(
             f"Exploration complete: {step} steps, {len(screens)} unique screens, {elapsed:.1f}s"
@@ -484,33 +646,24 @@ class AppExplorer:
         )
 
     def _capture_screen(self) -> RawScreen | None:
-        """Capture the current screen state (hierarchy + screenshot).
-
-        Returns:
-            RawScreen with parsed elements, or None on failure.
-        """
+        """Capture the current screen state (hierarchy + screenshot)."""
         assert self._device is not None
         self._screen_counter += 1
         screen_id = f"scr_{self._screen_counter:04d}"
 
         try:
-            # Get current activity info
             current = self._device.app_current()
             activity_name = current.get("activity", "")
             package_name = current.get("package", "")
 
-            # Dump accessibility tree
             xml_string = self._device.dump_hierarchy()
 
-            # Take screenshot
             screenshot_path = self._output_dir / "screens" / f"{screen_id}.png"
             self._device.screenshot(str(screenshot_path))
 
-            # Save XML
             xml_path = self._output_dir / "trees" / f"{screen_id}.xml"
             xml_path.write_text(xml_string, encoding="utf-8")
 
-            # Parse hierarchy into UIElements (filter out system UI)
             elements = parse_hierarchy_xml(xml_string, app_package=self._app_package)
 
             screen = RawScreen(
@@ -521,9 +674,7 @@ class AppExplorer:
                 xml_tree_path=str(xml_path),
                 elements=elements,
                 timestamp=_now_iso(),
-                metadata={
-                    "device_serial": self._serial,
-                },
+                metadata={"device_serial": self._serial},
             )
             return screen
 
@@ -552,7 +703,7 @@ class AppExplorer:
                 if action.target_bounds:
                     cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
                     cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
-                    self._device.click(cx, cy)  # focus the field first
+                    self._device.click(cx, cy)
                     time.sleep(0.3)
                 if action.input_text:
                     self._device.send_keys(action.input_text)
@@ -609,14 +760,7 @@ class AppExplorer:
             pass
 
     def _wait_for_app_foreground(self, timeout: float = 10.0) -> bool:
-        """Poll until the target app is in the foreground.
-
-        Args:
-            timeout: Max seconds to wait.
-
-        Returns:
-            True if the app reached foreground within the timeout.
-        """
+        """Poll until the target app is in the foreground."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._is_within_app():
@@ -634,21 +778,13 @@ class AppExplorer:
             return False
 
     def _recover_from_crash(self) -> bool:
-        """Try to return to the target app after leaving it.
-
-        Returns:
-            True if successfully returned to the app.
-        """
+        """Try to return to the target app after leaving it."""
         assert self._device is not None
-
-        # Try pressing back a few times
         for _ in range(3):
             self._device.press("back")
             time.sleep(0.5)
             if self._is_within_app():
                 return True
-
-        # Restart the app
         try:
             self._device.app_start(self._app_package)
             time.sleep(2.0)
@@ -662,72 +798,101 @@ class AppExplorer:
         screens: dict[str, RawScreen],
         nav_paths: dict[str, list[tuple[Action, str]]],
     ) -> bool:
-        """Navigate to a target screen by restarting the app and replaying actions.
-
-        Instead of pressing back (which can only go up the stack), we restart
-        the app to get to the initial screen, then replay the recorded action
-        path that leads to the target.
-
-        Returns:
-            True if we reached the target screen.
-        """
+        """Navigate to a target screen by restarting the app and replaying actions."""
         assert self._device is not None
         target_screen = screens.get(target_screen_id)
         if target_screen is None:
             return False
 
         target_fp = target_screen.get_structural_fingerprint()
-
-        # Check if the target is the initial screen — just restart
         path = nav_paths.get(target_screen_id)
         if path is None:
-            logger.debug(f"No nav path for {target_screen_id}")
             return False
 
-        # Restart app to get to initial screen
         logger.debug(f"Navigating to {target_screen_id} via replay ({len(path)} steps)")
         self._restart_app()
 
         if not path:
-            # Target IS the initial screen — just check we're there
-            screen = self._capture_screen()
-            if screen is not None:
-                fp = screen.get_structural_fingerprint()
-                if fp == target_fp:
-                    return True
-            return False
+            return self._verify_arrived_at(target_fp)
 
-        # Replay each action in the path
-        for action, _ in path:
+        for replay_action, _ in path:
             if not self._is_within_app():
                 logger.debug("Left app during replay")
                 return False
-            self._execute_action(action)
+            self._execute_action(replay_action)
             self._wait_for_stability()
 
-        # Verify we arrived at the target
-        screen = self._capture_screen()
-        if screen is not None:
-            fp = screen.get_structural_fingerprint()
-            if fp == target_fp:
-                return True
-            logger.debug(f"Replay ended at wrong screen (expected {target_fp[:12]}, got {fp[:12]})")
+        arrived = self._verify_arrived_at(target_fp)
+        if not arrived:
+            logger.debug(f"Replay ended at wrong screen (expected {target_fp[:12]})")
+        return arrived
+
+    def _try_local_navigation(
+        self,
+        source_screen_id: str,
+        current_screen_id: str,
+        screens: dict[str, RawScreen],
+        forward_edges: dict[str, list[tuple[Action, str]]],
+        back_edges: dict[str, str],
+    ) -> bool:
+        """Try to reach source_screen_id without full replay.
+
+        Attempts: forward click, back press, or back + forward (sibling).
+        """
+        assert self._device is not None
+        source_fp = screens[source_screen_id].get_structural_fingerprint()
+
+        # Forward click
+        if current_screen_id in forward_edges:
+            for edge_action, edge_target in forward_edges[current_screen_id]:
+                if edge_target == source_screen_id:
+                    logger.debug(f"Local nav: forward to {source_screen_id}")
+                    self._execute_action(edge_action)
+                    self._wait_for_stability()
+                    return self._verify_arrived_at(source_fp)
+
+        # Back press to parent
+        parent = back_edges.get(current_screen_id, "")
+        if parent == source_screen_id:
+            logger.debug(f"Local nav: back to {source_screen_id}")
+            self._execute_action(Action(action_type=ActionType.NAVIGATE_BACK))
+            self._wait_for_stability()
+            self._dismiss_keyboard_if_showing()
+            return self._verify_arrived_at(source_fp)
+
+        # Back to parent + forward to sibling
+        if parent and parent in forward_edges:
+            for edge_action, edge_target in forward_edges[parent]:
+                if edge_target == source_screen_id:
+                    logger.debug(f"Local nav: back to {parent} then forward to {source_screen_id}")
+                    self._execute_action(Action(action_type=ActionType.NAVIGATE_BACK))
+                    self._wait_for_stability()
+                    self._dismiss_keyboard_if_showing()
+
+                    if parent in screens:
+                        parent_fp = screens[parent].get_structural_fingerprint()
+                        if not self._verify_arrived_at(parent_fp):
+                            return False
+
+                    self._execute_action(edge_action)
+                    self._wait_for_stability()
+                    return self._verify_arrived_at(source_fp)
+
         return False
 
+    def _verify_arrived_at(self, expected_fp: str) -> bool:
+        """Capture current screen and check if fingerprint matches."""
+        screen = self._capture_screen()
+        if screen is None:
+            return False
+        return screen.get_structural_fingerprint() == expected_fp
+
     def _handle_scroll_discovery(self, screen: RawScreen) -> list[RawScreen]:
-        """Scroll scrollable elements to discover hidden content.
-
-        For each scrollable element, scrolls down up to MAX_SCROLLS_PER_ELEMENT
-        times. Stops when the fingerprint stabilizes (no new content).
-
-        Returns:
-            List of additional RawScreen objects discovered via scrolling.
-        """
+        """Scroll scrollable elements to discover hidden content."""
         assert self._device is not None
         discovered: list[RawScreen] = []
 
         scrollable_elements = [e for e in screen.elements if e.is_scrollable and e.is_enabled]
-
         if not scrollable_elements:
             return discovered
 
@@ -741,7 +906,6 @@ class AppExplorer:
                 self._device.swipe(cx, cy, cx, cy - h // 3, duration=0.3)
                 time.sleep(0.5)
 
-                # Check if scroll accidentally exited the app (e.g. MIUI edge gestures)
                 if not self._is_within_app():
                     logger.debug("Scroll exited the app, stopping scroll discovery")
                     self._recover_from_crash()
@@ -753,7 +917,7 @@ class AppExplorer:
 
                 new_fp = new_screen.get_structural_fingerprint()
                 if new_fp == prev_fp:
-                    break  # no new content
+                    break
 
                 discovered.append(new_screen)
                 prev_fp = new_fp
@@ -767,10 +931,7 @@ class AppExplorer:
         self._wait_for_app_foreground()
 
     def _identify_current_fp(self) -> str:
-        """Capture the current screen and return its fingerprint.
-
-        If outside the app, restarts it first. Returns empty string on failure.
-        """
+        """Capture the current screen and return its fingerprint."""
         if not self._is_within_app():
             self._restart_app()
         screen = self._capture_screen()
@@ -786,34 +947,64 @@ class AppExplorer:
         current_screen_id: str,
         current_step: int,
         max_steps: int,
-    ) -> tuple[str, Action]:
-        """Pop from frontier, preferring actions from the current screen.
+        forward_edges: dict[str, list[tuple[Action, str]]] | None = None,
+        back_edges: dict[str, str] | None = None,
+    ) -> tuple[str, Action, int]:
+        """Pop from frontier with 5-tier locality-aware priority.
 
-        Scans the frontier for an action matching the current screen to avoid
-        unnecessary navigation. Falls back to strategy-based popping.
+        P1: Current screen (cost=0)
+        P2: Forward-adjacent via observed transition (cost=1)
+        P3: Back-reachable parent (cost=1)
+        P4: Sibling via back+forward (cost=2)
+        P5: Fallback — full replay required
         """
-        # First, try to find an action from the current screen
+        forward_edges = forward_edges or {}
+        back_edges = back_edges or {}
+
+        # P1: Current screen
         if current_screen_id:
             for i, (sid, act) in enumerate(frontier):
                 if sid == current_screen_id:
                     del frontier[i]
-                    return (sid, act)
+                    return (sid, act, 1)
 
-        # No match — fall back to strategy-based pop
+        # P2: Forward-adjacent
+        if current_screen_id and current_screen_id in forward_edges:
+            adjacent_sids = {tid for _, tid in forward_edges[current_screen_id]}
+            for i, (sid, act) in enumerate(frontier):
+                if sid in adjacent_sids:
+                    del frontier[i]
+                    return (sid, act, 2)
+
+        # P3: Back-reachable parent
+        parent_sid = back_edges.get(current_screen_id, "") if current_screen_id else ""
+        if parent_sid:
+            for i, (sid, act) in enumerate(frontier):
+                if sid == parent_sid:
+                    del frontier[i]
+                    return (sid, act, 3)
+
+        # P4: Sibling (other children of same parent)
+        if parent_sid and parent_sid in forward_edges:
+            sibling_sids = {tid for _, tid in forward_edges[parent_sid]}
+            sibling_sids.discard(current_screen_id)
+            if sibling_sids:
+                for i, (sid, act) in enumerate(frontier):
+                    if sid in sibling_sids:
+                        del frontier[i]
+                        return (sid, act, 4)
+
+        # P5: Fallback
         strategy = self._config.app.exploration_strategy
-
-        if strategy == "bfs":
-            return frontier.popleft()
-        elif strategy == "dfs":
-            return frontier.pop()
+        if strategy == "dfs":
+            return (*frontier.pop(), 5)
         elif strategy == "hybrid":
-            # BFS for first 60% of budget, DFS for the rest
             if current_step < int(max_steps * 0.6):
-                return frontier.popleft()
+                return (*frontier.popleft(), 5)
             else:
-                return frontier.pop()
+                return (*frontier.pop(), 5)
         else:
-            return frontier.popleft()  # default to BFS
+            return (*frontier.popleft(), 5)
 
     # --- Persistence ---
 
@@ -822,10 +1013,6 @@ class AppExplorer:
         timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
         trace_path = self._output_dir / "traces" / f"exploration_{timestamp}.json"
 
-        # Build compact screen data for FSM construction:
-        # - full screen metadata (activity, package, paths, fingerprint)
-        # - only interactable elements inline (they define FSM transitions)
-        # - element_summary with total count (non-interactable still in XML files)
         compact_screens: dict[str, Any] = {}
         for sid, s in result.screens.items():
             interactable = s.get_interactable_elements()
@@ -855,17 +1042,36 @@ class AppExplorer:
             "traces": [t.model_dump(mode="json") for t in result.traces],
         }
 
+        if result.declared_activities:
+            data["activity_coverage"] = {
+                "declared": result.declared_activities,
+                "covered": result.covered_activities,
+                "coverage_ratio": (
+                    len(result.covered_activities) / len(result.declared_activities)
+                    if result.declared_activities
+                    else 0
+                ),
+            }
+
+        if result.nav_stats:
+            data["nav_stats"] = result.nav_stats
+
         trace_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
         logger.info(f"Exploration trace saved to {trace_path}")
 
+    def _save_prior(self) -> None:
+        """Save the app prior as JSON alongside exploration data."""
+        assert self._app_prior is not None
+        prior_path = self._output_dir / "prior.json"
+        prior_path.write_text(
+            json.dumps(self._app_prior.model_dump(), indent=2, default=str),
+            encoding="utf-8",
+        )
+        logger.info(f"App prior saved to {prior_path}")
+
     @staticmethod
     def _extract_metadata(screen: RawScreen) -> dict[str, Any]:
-        """Extract page_title and other metadata from a screen's elements.
-
-        Scans all elements (not just interactable) for title resource IDs
-        so that FSM construction can use page_title for fingerprinting and
-        state naming.
-        """
+        """Extract page_title and other metadata from a screen's elements."""
         metadata: dict[str, Any] = {}
 
         for e in screen.elements:
@@ -874,7 +1080,6 @@ class AppExplorer:
                 metadata["page_title"] = e.text.strip()
                 return metadata
 
-        # Broader title search
         for e in screen.elements:
             rid = e.resource_id or ""
             if (

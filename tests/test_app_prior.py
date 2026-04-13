@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from vigil.neuro.app_prior import AppPriorExtractor
@@ -191,3 +193,40 @@ class TestEdgeCases:
         prior = extractor.extract_from_manifest(manifest_path)
         assert prior.package_name == "com.example.app"
         assert len(prior.activities) == 3
+
+
+class TestExtractFromDeviceSerial:
+    def test_basic_dumpsys_parsing(self, extractor: AppPriorExtractor) -> None:
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = (
+            "Activity Resolver Table:\n"
+            "  Non-Data Actions:\n"
+            "      android.intent.action.MAIN:\n"
+            "        12345 com.android.settings/.Settings filter abcdef\n"
+            "        12346 com.android.settings/.wifi.WifiSettings\n"
+            "      requested permissions:\n"
+            "        android.permission.INTERNET\n"
+            "        android.permission.ACCESS_WIFI_STATE\n"
+        )
+        with patch("subprocess.run", return_value=mock_result):
+            prior = extractor.extract_from_device_serial("fake_serial", "com.android.settings")
+        assert prior.package_name == "com.android.settings"
+        assert len(prior.activities) >= 1
+
+    def test_adb_failure_returns_empty(self, extractor: AppPriorExtractor) -> None:
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = "device not found"
+        with patch("subprocess.run", return_value=mock_result):
+            prior = extractor.extract_from_device_serial("bad_serial", "com.pkg")
+        assert prior.package_name == "com.pkg"
+        assert prior.activities == []
+
+    def test_adb_timeout_returns_empty(self, extractor: AppPriorExtractor) -> None:
+        import subprocess
+
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("adb", 30)):
+            prior = extractor.extract_from_device_serial("slow", "com.pkg")
+        assert prior.package_name == "com.pkg"
+        assert prior.activities == []
