@@ -209,23 +209,21 @@ def _match_activity(activity_name: str, declared: set[str]) -> str | None:
     return None
 
 
-def _action_signature(activity_name: str, action: Action) -> str:
-    """Compute a stable signature for an action on a screen.
+def _action_signature(action: Action) -> str:
+    """Compute a stable signature for dedup.
 
-    Priority: resource_id (survives layout changes) > quantized bounds
-    (tolerates small shifts from dynamic content) > element_id fallback.
+    Does NOT include activity_name — on MIUI the same page can report
+    different activity names across captures, breaking dedup.
     """
-    short_activity = activity_name.rsplit(".", 1)[-1] if activity_name else "unknown"
-
     if action.target_resource_id:
-        return f"{short_activity}|{action.action_type.value}|rid:{action.target_resource_id}"
+        return f"{action.action_type.value}|rid:{action.target_resource_id}"
 
     if action.target_bounds:
         qb = [round(b / 50) * 50 for b in action.target_bounds]
         bounds_str = ",".join(str(b) for b in qb)
-        return f"{short_activity}|{action.action_type.value}|qb:{bounds_str}"
+        return f"{action.action_type.value}|qb:{bounds_str}"
 
-    return f"{short_activity}|{action.action_type.value}|global"
+    return f"{action.action_type.value}|global"
 
 
 def _filter_toggle_actions(actions: list[Action], screen: RawScreen) -> tuple[list[Action], int]:
@@ -433,9 +431,8 @@ class AppExplorer:
         initial_actions = apply_smart_stopping(initial_screen, initial_actions, smart_ctx)
         initial_actions, toggle_removed = _filter_toggle_actions(initial_actions, initial_screen)
         nav_stats["toggle_skips"] += toggle_removed
-        initial_activity = initial_screen.activity_name or ""
         for action in initial_actions:
-            sig = _action_signature(initial_activity, action)
+            sig = _action_signature(action)
             frontier.append((initial_screen.screen_id, action))
             frontier_sigs.add(sig)
 
@@ -447,9 +444,8 @@ class AppExplorer:
                 visited.add(ss_fp)
                 screens[ss.screen_id] = ss
                 fp_to_sid[ss_fp] = ss.screen_id
-                ss_activity = initial_screen.activity_name or ""
                 for new_action in enumerate_actions(ss, exclude=skip_actions):
-                    sig = _action_signature(ss_activity, new_action)
+                    sig = _action_signature(new_action)
                     if sig not in executed_actions and sig not in frontier_sigs:
                         frontier.append((initial_screen.screen_id, new_action))
                         frontier_sigs.add(sig)
@@ -480,6 +476,7 @@ class AppExplorer:
                     item = deferred_frontier.popleft()
                     frontier.append(item)
                     retried_sids.add(item[0])
+                    frontier_sigs.add(_action_signature(item[1]))
                 for sid in retried_sids:
                     nav_failures.pop(sid, None)
                 nav_stats["replenished_actions"] += batch
@@ -503,14 +500,11 @@ class AppExplorer:
 
             # Remove from frontier membership tracking
             if source_screen_id in screens:
-                pop_sig = _action_signature(screens[source_screen_id].activity_name or "", action)
+                pop_sig = _action_signature(action)
                 frontier_sigs.discard(pop_sig)
 
             # Skip blacklisted actions
-            source_activity_name = ""
-            if source_screen_id in screens:
-                source_activity_name = screens[source_screen_id].activity_name or ""
-            bl_sig = _action_signature(source_activity_name, action)
+            bl_sig = _action_signature(action)
             if bl_sig in leave_app_blacklist:
                 nav_stats["blacklisted_skips"] += 1
                 continue
@@ -553,7 +547,7 @@ class AppExplorer:
                         deferred = [(sid, act) for sid, act in frontier if sid == source_screen_id]
                         for sid, act in deferred:
                             if sid in screens:
-                                d_sig = _action_signature(screens[sid].activity_name or "", act)
+                                d_sig = _action_signature(act)
                                 frontier_sigs.discard(d_sig)
                         frontier = deque(
                             (sid, act) for sid, act in frontier if sid != source_screen_id
@@ -584,7 +578,7 @@ class AppExplorer:
 
             if not self._is_within_app():
                 logger.debug("Left target app, recovering")
-                bl_act_sig = _action_signature(source_activity_name, action)
+                bl_act_sig = _action_signature(action)
                 leave_app_blacklist.add(bl_act_sig)
                 if not self._restart_app():
                     logger.error("Cannot recover app, stopping exploration")
@@ -599,6 +593,10 @@ class AppExplorer:
             target_fp = target_screen.get_structural_fingerprint()
             canonical_target_id = fp_to_sid.get(target_fp, target_screen.screen_id)
 
+            # Ensure canonical screen is in screens dict
+            if canonical_target_id not in screens:
+                screens[canonical_target_id] = target_screen
+
             # Record trace
             trace = ExplorationTrace(
                 step_number=step,
@@ -611,8 +609,7 @@ class AppExplorer:
             current_fp = target_fp
 
             # Record executed action signature for dedup
-            source_activity = screens[source_screen_id].activity_name or ""
-            exec_sig = _action_signature(source_activity, action)
+            exec_sig = _action_signature(action)
             executed_actions.add(exec_sig)
 
             # Update adjacency graph
@@ -669,9 +666,8 @@ class AppExplorer:
                         visited.add(ss_fp)
                         screens[ss.screen_id] = ss
                         fp_to_sid[ss_fp] = ss.screen_id
-                        ss_activity = target_screen.activity_name or ""
                         for scroll_action in enumerate_actions(ss, exclude=skip_actions):
-                            sig = _action_signature(ss_activity, scroll_action)
+                            sig = _action_signature(scroll_action)
                             if sig not in executed_actions and sig not in frontier_sigs:
                                 frontier.append((target_screen.screen_id, scroll_action))
                                 frontier_sigs.add(sig)
@@ -684,14 +680,13 @@ class AppExplorer:
             if depth > max_depth:
                 nav_stats["depth_skips"] += 1
             else:
-                target_activity = target_screen.activity_name or ""
                 new_actions_list = list(enumerate_actions(target_screen, exclude=skip_actions))
                 new_actions_list = apply_smart_stopping(target_screen, new_actions_list, smart_ctx)
                 new_actions_list, tr = _filter_toggle_actions(new_actions_list, target_screen)
                 nav_stats["toggle_skips"] += tr
                 added = 0
                 for new_action in new_actions_list:
-                    sig = _action_signature(target_activity, new_action)
+                    sig = _action_signature(new_action)
                     if (
                         sig not in executed_actions
                         and sig not in frontier_sigs

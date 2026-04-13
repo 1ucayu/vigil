@@ -612,9 +612,8 @@ class TestExplorationResultCoverage:
 
 
 class TestActionSignature:
-    def test_resource_id_preferred_over_bounds(self) -> None:
+    def test_resource_id_stable(self) -> None:
         sig1 = _action_signature(
-            "WifiSettings",
             Action(
                 action_type=ActionType.CLICK,
                 target_bounds=[100, 200, 300, 400],
@@ -622,7 +621,6 @@ class TestActionSignature:
             ),
         )
         sig2 = _action_signature(
-            "WifiSettings",
             Action(
                 action_type=ActionType.CLICK,
                 target_bounds=[105, 248, 305, 448],
@@ -633,44 +631,33 @@ class TestActionSignature:
 
     def test_quantized_bounds_tolerate_small_shift(self) -> None:
         sig1 = _action_signature(
-            "WifiSettings",
             Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
         )
         sig2 = _action_signature(
-            "WifiSettings",
             Action(action_type=ActionType.CLICK, target_bounds=[120, 215, 320, 415]),
         )
         assert sig1 == sig2
 
     def test_quantized_bounds_detect_large_shift(self) -> None:
         sig1 = _action_signature(
-            "WifiSettings",
             Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
         )
         sig2 = _action_signature(
-            "WifiSettings",
             Action(action_type=ActionType.CLICK, target_bounds=[100, 600, 300, 800]),
         )
         assert sig1 != sig2
 
-    def test_different_activity(self) -> None:
-        sig1 = _action_signature(
-            "com.android.settings.WifiSettings",
-            Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
-        )
-        sig2 = _action_signature(
-            "com.android.settings.BluetoothSettings",
-            Action(action_type=ActionType.CLICK, target_bounds=[100, 200, 300, 400]),
-        )
-        assert sig1 != sig2
-
     def test_back_action_signature(self) -> None:
-        sig = _action_signature(
-            "com.android.settings.WifiSettings",
-            Action(action_type=ActionType.NAVIGATE_BACK),
-        )
+        sig = _action_signature(Action(action_type=ActionType.NAVIGATE_BACK))
         assert "navigate_back" in sig
         assert "global" in sig
+
+    def test_no_activity_in_signature(self) -> None:
+        sig = _action_signature(
+            Action(action_type=ActionType.CLICK, target_resource_id="id/btn"),
+        )
+        assert "Settings" not in sig
+        assert "SubSettings" not in sig
 
 
 class TestLeaveAppBlacklist:
@@ -680,19 +667,17 @@ class TestLeaveAppBlacklist:
             action_type=ActionType.CLICK,
             target_resource_id="com.android.settings:id/search",
         )
-        sig = _action_signature("Settings", action)
+        sig = _action_signature(action)
         blacklist.add(sig)
         assert sig in blacklist
 
     def test_different_rid_not_blacklisted(self) -> None:
         blacklist: set[str] = set()
         sig1 = _action_signature(
-            "Settings",
             Action(action_type=ActionType.CLICK, target_resource_id="id/search"),
         )
         blacklist.add(sig1)
         sig2 = _action_signature(
-            "Settings",
             Action(action_type=ActionType.CLICK, target_resource_id="id/bluetooth"),
         )
         assert sig2 not in blacklist
@@ -873,7 +858,6 @@ class TestFrontierReplenishment:
         executed: set[str] = set()
         frontier_sigs: set[str] = set()
 
-        activity = "com.android.settings.WifiSettings"
         actions = [
             Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 100, 100]),
             Action(action_type=ActionType.CLICK, target_bounds=[0, 100, 100, 200]),
@@ -883,27 +867,27 @@ class TestFrontierReplenishment:
         # First visit: all 3 added
         added_first = 0
         for a in actions:
-            sig = _action_signature(activity, a)
+            sig = _action_signature(a)
             if sig not in executed and sig not in frontier_sigs:
                 frontier_sigs.add(sig)
                 added_first += 1
         assert added_first == 3
 
         # Execute VPN (first action)
-        vpn_sig = _action_signature(activity, actions[0])
+        vpn_sig = _action_signature(actions[0])
         executed.add(vpn_sig)
         frontier_sigs.discard(vpn_sig)
 
         # Simulate: frontier for Bluetooth and Hotspot drained (nav failure)
-        bt_sig = _action_signature(activity, actions[1])
-        hs_sig = _action_signature(activity, actions[2])
+        bt_sig = _action_signature(actions[1])
+        hs_sig = _action_signature(actions[2])
         frontier_sigs.discard(bt_sig)
         frontier_sigs.discard(hs_sig)
 
         # Second visit: should re-add Bluetooth + Hotspot, NOT VPN
         added_second = 0
         for a in actions:
-            sig = _action_signature(activity, a)
+            sig = _action_signature(a)
             if sig not in executed and sig not in frontier_sigs:
                 frontier_sigs.add(sig)
                 added_second += 1
@@ -913,9 +897,8 @@ class TestFrontierReplenishment:
         executed: set[str] = set()
         frontier_sigs: set[str] = set()
 
-        activity = "com.android.settings.WifiSettings"
         action = Action(action_type=ActionType.CLICK, target_bounds=[0, 0, 100, 100])
-        sig = _action_signature(activity, action)
+        sig = _action_signature(action)
 
         assert sig not in executed and sig not in frontier_sigs
         frontier_sigs.add(sig)
