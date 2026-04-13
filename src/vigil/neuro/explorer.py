@@ -53,6 +53,16 @@ TOGGLE_CLASSES: frozenset[str] = frozenset(
     }
 )
 
+_ACTION_WAIT: dict[ActionType, float] = {
+    ActionType.NAVIGATE_BACK: 0.3,
+    ActionType.NAVIGATE_HOME: 0.3,
+    ActionType.SCROLL_UP: 0.3,
+    ActionType.SCROLL_DOWN: 0.3,
+    ActionType.CLICK: 0.6,
+    ActionType.LONG_PRESS: 0.6,
+    ActionType.INPUT_TEXT: 0.5,
+}
+
 
 @dataclass
 class SmartStoppingContext:
@@ -286,7 +296,7 @@ class AppExplorer:
     """
 
     MAX_BACK_PRESSES = 10
-    MAX_SCROLLS_PER_ELEMENT = 3
+    MAX_SCROLLS_PER_ELEMENT = 8
     STABILITY_WAIT = 0.8
     DEVICE_RETRIES = 3
 
@@ -389,6 +399,9 @@ class AppExplorer:
         forward_edges: dict[str, list[tuple[Action, str]]] = {}
         back_edges: dict[str, str] = {}
 
+        # Track which screens have had actions enumerated (skip on revisit)
+        enumerated_screens: set[str] = set()
+
         # Navigation statistics
         nav_stats: dict[str, int] = {
             "p1_current": 0,
@@ -407,6 +420,9 @@ class AppExplorer:
             "depth_skips": 0,
             "fuzzy_matches": 0,
             "toggle_skips": 0,
+            "back_chain_ok": 0,
+            "back_chain_fail": 0,
+            "keyboard_checks": 0,
         }
 
         skip_actions: set[ActionType] = {
@@ -529,6 +545,13 @@ class AppExplorer:
                         nav_stats["local_nav_fail"] += 1
 
                 if not nav_ok:
+                    nav_ok = self._try_back_to_screen(source_screen_id, screens)
+                    if nav_ok:
+                        nav_stats["back_chain_ok"] += 1
+                    else:
+                        nav_stats["back_chain_fail"] += 1
+
+                if not nav_ok:
                     nav_ok = self._navigate_to_screen_via_replay(
                         source_screen_id, screens, nav_paths
                     )
@@ -568,13 +591,25 @@ class AppExplorer:
                 f"from {source_screen_id}"
             )
             executed = self._execute_action(action)
-            self._wait_for_stability()
+            self._wait_for_stability(action.action_type)
             step += 1
 
             if not executed:
                 continue
 
-            self._dismiss_keyboard_if_showing()
+            # Only check keyboard after actions that could trigger it
+            if (
+                action.action_type in (ActionType.CLICK, ActionType.INPUT_TEXT)
+                and action.target_element_id
+                and source_screen_id in screens
+            ):
+                el_map = {e.element_id: e for e in screens[source_screen_id].elements}
+                target_el = el_map.get(action.target_element_id)
+                if target_el and (
+                    target_el.is_editable or "EditText" in (target_el.class_name or "")
+                ):
+                    self._dismiss_keyboard_if_showing()
+                    nav_stats["keyboard_checks"] += 1
 
             if not self._is_within_app():
                 logger.debug("Left target app, recovering")
@@ -675,11 +710,12 @@ class AppExplorer:
                 if scroll_screens:
                     current_fp = self._identify_current_fp()
 
-            # --- Action enumeration (EVERY visit, dedup-filtered) ---
+            # --- Action enumeration (first visit only, dedup handles revisits) ---
             depth = screen_depth.get(canonical_target_id, 0)
             if depth > max_depth:
                 nav_stats["depth_skips"] += 1
-            else:
+            elif canonical_target_id not in enumerated_screens:
+                enumerated_screens.add(canonical_target_id)
                 new_actions_list = list(enumerate_actions(target_screen, exclude=skip_actions))
                 new_actions_list = apply_smart_stopping(target_screen, new_actions_list, smart_ctx)
                 new_actions_list, tr = _filter_toggle_actions(new_actions_list, target_screen)
@@ -858,9 +894,14 @@ class AppExplorer:
             logger.warning(f"Failed to execute action: {action.action_type.value}")
             return False
 
-    def _wait_for_stability(self) -> None:
+    def _wait_for_stability(self, action_type: ActionType | None = None) -> None:
         """Wait for the screen to stabilize after an action."""
-        time.sleep(self.STABILITY_WAIT)
+        wait = (
+            _ACTION_WAIT.get(action_type, self.STABILITY_WAIT)
+            if action_type
+            else self.STABILITY_WAIT
+        )
+        time.sleep(wait)
 
     def _dismiss_keyboard_if_showing(self) -> None:
         """Detect and dismiss soft keyboard to prevent fingerprint corruption."""
@@ -944,7 +985,7 @@ class AppExplorer:
                 logger.debug("Left app during replay")
                 return False
             self._execute_action(replay_action)
-            self._wait_for_stability()
+            self._wait_for_stability(replay_action.action_type)
 
         arrived = self._verify_arrived_at(target_fp, target_screen)
         if not arrived:
@@ -973,7 +1014,7 @@ class AppExplorer:
                 if edge_target == source_screen_id:
                     logger.debug(f"Local nav: forward to {source_screen_id}")
                     self._execute_action(edge_action)
-                    self._wait_for_stability()
+                    self._wait_for_stability(edge_action.action_type)
                     return self._verify_arrived_at(source_fp, source_screen)
 
         # Back press to parent
@@ -981,8 +1022,7 @@ class AppExplorer:
         if parent == source_screen_id:
             logger.debug(f"Local nav: back to {source_screen_id}")
             self._execute_action(Action(action_type=ActionType.NAVIGATE_BACK))
-            self._wait_for_stability()
-            self._dismiss_keyboard_if_showing()
+            self._wait_for_stability(ActionType.NAVIGATE_BACK)
             return self._verify_arrived_at(source_fp, source_screen)
 
         # Back to parent + forward to sibling
@@ -991,8 +1031,7 @@ class AppExplorer:
                 if edge_target == source_screen_id:
                     logger.debug(f"Local nav: back to {parent} then forward to {source_screen_id}")
                     self._execute_action(Action(action_type=ActionType.NAVIGATE_BACK))
-                    self._wait_for_stability()
-                    self._dismiss_keyboard_if_showing()
+                    self._wait_for_stability(ActionType.NAVIGATE_BACK)
 
                     if parent in screens:
                         parent_screen = screens[parent]
@@ -1001,7 +1040,7 @@ class AppExplorer:
                             return False
 
                     self._execute_action(edge_action)
-                    self._wait_for_stability()
+                    self._wait_for_stability(edge_action.action_type)
                     return self._verify_arrived_at(source_fp, source_screen)
 
         return False
@@ -1091,10 +1130,13 @@ class AppExplorer:
     def _restart_app(self) -> bool:
         """Restart the target app and wait for it to load.
 
-        Returns:
-            True if the app came to foreground, False otherwise.
+        Tries soft restart first (bring to foreground without killing),
+        then falls back to hard restart (kill + relaunch).
         """
         assert self._device is not None
+        self._device.app_start(self._app_package)
+        if self._wait_for_app_foreground(timeout=3.0):
+            return True
         self._device.app_start(self._app_package, stop=True)
         if self._wait_for_app_foreground():
             return True
@@ -1102,6 +1144,28 @@ class AppExplorer:
         self._device.app_start(self._app_package, stop=True)
         time.sleep(3.0)
         return self._wait_for_app_foreground()
+
+    def _try_back_to_screen(
+        self,
+        target_screen_id: str,
+        screens: dict[str, RawScreen],
+        max_presses: int = 3,
+    ) -> bool:
+        """Try pressing back up to max_presses times to reach target screen."""
+        assert self._device is not None
+        target_screen = screens.get(target_screen_id)
+        if target_screen is None:
+            return False
+        target_fp = target_screen.get_structural_fingerprint()
+        for _ in range(max_presses):
+            self._device.press("back")
+            time.sleep(0.4)
+            if not self._is_within_app():
+                self._restart_app()
+                return False
+            if self._verify_arrived_at(target_fp, target_screen):
+                return True
+        return False
 
     def _identify_current_screen(self) -> tuple[str, RawScreen | None]:
         """Capture the current screen and return (fingerprint, screen)."""
