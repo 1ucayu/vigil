@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
+from vigil.models.fsm import (
+    AbstractState,
+    AppFSM,
+    ContainerType,
+    HierarchyLevel,
+    SubFsmTemplate,
+    Transition,
+)
 from vigil.neuro.fsm_builder import FsmBuilder
 
 TRACE_PATH = (
@@ -761,3 +768,209 @@ class TestToggleSelfLoops:
         assert FsmBuilder._is_toggle_action(trace_toggle, raw_screens) is True
         assert FsmBuilder._is_toggle_action(trace_normal, raw_screens) is False
         assert FsmBuilder._is_toggle_action(trace_missing, raw_screens) is False
+
+
+# ── Sub-FSM Template tests ──────────────────────────────────────────
+
+
+class TestBuildSubFsmTemplates:
+    @staticmethod
+    def _make_dynamic_fsm() -> AppFSM:
+        """FSM: list_state (DYNAMIC) -click-> detail_1, detail_2, detail_3 (same fp)."""
+        fsm = AppFSM(app_package="com.test.app")
+        list_state = AbstractState(
+            state_id="s_list",
+            name="ItemList",
+            fingerprint="fp_list",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            container_type=ContainerType.DYNAMIC,
+        )
+        fsm.add_state(list_state)
+        for i in range(1, 4):
+            fsm.add_state(
+                AbstractState(
+                    state_id=f"s_detail_{i}",
+                    name=f"Detail {i}",
+                    fingerprint="fp_detail_shared",
+                    hierarchy_level=HierarchyLevel.FRAGMENT,
+                )
+            )
+            fsm.add_transition(
+                Transition(
+                    source="s_list",
+                    target=f"s_detail_{i}",
+                    action={"type": "click"},
+                    observed_count=1,
+                )
+            )
+        # Add a non-click transition (back) that should not be collapsed
+        fsm.add_state(
+            AbstractState(
+                state_id="s_home",
+                name="Home",
+                fingerprint="fp_home",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="s_list",
+                target="s_home",
+                action={"type": "navigate_back"},
+                observed_count=1,
+            )
+        )
+        fsm.initial_state = "s_home"
+        return fsm
+
+    def test_creates_template_for_dynamic_container(self) -> None:
+        fsm = self._make_dynamic_fsm()
+        builder = FsmBuilder("com.test.app")
+        count = builder._build_sub_fsm_templates(fsm)
+        assert count == 1
+        assert "tmpl_s_list" in fsm.sub_fsm_templates
+
+    def test_template_references_source_state(self) -> None:
+        fsm = self._make_dynamic_fsm()
+        builder = FsmBuilder("com.test.app")
+        builder._build_sub_fsm_templates(fsm)
+
+        tmpl = fsm.sub_fsm_templates["tmpl_s_list"]
+        assert tmpl.source_state_id == "s_list"
+        assert tmpl.entry_fingerprint == "fp_detail_shared"
+        assert tmpl.parameter_schema == {"selected_item": "string"}
+
+    def test_state_gets_template_id(self) -> None:
+        fsm = self._make_dynamic_fsm()
+        builder = FsmBuilder("com.test.app")
+        builder._build_sub_fsm_templates(fsm)
+        assert fsm.states["s_list"].sub_fsm_template_id == "tmpl_s_list"
+
+    def test_collapses_duplicate_targets(self) -> None:
+        fsm = self._make_dynamic_fsm()
+        assert len(fsm.states) == 5  # list + 3 details + home
+        builder = FsmBuilder("com.test.app")
+        builder._build_sub_fsm_templates(fsm)
+        # 2 detail states should be removed (one representative kept)
+        detail_states = [s for s in fsm.states if s.startswith("s_detail_")]
+        assert len(detail_states) == 1
+
+    def test_back_transition_preserved(self) -> None:
+        fsm = self._make_dynamic_fsm()
+        builder = FsmBuilder("com.test.app")
+        builder._build_sub_fsm_templates(fsm)
+        back_transitions = [t for t in fsm.transitions if t.action.get("type") == "navigate_back"]
+        assert len(back_transitions) == 1
+        assert back_transitions[0].source == "s_list"
+        assert back_transitions[0].target == "s_home"
+
+    def test_no_template_for_static_container(self) -> None:
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s1",
+                name="Settings",
+                fingerprint="fp_s1",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.STATIC,
+            )
+        )
+        builder = FsmBuilder("com.test.app")
+        count = builder._build_sub_fsm_templates(fsm)
+        assert count == 0
+        assert fsm.sub_fsm_templates == {}
+
+    def test_no_template_for_single_target(self) -> None:
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s1",
+                name="List",
+                fingerprint="fp_list",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="s2",
+                name="Detail",
+                fingerprint="fp_detail",
+                hierarchy_level=HierarchyLevel.FRAGMENT,
+            )
+        )
+        fsm.add_transition(Transition(source="s1", target="s2", action={"type": "click"}))
+        builder = FsmBuilder("com.test.app")
+        count = builder._build_sub_fsm_templates(fsm)
+        assert count == 0
+
+    def test_serialization_roundtrip(self, tmp_path: Path) -> None:
+        fsm = self._make_dynamic_fsm()
+        builder = FsmBuilder("com.test.app")
+        builder._build_sub_fsm_templates(fsm)
+
+        path = tmp_path / "fsm.json"
+        fsm.serialize(path)
+
+        restored = AppFSM.deserialize(path)
+        assert "tmpl_s_list" in restored.sub_fsm_templates
+        tmpl = restored.sub_fsm_templates["tmpl_s_list"]
+        assert tmpl.source_state_id == "s_list"
+        assert tmpl.entry_fingerprint == "fp_detail_shared"
+        assert restored.states["s_list"].sub_fsm_template_id == "tmpl_s_list"
+
+
+class TestTemplateBasedValidation:
+    def test_click_valid_via_template(self) -> None:
+        """DYNAMIC state with template: click is valid even without explicit edge."""
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_list",
+                name="List",
+                fingerprint="fp_list",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+                sub_fsm_template_id="tmpl_1",
+            )
+        )
+        fsm.sub_fsm_templates["tmpl_1"] = SubFsmTemplate(
+            template_id="tmpl_1",
+            source_state_id="s_list",
+            entry_fingerprint="fp_detail",
+        )
+        assert fsm.is_valid_transition("s_list", {"type": "click"}) is True
+
+    def test_non_click_not_valid_via_template(self) -> None:
+        """Template only covers click — scroll_up should still fail."""
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_list",
+                name="List",
+                fingerprint="fp_list",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+                sub_fsm_template_id="tmpl_1",
+            )
+        )
+        fsm.sub_fsm_templates["tmpl_1"] = SubFsmTemplate(
+            template_id="tmpl_1",
+            source_state_id="s_list",
+            entry_fingerprint="fp_detail",
+        )
+        assert fsm.is_valid_transition("s_list", {"type": "scroll_up"}) is False
+
+    def test_static_state_no_template_fallthrough(self) -> None:
+        """STATIC state: no template lookup, normal edge check only."""
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s1",
+                name="Settings",
+                fingerprint="fp_s1",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.STATIC,
+            )
+        )
+        assert fsm.is_valid_transition("s1", {"type": "click"}) is False

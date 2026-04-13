@@ -3,7 +3,10 @@
 from vigil.models.fsm import (
     AbstractState,
     AppFSM,
+    ContainerType,
     HierarchyLevel,
+    StateSemanticProfile,
+    SubFsmTemplate,
     Transition,
 )
 from vigil.models.state import UIElement
@@ -107,3 +110,274 @@ class TestAppFsmSerialization:
         assert len(restored.transitions) == 1
         assert restored.initial_state == "s_001"
         assert restored.states["s_001"].name == "Home"
+
+
+# --- ContainerType ---
+
+
+class TestContainerType:
+    def test_enum_values(self):
+        assert ContainerType.STATIC == "static"
+        assert ContainerType.DYNAMIC == "dynamic"
+        assert ContainerType.NONE == "none"
+        assert set(ContainerType) == {
+            ContainerType.STATIC,
+            ContainerType.DYNAMIC,
+            ContainerType.NONE,
+        }
+
+    def test_default_container_type(self):
+        state = _make_state("s_001")
+        assert state.container_type == ContainerType.NONE
+        assert state.container_resource_id is None
+
+    def test_explicit_container_type(self):
+        state = _make_state(
+            "s_001",
+            container_type=ContainerType.DYNAMIC,
+            container_resource_id="com.app:id/wifi_list",
+        )
+        assert state.container_type == ContainerType.DYNAMIC
+        assert state.container_resource_id == "com.app:id/wifi_list"
+
+    def test_serialization_roundtrip(self, tmp_path):
+        fsm = AppFSM("com.test.app")
+        fsm.add_state(
+            _make_state(
+                "s_001",
+                container_type=ContainerType.DYNAMIC,
+                container_resource_id="com.app:id/list",
+            )
+        )
+        fsm.add_state(_make_state("s_002", container_type=ContainerType.STATIC))
+        fsm.initial_state = "s_001"
+
+        path = tmp_path / "fsm.json"
+        fsm.serialize(path)
+
+        restored = AppFSM.deserialize(path)
+        assert restored.states["s_001"].container_type == ContainerType.DYNAMIC
+        assert restored.states["s_001"].container_resource_id == "com.app:id/list"
+        assert restored.states["s_002"].container_type == ContainerType.STATIC
+        assert restored.states["s_002"].container_resource_id is None
+
+    def test_backward_compat_missing_fields(self, tmp_path):
+        """FSM JSON without container fields still deserializes (fields get defaults)."""
+        import json
+
+        data = {
+            "app_package": "com.test.app",
+            "version": "0.1.0",
+            "initial_state": "s1",
+            "states": {
+                "s1": {
+                    "state_id": "s1",
+                    "name": "Home",
+                    "fingerprint": "abc123",
+                    "hierarchy_level": "activity",
+                }
+            },
+            "transitions": [],
+        }
+        path = tmp_path / "old_fsm.json"
+        path.write_text(json.dumps(data))
+
+        restored = AppFSM.deserialize(path)
+        assert restored.states["s1"].container_type == ContainerType.NONE
+        assert restored.states["s1"].container_resource_id is None
+
+
+# --- StateSemanticProfile ---
+
+
+class TestStateSemanticProfile:
+    def test_defaults(self):
+        profile = StateSemanticProfile()
+        assert profile.alt_text == ""
+        assert profile.page_function == ""
+        assert profile.expected_actions == []
+        assert profile.icon_labels == {}
+        assert profile.generation_confidence == 0.0
+
+    def test_populated(self):
+        profile = StateSemanticProfile(
+            alt_text="WiFi network list showing available networks",
+            page_function="settings/wifi/list",
+            expected_actions=["connect_to_wifi", "forget_network"],
+            icon_labels={"e_0042": "settings_gear", "e_0043": "info_icon"},
+            generation_confidence=0.95,
+        )
+        assert profile.page_function == "settings/wifi/list"
+        assert len(profile.icon_labels) == 2
+        assert profile.icon_labels["e_0042"] == "settings_gear"
+
+    def test_on_abstract_state(self):
+        profile = StateSemanticProfile(
+            alt_text="WiFi list",
+            page_function="settings/wifi",
+        )
+        state = _make_state("s_001", semantic_profile=profile)
+        assert state.semantic_profile is not None
+        assert state.semantic_profile.page_function == "settings/wifi"
+
+    def test_abstract_state_defaults_none(self):
+        state = _make_state("s_001")
+        assert state.semantic_profile is None
+        assert state.state_invariants == []
+        assert state.invariant_confidence == 0.0
+        assert state.sub_fsm_template_id is None
+
+
+# --- State invariants on AbstractState ---
+
+
+class TestStateInvariants:
+    def test_state_invariants_populated(self):
+        state = _make_state(
+            "s_001",
+            state_invariants=[
+                "count(recycler_view) > 0",
+                'read(action_bar_title, text) != ""',
+            ],
+            invariant_confidence=0.85,
+        )
+        assert len(state.state_invariants) == 2
+        assert state.invariant_confidence == 0.85
+
+    def test_serialization_roundtrip_with_invariants(self, tmp_path):
+        fsm = AppFSM("com.test.app")
+        fsm.add_state(
+            _make_state(
+                "s_001",
+                semantic_profile=StateSemanticProfile(
+                    alt_text="Home screen",
+                    page_function="home",
+                    generation_confidence=0.9,
+                ),
+                state_invariants=['read(title, text) != ""'],
+                invariant_confidence=0.9,
+            )
+        )
+        fsm.initial_state = "s_001"
+
+        path = tmp_path / "fsm.json"
+        fsm.serialize(path)
+
+        restored = AppFSM.deserialize(path)
+        s = restored.states["s_001"]
+        assert s.semantic_profile is not None
+        assert s.semantic_profile.alt_text == "Home screen"
+        assert s.semantic_profile.generation_confidence == 0.9
+        assert s.state_invariants == ['read(title, text) != ""']
+        assert s.invariant_confidence == 0.9
+
+
+# --- SubFsmTemplate ---
+
+
+class TestSubFsmTemplate:
+    def test_basic_template(self):
+        tmpl = SubFsmTemplate(
+            template_id="tmpl_wifi_detail",
+            source_state_id="s_wifi_list",
+            entry_fingerprint="fp_detail",
+            parameter_schema={"ssid": "string", "security": "string"},
+            item_skeleton="sk_wifi_item",
+        )
+        assert tmpl.template_id == "tmpl_wifi_detail"
+        assert tmpl.parameter_schema["ssid"] == "string"
+        assert tmpl.states == {}
+        assert tmpl.transitions == []
+
+    def test_template_with_states_and_transitions(self):
+        detail_state = _make_state("tmpl_s1", name="DetailView")
+        confirm_state = _make_state("tmpl_s2", name="ConfirmDialog")
+        tmpl = SubFsmTemplate(
+            template_id="tmpl_1",
+            source_state_id="s_list",
+            entry_fingerprint="fp_detail",
+            states={"tmpl_s1": detail_state, "tmpl_s2": confirm_state},
+            transitions=[
+                Transition(
+                    source="tmpl_s1",
+                    target="tmpl_s2",
+                    action={"type": "click"},
+                )
+            ],
+        )
+        assert len(tmpl.states) == 2
+        assert len(tmpl.transitions) == 1
+
+    def test_appfsm_sub_fsm_templates(self):
+        fsm = AppFSM("com.test.app")
+        tmpl = SubFsmTemplate(
+            template_id="tmpl_1",
+            source_state_id="s_list",
+            entry_fingerprint="fp_detail",
+        )
+        fsm.sub_fsm_templates[tmpl.template_id] = tmpl
+        assert "tmpl_1" in fsm.sub_fsm_templates
+
+    def test_serialization_roundtrip_with_templates(self, tmp_path):
+        fsm = AppFSM("com.test.app")
+        fsm.add_state(
+            _make_state(
+                "s_list",
+                container_type=ContainerType.DYNAMIC,
+                sub_fsm_template_id="tmpl_1",
+            )
+        )
+        fsm.initial_state = "s_list"
+
+        detail = _make_state("tmpl_s1", name="Detail")
+        tmpl = SubFsmTemplate(
+            template_id="tmpl_1",
+            source_state_id="s_list",
+            entry_fingerprint="fp_detail",
+            states={"tmpl_s1": detail},
+            transitions=[Transition(source="tmpl_s1", target="tmpl_s1", action={"type": "click"})],
+            parameter_schema={"item_name": "string"},
+            item_skeleton="sk_item",
+        )
+        fsm.sub_fsm_templates["tmpl_1"] = tmpl
+
+        path = tmp_path / "fsm.json"
+        fsm.serialize(path)
+
+        restored = AppFSM.deserialize(path)
+        assert restored.states["s_list"].sub_fsm_template_id == "tmpl_1"
+        assert "tmpl_1" in restored.sub_fsm_templates
+        rt = restored.sub_fsm_templates["tmpl_1"]
+        assert rt.source_state_id == "s_list"
+        assert rt.entry_fingerprint == "fp_detail"
+        assert "tmpl_s1" in rt.states
+        assert rt.states["tmpl_s1"].name == "Detail"
+        assert len(rt.transitions) == 1
+        assert rt.parameter_schema == {"item_name": "string"}
+        assert rt.item_skeleton == "sk_item"
+
+    def test_backward_compat_no_templates(self, tmp_path):
+        """Old FSM JSON without sub_fsm_templates still deserializes."""
+        import json
+
+        data = {
+            "app_package": "com.test.app",
+            "version": "0.1.0",
+            "initial_state": "s1",
+            "states": {
+                "s1": {
+                    "state_id": "s1",
+                    "name": "Home",
+                    "fingerprint": "abc123",
+                    "hierarchy_level": "activity",
+                }
+            },
+            "transitions": [],
+        }
+        path = tmp_path / "old_fsm.json"
+        path.write_text(json.dumps(data))
+
+        restored = AppFSM.deserialize(path)
+        assert restored.sub_fsm_templates == {}
+        assert restored.states["s1"].semantic_profile is None
+        assert restored.states["s1"].state_invariants == []

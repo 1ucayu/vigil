@@ -3,13 +3,18 @@
 BFS/DFS traversal of Android app screens. At each screen, enumerates interactable
 elements, executes each action, and records the resulting screen (accessibility tree
 XML + screenshot PNG + element list).
+
+Smart stopping: when a scrollable container has homogeneous children (≥60% share
+the same element skeleton AND ≥3 such children), only 2 representative item clicks
+are explored instead of all N — reducing per-container cost from O(N) to O(1).
 """
 
 from __future__ import annotations
 
 import json
 import time
-from collections import deque
+from collections import Counter, deque
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,7 +27,148 @@ from vigil.core.action_types import enumerate_actions
 from vigil.core.config import VigilConfig
 from vigil.core.ui_parser import parse_hierarchy_xml
 from vigil.models.action import Action, ActionType
-from vigil.models.state import RawScreen
+from vigil.models.state import RawScreen, UIElement
+
+SMART_STOP_HOMOGENEITY_THRESHOLD = 0.6
+SMART_STOP_MIN_ITEMS = 3
+SMART_STOP_REPRESENTATIVES = 2
+
+
+@dataclass
+class SmartStoppingContext:
+    """Tracks dynamic container verification state during exploration."""
+
+    pending: dict[str, dict[str, Any]] = field(default_factory=dict)
+    verified_dynamic: set[str] = field(default_factory=set)
+    verified_static: set[str] = field(default_factory=set)
+
+
+def analyze_container_homogeneity(
+    container: UIElement,
+    elements_by_id: dict[str, UIElement],
+) -> tuple[Any, float, list[UIElement]]:
+    """Compute dominant skeleton and homogeneity ratio for a container's children.
+
+    Returns:
+        (dominant_skeleton, ratio, children_with_dominant_skeleton)
+        ratio is 0.0 if the container has fewer than SMART_STOP_MIN_ITEMS children.
+    """
+    children = [elements_by_id[cid] for cid in container.children if cid in elements_by_id]
+    if len(children) < SMART_STOP_MIN_ITEMS:
+        return None, 0.0, []
+
+    skeletons = [c.get_skeleton(elements_by_id) for c in children]
+    counts = Counter(skeletons)
+    dominant_skeleton, dominant_count = counts.most_common(1)[0]
+    ratio = dominant_count / len(children)
+
+    matching = [c for c, sk in zip(children, skeletons, strict=True) if sk == dominant_skeleton]
+    return dominant_skeleton, ratio, matching
+
+
+def pick_representatives(matching_children: list[UIElement]) -> list[UIElement]:
+    """Pick first and last children with the dominant skeleton."""
+    if len(matching_children) <= SMART_STOP_REPRESENTATIVES:
+        return list(matching_children)
+    return [matching_children[0], matching_children[-1]]
+
+
+def apply_smart_stopping(
+    screen: RawScreen,
+    actions: list[Action],
+    ctx: SmartStoppingContext,
+) -> list[Action]:
+    """Filter actions via smart stopping — skip redundant item clicks in homogeneous containers.
+
+    Pure function: mutates `ctx` (records pending info) but does not touch the device.
+
+    Returns:
+        Filtered list of actions.
+    """
+    elements_by_id = {e.element_id: e for e in screen.elements}
+    scrollable = [e for e in screen.elements if e.is_scrollable and e.children]
+
+    skip_element_ids: set[str] = set()
+
+    for container in scrollable:
+        container_fp = _container_fingerprint(screen, container)
+
+        if container_fp in ctx.verified_dynamic:
+            for cid in container.children:
+                child = elements_by_id.get(cid)
+                if child and child.is_clickable:
+                    skip_element_ids.add(cid)
+            continue
+
+        if container_fp in ctx.verified_static:
+            continue
+
+        dominant, ratio, matching = analyze_container_homogeneity(container, elements_by_id)
+        if ratio < SMART_STOP_HOMOGENEITY_THRESHOLD:
+            continue
+
+        reps = pick_representatives(matching)
+        rep_ids = {r.element_id for r in reps}
+
+        for cid in container.children:
+            child = elements_by_id.get(cid)
+            if child and child.is_clickable and cid not in rep_ids:
+                skip_element_ids.add(cid)
+
+        ctx.pending[container_fp] = {
+            "source_screen_id": screen.screen_id,
+            "dominant_skeleton": str(dominant),
+            "total_items": len(container.children),
+            "representative_element_ids": [r.element_id for r in reps],
+            "detail_fingerprints": [],
+        }
+
+    if not skip_element_ids:
+        return actions
+    return [a for a in actions if a.target_element_id not in skip_element_ids]
+
+
+def record_detail_fingerprint(
+    ctx: SmartStoppingContext,
+    source_screen_id: str,
+    target_element_id: str,
+    detail_fingerprint: str,
+) -> None:
+    """Record the fingerprint of a detail page reached from a representative click."""
+    for fp, info in ctx.pending.items():
+        if source_screen_id != info["source_screen_id"]:
+            continue
+        if target_element_id in info["representative_element_ids"]:
+            info["detail_fingerprints"].append(detail_fingerprint)
+            if len(info["detail_fingerprints"]) >= SMART_STOP_REPRESENTATIVES:
+                verify_dynamic_container(ctx, fp)
+            return
+
+
+def verify_dynamic_container(ctx: SmartStoppingContext, container_fp: str) -> None:
+    """After both representatives explored, compare detail fingerprints."""
+    info = ctx.pending.get(container_fp)
+    if info is None:
+        return
+    fps = info["detail_fingerprints"]
+    if len(fps) >= 2 and len(set(fps)) == 1:
+        ctx.verified_dynamic.add(container_fp)
+        logger.info(
+            f"Container {container_fp[:12]} confirmed DYNAMIC "
+            f"({info['total_items']} items, detail_fp={fps[0][:12]})"
+        )
+    else:
+        ctx.verified_static.add(container_fp)
+        logger.info(f"Container {container_fp[:12]} confirmed STATIC (heterogeneous detail pages)")
+    del ctx.pending[container_fp]
+
+
+def _container_fingerprint(screen: RawScreen, container: UIElement) -> str:
+    """Stable fingerprint for a scrollable container within a screen."""
+    import hashlib
+
+    key = f"{screen.activity_name}:{container.resource_id}:{container.class_name}:{container.depth}"
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 class ExplorationTrace(BaseModel):
@@ -163,9 +309,11 @@ class AppExplorer:
         # Build frontier: (screen_id, action) pairs.
         # Exclude navigate_back for initial screen — it exits the app.
         frontier: deque[tuple[str, Action]] = deque()
-        for action in enumerate_actions(initial_screen, exclude=skip_actions):
-            if action.action_type == ActionType.NAVIGATE_BACK:
-                continue
+        smart_ctx = SmartStoppingContext()
+        initial_actions = enumerate_actions(initial_screen, exclude=skip_actions)
+        initial_actions = [a for a in initial_actions if a.action_type != ActionType.NAVIGATE_BACK]
+        initial_actions = apply_smart_stopping(initial_screen, initial_actions, smart_ctx)
+        for action in initial_actions:
             frontier.append((initial_screen.screen_id, action))
 
         max_steps = self._config.app.max_exploration_steps
@@ -253,6 +401,11 @@ class AppExplorer:
             traces.append(trace)
             current_fp = target_fp
 
+            # Record detail fingerprint for smart stopping verification
+            record_detail_fingerprint(
+                smart_ctx, source_screen_id, action.target_element_id or "", target_fp
+            )
+
             # Check if this is a new screen
             if target_fp not in visited:
                 visited.add(target_fp)
@@ -272,7 +425,9 @@ class AppExplorer:
                 )
 
                 # Enumerate actions for the new screen and add to frontier
-                for new_action in enumerate_actions(target_screen, exclude=skip_actions):
+                new_actions = enumerate_actions(target_screen, exclude=skip_actions)
+                new_actions = apply_smart_stopping(target_screen, new_actions, smart_ctx)
+                for new_action in new_actions:
                     frontier.append((target_screen.screen_id, new_action))
 
                 # Handle scrollable content
@@ -287,6 +442,7 @@ class AppExplorer:
                         # Use the original screen_id as source since we're still
                         # on the same logical page, just scrolled down.
                         new_actions = enumerate_actions(ss, exclude=skip_actions)
+                        new_actions = apply_smart_stopping(ss, new_actions, smart_ctx)
                         for new_action in new_actions:
                             frontier.append((target_screen.screen_id, new_action))
                         logger.info(

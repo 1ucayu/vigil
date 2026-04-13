@@ -11,7 +11,16 @@ from vigil.core.config import VigilConfig
 from vigil.core.ui_parser import parse_bounds, parse_hierarchy_xml
 from vigil.models.action import Action, ActionType
 from vigil.models.state import RawScreen, UIElement
-from vigil.neuro.explorer import AppExplorer, ExplorationResult, ExplorationTrace
+from vigil.neuro.explorer import (
+    AppExplorer,
+    ExplorationResult,
+    ExplorationTrace,
+    SmartStoppingContext,
+    analyze_container_homogeneity,
+    apply_smart_stopping,
+    pick_representatives,
+    record_detail_fingerprint,
+)
 
 # === Sample XML for testing ===
 
@@ -361,3 +370,187 @@ class TestAppExplorer:
             mock_u2.connect.return_value = mock_device
             result = explorer.explore()
         assert result.total_steps <= 5
+
+
+# ============================================================
+# Smart Stopping tests
+# ============================================================
+
+
+def _make_item(eid: str, **overrides) -> UIElement:
+    """Clickable list item with default skeleton."""
+    defaults = {
+        "element_id": eid,
+        "class_name": "android.widget.LinearLayout",
+        "resource_id": "com.app:id/item",
+        "is_clickable": True,
+        "is_enabled": True,
+        "bounds": [0, 0, 1080, 100],
+    }
+    defaults.update(overrides)
+    return UIElement(**defaults)
+
+
+def _make_container_screen(
+    item_count: int = 10,
+    heterogeneous_indices: set[int] | None = None,
+) -> RawScreen:
+    """Build a screen with a scrollable container holding `item_count` clickable items.
+
+    Items at `heterogeneous_indices` get a different class_name to break homogeneity.
+    """
+    children_ids = [f"e_{i:03d}" for i in range(item_count)]
+    container = UIElement(
+        element_id="e_container",
+        class_name="android.widget.RecyclerView",
+        resource_id="com.app:id/list",
+        is_scrollable=True,
+        is_enabled=True,
+        bounds=[0, 0, 1080, 1920],
+        children=children_ids,
+    )
+    items: list[UIElement] = []
+    het = heterogeneous_indices or set()
+    for i in range(item_count):
+        cls = "android.widget.Button" if i in het else "android.widget.LinearLayout"
+        items.append(
+            _make_item(
+                f"e_{i:03d}",
+                class_name=cls,
+                resource_id="com.app:id/item",
+            )
+        )
+
+    return RawScreen(
+        screen_id="scr_list",
+        activity_name="com.app.ListActivity",
+        elements=[container, *items],
+    )
+
+
+class TestAnalyzeContainerHomogeneity:
+    def test_homogeneous_container(self) -> None:
+        screen = _make_container_screen(10)
+        ebi = {e.element_id: e for e in screen.elements}
+        container = ebi["e_container"]
+        dominant, ratio, matching = analyze_container_homogeneity(container, ebi)
+        assert dominant is not None
+        assert ratio == 1.0
+        assert len(matching) == 10
+
+    def test_heterogeneous_container(self) -> None:
+        screen = _make_container_screen(10, heterogeneous_indices={0, 1, 2, 3, 4})
+        ebi = {e.element_id: e for e in screen.elements}
+        container = ebi["e_container"]
+        _, ratio, _ = analyze_container_homogeneity(container, ebi)
+        assert ratio == 0.5  # 5/10
+
+    def test_too_few_children(self) -> None:
+        screen = _make_container_screen(2)
+        ebi = {e.element_id: e for e in screen.elements}
+        container = ebi["e_container"]
+        _, ratio, _ = analyze_container_homogeneity(container, ebi)
+        assert ratio == 0.0
+
+
+class TestPickRepresentatives:
+    def test_picks_first_and_last(self) -> None:
+        items = [_make_item(f"e_{i}") for i in range(10)]
+        reps = pick_representatives(items)
+        assert len(reps) == 2
+        assert reps[0].element_id == "e_0"
+        assert reps[1].element_id == "e_9"
+
+    def test_returns_all_if_small(self) -> None:
+        items = [_make_item("e_0"), _make_item("e_1")]
+        reps = pick_representatives(items)
+        assert len(reps) == 2
+
+
+class TestApplySmartStopping:
+    @staticmethod
+    def _click(eid: str) -> Action:
+        return Action(
+            action_type=ActionType.CLICK,
+            target_element_id=eid,
+            target_bounds=[0, 0, 1, 1],
+        )
+
+    def test_homogeneous_list_filters_to_2(self) -> None:
+        screen = _make_container_screen(10)
+        actions = [self._click(f"e_{i:03d}") for i in range(10)]
+        ctx = SmartStoppingContext()
+        filtered = apply_smart_stopping(screen, actions, ctx)
+        assert len(filtered) == 2
+        ids = {a.target_element_id for a in filtered}
+        assert "e_000" in ids
+        assert "e_009" in ids
+
+    def test_heterogeneous_keeps_all(self) -> None:
+        screen = _make_container_screen(10, heterogeneous_indices={0, 1, 2, 3, 4})
+        actions = [self._click(f"e_{i:03d}") for i in range(10)]
+        ctx = SmartStoppingContext()
+        filtered = apply_smart_stopping(screen, actions, ctx)
+        assert len(filtered) == 10
+
+    def test_verified_dynamic_skips_all(self) -> None:
+        screen = _make_container_screen(5)
+        ebi = {e.element_id: e for e in screen.elements}
+        container = ebi["e_container"]
+        from vigil.neuro.explorer import _container_fingerprint
+
+        cfp = _container_fingerprint(screen, container)
+        ctx = SmartStoppingContext(verified_dynamic={cfp})
+
+        actions = [self._click(f"e_{i:03d}") for i in range(5)]
+        filtered = apply_smart_stopping(screen, actions, ctx)
+        assert len(filtered) == 0
+
+    def test_non_click_actions_preserved(self) -> None:
+        screen = _make_container_screen(10)
+        actions = [self._click(f"e_{i:03d}") for i in range(10)]
+        actions.append(Action(action_type=ActionType.NAVIGATE_BACK))
+        actions.append(
+            Action(
+                action_type=ActionType.SCROLL_DOWN,
+                target_element_id="e_container",
+                target_bounds=[0, 0, 1, 1],
+            )
+        )
+        ctx = SmartStoppingContext()
+        filtered = apply_smart_stopping(screen, actions, ctx)
+        types = {a.action_type for a in filtered}
+        assert ActionType.NAVIGATE_BACK in types
+        assert ActionType.SCROLL_DOWN in types
+
+
+class TestVerifyDynamicContainer:
+    def test_matching_fingerprints_mark_dynamic(self) -> None:
+        ctx = SmartStoppingContext()
+        ctx.pending["cfp_1"] = {
+            "source_screen_id": "scr_list",
+            "dominant_skeleton": "sk",
+            "total_items": 10,
+            "representative_element_ids": ["e_000", "e_009"],
+            "detail_fingerprints": [],
+        }
+        record_detail_fingerprint(ctx, "scr_list", "e_000", "fp_detail_A")
+        assert "cfp_1" in ctx.pending
+
+        record_detail_fingerprint(ctx, "scr_list", "e_009", "fp_detail_A")
+        assert "cfp_1" not in ctx.pending
+        assert "cfp_1" in ctx.verified_dynamic
+
+    def test_different_fingerprints_mark_static(self) -> None:
+        ctx = SmartStoppingContext()
+        ctx.pending["cfp_2"] = {
+            "source_screen_id": "scr_list",
+            "dominant_skeleton": "sk",
+            "total_items": 10,
+            "representative_element_ids": ["e_000", "e_009"],
+            "detail_fingerprints": [],
+        }
+        record_detail_fingerprint(ctx, "scr_list", "e_000", "fp_detail_A")
+        record_detail_fingerprint(ctx, "scr_list", "e_009", "fp_detail_B")
+        assert "cfp_2" not in ctx.pending
+        assert "cfp_2" in ctx.verified_static

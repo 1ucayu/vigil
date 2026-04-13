@@ -1,10 +1,15 @@
 """CLI entry point: vigil-build.
 
-Builds an FSM from exploration traces.
+Builds an FSM from exploration traces, optionally running the full pipeline:
+  Stage 0  → App prior extraction (--manifest)
+  Stage 1-3 → FSM construction from trace
+  Stage 2.5 → Semantic grounding (--ground)
+  Stage 4  → DSL guard generation (--generate-guards)
 
 Usage:
     vigil-build --trace <trace.json>
-    vigil-build --trace <trace.json> --output <fsm.json>
+    vigil-build --trace <trace.json> --manifest AndroidManifest.xml --ground
+    vigil-build --trace <trace.json> --generate-guards
 """
 
 from __future__ import annotations
@@ -57,6 +62,26 @@ def main() -> None:
         default=None,
         help="Load existing FSM JSON instead of building from trace (use with --generate-guards)",
     )
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        help="Path to AndroidManifest.xml for Stage 0 app prior extraction",
+    )
+    parser.add_argument(
+        "--ground",
+        action="store_true",
+        help="Run Stage 2.5 semantic grounding after FSM construction",
+    )
+    parser.add_argument(
+        "--ground-icons",
+        action="store_true",
+        help="Include icon annotation in grounding (requires screenshots)",
+    )
+    parser.add_argument(
+        "--mine-invariants",
+        action="store_true",
+        help="Run invariant mining in grounding (requires multi-visit data)",
+    )
 
     args = parser.parse_args()
 
@@ -65,15 +90,28 @@ def main() -> None:
         logger.error(f"Trace file not found: {trace_path}")
         raise SystemExit(1)
 
-    # Auto-detect app package from trace
     trace_data = json.loads(trace_path.read_text(encoding="utf-8"))
     app_package = args.app or trace_data.get("app_package", "unknown")
     app_name = app_package.rsplit(".", maxsplit=1)[-1]
 
-    # Determine output path
     output_path = Path(args.output) if args.output else Path(f"models/bundles/{app_name}/fsm.json")
 
-    # Build or load FSM
+    # Stage 0: App prior extraction (optional)
+    prior = None
+    if args.manifest:
+        from vigil.neuro.app_prior import AppPriorExtractor
+
+        manifest_path = Path(args.manifest)
+        if not manifest_path.exists():
+            logger.error(f"Manifest not found: {manifest_path}")
+            raise SystemExit(1)
+        prior = AppPriorExtractor().extract_from_manifest(manifest_path)
+        logger.info(
+            f"Stage 0: extracted prior for {prior.package_name} "
+            f"({len(prior.activities)} activities, entry={prior.entry_activity})"
+        )
+
+    # Stages 1-3: Build or load FSM
     if args.fsm:
         from vigil.models.fsm import AppFSM
 
@@ -91,6 +129,19 @@ def main() -> None:
             trace_path=trace_path,
             include_self_loops=args.include_self_loops,
         )
+
+    # Stage 2.5: Semantic grounding (optional)
+    if args.ground:
+        from vigil.core.config import VigilConfig
+        from vigil.core.llm_client import LlmClient
+        from vigil.neuro.semantic_grounder import SemanticGrounder
+
+        config = VigilConfig.from_yaml("configs/default.yaml")
+        llm = LlmClient(config.llm)
+        grounder = SemanticGrounder(llm)
+        raw_screens = trace_data.get("screens", {})
+        fsm = grounder.ground_all_states(fsm, raw_screens, prior, trace_data)
+        logger.info("Stage 2.5: semantic grounding complete")
 
     # Stage 4: DSL guard generation (optional)
     if args.generate_guards:

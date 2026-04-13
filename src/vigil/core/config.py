@@ -32,16 +32,37 @@ class ApeConfig(BaseModel):
     ape_mode: Literal["sata", "random"] = "sata"
 
 
+PROXY_CHAT_MODELS: list[str] = [
+    "claude-sonnet-4.6",
+    "claude-opus-4.6",
+    "claude-opus-4.6-1m",
+    "claude-sonnet-4.5",
+    "claude-opus-4.5",
+    "claude-haiku-4.5",
+    "claude-sonnet-4",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.2",
+    "gpt-5.1",
+    "gpt-5-mini",
+    "gpt-4.1",
+    "gpt-4o",
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-2.5-pro",
+]
+
+
 class LLMConfig(BaseModel):
     """Configuration for LLM client (offline stage only)."""
 
-    provider: Literal["anthropic", "openai", "google", "proxy"] = "anthropic"
-    model: str = "claude-sonnet-4-20250514"
+    provider: Literal["anthropic", "openai", "google", "proxy"] = "proxy"
+    model: str = "claude-sonnet-4.6"
     max_tokens: int = 4096
     temperature: float = 0.0
     proxy_base_url: str = "http://localhost:4141/v1"
     proxy_api_key: str = "dummy_key"
-    proxy_model: str = "claude-sonnet-4.5"
+    proxy_model: str = "claude-sonnet-4.6"
 
 
 class StateAbstractionConfig(BaseModel):

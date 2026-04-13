@@ -207,7 +207,12 @@ class DslGenerator:
             Guard expression string, or None if no guard needed.
         """
         # Build element reference table with stable aliases
-        source_with_aliases = self._build_element_reference_table(source_elements)
+        icon_labels = None
+        if source_state.semantic_profile:
+            icon_labels = source_state.semantic_profile.icon_labels or None
+        source_with_aliases = self._build_element_reference_table(
+            source_elements, icon_labels=icon_labels
+        )
         target_with_aliases = self._build_element_reference_table(target_elements)
 
         system_prompt, user_prompt = self._build_prompt(
@@ -383,28 +388,33 @@ class DslGenerator:
     @staticmethod
     def _build_element_reference_table(
         elements: list[dict[str, Any]],
+        icon_labels: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         """Assign stable aliases to elements for guard references.
 
         Priority:
-        1. resource_id if available (e.g., "com.android.settings:id/switchWidget")
-        2. Synthesized alias from class + position: e.g., "Switch_0", "EditText_0"
+        1. Icon label from semantic profile (e.g., "delete_button")
+        2. resource_id if available (e.g., "com.android.settings:id/switchWidget")
+        3. Synthesized alias from class + position: e.g., "Switch_0", "EditText_0"
         """
         class_counts: dict[str, int] = {}
         result = []
         for el in elements:
+            eid = el.get("element_id", "")
             resource_id = el.get("resource_id") or ""
             class_name = el.get("class_name", "")
             short_class = class_name.rsplit(".", 1)[-1] if "." in class_name else class_name
 
-            if resource_id:
+            if icon_labels and eid in icon_labels:
+                alias = icon_labels[eid]
+            elif resource_id:
                 alias = resource_id
             elif short_class:
                 idx = class_counts.get(short_class, 0)
                 class_counts[short_class] = idx + 1
                 alias = f"{short_class}_{idx}"
             else:
-                alias = el.get("element_id", "")
+                alias = eid
 
             result.append({**el, "_alias": alias})
         return result

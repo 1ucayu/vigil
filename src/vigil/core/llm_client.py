@@ -66,12 +66,12 @@ class LlmClient:
                 from google import genai
 
                 self._client = genai.Client(api_key=api_key)
-                self._model = config.model or "gemini-2.0-flash"
+                self._model = config.model or "gemini-2.5-pro"
             elif self._provider == "anthropic":
                 import anthropic
 
                 self._client = anthropic.Anthropic(api_key=api_key)
-                self._model = config.model or "claude-sonnet-4-20250514"
+                self._model = config.model or "claude-sonnet-4.6"
             else:
                 msg = f"Provider '{self._provider}' not yet implemented"
                 raise NotImplementedError(msg)

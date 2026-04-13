@@ -17,7 +17,14 @@ from loguru import logger
 
 from vigil.core.ui_parser import parse_hierarchy_xml
 from vigil.models.action import Action
-from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
+from vigil.models.fsm import (
+    AbstractState,
+    AppFSM,
+    ContainerType,
+    HierarchyLevel,
+    SubFsmTemplate,
+    Transition,
+)
 
 
 class FsmBuilder:
@@ -85,6 +92,11 @@ class FsmBuilder:
             logger.info(
                 f"Post-processing: merged {merged} duplicate states, removed {removed} error states"
             )
+
+        # Step 8: Build Sub-FSM templates for dynamic containers
+        templates_created = self._build_sub_fsm_templates(fsm)
+        if templates_created:
+            logger.info(f"Created {templates_created} Sub-FSM templates")
 
         logger.info(
             f"FSM built: {len(fsm.states)} states, {len(fsm.transitions)} transitions, "
@@ -238,6 +250,114 @@ class FsmBuilder:
             logger.debug(f"Removed error states: {to_remove}")
 
         return len(to_remove)
+
+    def _build_sub_fsm_templates(self, fsm: AppFSM) -> int:
+        """Create Sub-FSM templates for verified dynamic containers.
+
+        Detects states with container_type=DYNAMIC that have multiple outgoing
+        click transitions whose targets share the same structural fingerprint.
+        Collapses those N transitions into a single SubFsmTemplate reference.
+
+        Returns:
+            Number of templates created.
+        """
+        templates_created = 0
+
+        for state_id, state in list(fsm.states.items()):
+            if state.container_type != ContainerType.DYNAMIC:
+                continue
+
+            click_targets = self._find_same_fingerprint_targets(fsm, state_id)
+            if len(click_targets) < 2:
+                continue
+
+            target_fp = click_targets[0][1]
+            representative_target_id = click_targets[0][0]
+
+            templates_created += 1
+            template_id = f"tmpl_{state_id}"
+
+            rep_state = fsm.states.get(representative_target_id)
+            template_states: dict[str, AbstractState] = {}
+            template_transitions: list[Transition] = []
+
+            if rep_state:
+                template_states[representative_target_id] = rep_state
+                for t in fsm.transitions:
+                    if t.source == representative_target_id:
+                        template_transitions.append(t)
+
+            tmpl = SubFsmTemplate(
+                template_id=template_id,
+                source_state_id=state_id,
+                entry_fingerprint=target_fp,
+                states=template_states,
+                transitions=template_transitions,
+                parameter_schema={"selected_item": "string"},
+            )
+            fsm.sub_fsm_templates[template_id] = tmpl
+            state.sub_fsm_template_id = template_id
+
+            collapsed_target_ids = {tid for tid, _ in click_targets[1:]}
+            for tid in collapsed_target_ids:
+                if tid in fsm.states and tid != representative_target_id:
+                    del fsm.states[tid]
+                if tid in fsm.graph:
+                    fsm.graph.remove_node(tid)
+
+            fsm.transitions = [
+                t
+                for t in fsm.transitions
+                if t.target not in collapsed_target_ids and t.source not in collapsed_target_ids
+            ]
+
+            fsm.graph.remove_edges_from(list(fsm.graph.edges))
+            for t in fsm.transitions:
+                if t.source in fsm.graph and t.target in fsm.graph:
+                    fsm.graph.add_edge(
+                        t.source,
+                        t.target,
+                        action=t.action,
+                        guard=t.guard,
+                        confidence=t.confidence,
+                        observed_count=t.observed_count,
+                    )
+
+            logger.debug(
+                f"Template {template_id}: collapsed {len(click_targets)} transitions "
+                f"from {state_id} (kept {representative_target_id})"
+            )
+
+        return templates_created
+
+    @staticmethod
+    def _find_same_fingerprint_targets(fsm: AppFSM, source_id: str) -> list[tuple[str, str]]:
+        """Find click transitions from source whose targets share a fingerprint.
+
+        Returns:
+            List of (target_state_id, fingerprint) for the largest group of
+            same-fingerprint targets. Empty if no group has >= 2 members.
+        """
+        fp_groups: dict[str, list[str]] = defaultdict(list)
+        for t in fsm.transitions:
+            if t.source != source_id:
+                continue
+            if t.action.get("type") != "click":
+                continue
+            target = fsm.states.get(t.target)
+            if target:
+                fp_groups[target.fingerprint].append(t.target)
+
+        best_group: list[str] = []
+        best_fp = ""
+        for fp, targets in fp_groups.items():
+            if len(targets) > len(best_group):
+                best_group = targets
+                best_fp = fp
+
+        if len(best_group) < 2:
+            return []
+        return [(tid, best_fp) for tid in best_group]
 
     def _build_states(
         self,
