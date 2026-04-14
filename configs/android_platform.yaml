@@ -1,0 +1,186 @@
+# Android platform priors for Vigil.
+# These are Android SDK / AndroidX / Material Design standard components.
+# NOT app-specific — any Android app may use these widgets.
+# Users can extend this file for OEM-specific or custom widgets.
+
+# ──────────────────────────────────────────────────────────
+# Widget guard templates: widget class → (safety, correctness)
+# ──────────────────────────────────────────────────────────
+widget_templates:
+
+  # Pattern A: Binary toggle (checkable)
+  Switch:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "read({alias}, is_checked) == $intent.{var}"
+  ToggleButton:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "read({alias}, is_checked) == $intent.{var}"
+  CheckBox:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "read({alias}, is_checked) == $intent.{var}"
+  RadioButton:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "read({alias}, is_checked) == $intent.{var}"
+  CompoundButton:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "read({alias}, is_checked) == $intent.{var}"
+  SwitchCompat:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "read({alias}, is_checked) == $intent.{var}"
+  MaterialSwitch:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "read({alias}, is_checked) == $intent.{var}"
+  Chip:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "read({alias}, is_checked) == $intent.{var}"
+
+  # Pattern B: Text input (editable)
+  EditText:
+    safety: "read({alias}, is_editable) == true"
+    correctness: "value({alias}) == $intent.{var}"
+  AutoCompleteTextView:
+    safety: "read({alias}, is_editable) == true"
+    correctness: "value({alias}) == $intent.{var}"
+  MultiAutoCompleteTextView:
+    safety: "read({alias}, is_editable) == true"
+    correctness: "value({alias}) == $intent.{var}"
+  TextInputEditText:
+    safety: "read({alias}, is_editable) == true"
+    correctness: "value({alias}) == $intent.{var}"
+  SearchView:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "value({alias}) == $intent.{var}"
+
+  # Pattern C: Click action
+  Button:
+    safety: "read({alias}, is_clickable) == true"
+    correctness: "action(target_text) == $intent.{var}"
+  MaterialButton:
+    safety: "read({alias}, is_clickable) == true"
+    correctness: "action(target_text) == $intent.{var}"
+  TextView:
+    safety: null
+    correctness: "action(target_text) == $intent.{var}"
+  ImageButton:
+    safety: "read({alias}, is_clickable) == true"
+    correctness: null
+  ImageView:
+    safety: "read({alias}, is_clickable) == true"
+    correctness: null
+  FloatingActionButton:
+    safety: "read({alias}, is_clickable) == true"
+    correctness: null
+  ExtendedFloatingActionButton:
+    safety: "read({alias}, is_clickable) == true"
+    correctness: null
+
+  # Pattern D: Selection from list
+  Spinner:
+    safety: "count({alias}) >= 1"
+    correctness: "action(target_text) == $intent.{var}"
+  ListView:
+    safety: "count({alias}) >= 1"
+    correctness: "action(target_text) == $intent.{var}"
+  RecyclerView:
+    safety: "count({alias}) >= 1"
+    correctness: "action(target_text) == $intent.{var}"
+  GridView:
+    safety: "count({alias}) >= 1"
+    correctness: "action(target_text) == $intent.{var}"
+  ExpandableListView:
+    safety: "count({alias}) >= 1"
+    correctness: "action(target_text) == $intent.{var}"
+  ViewPager2:
+    safety: "count({alias}) >= 1"
+    correctness: "action(target_text) == $intent.{var}"
+
+  # Pattern E: Value picker
+  TimePicker:
+    safety: null
+    correctness: "value({alias}) == $intent.{var}"
+  DatePicker:
+    safety: null
+    correctness: "value({alias}) == $intent.{var}"
+  NumberPicker:
+    safety: null
+    correctness: "value({alias}) == $intent.{var}"
+  CalendarView:
+    safety: null
+    correctness: "value({alias}) == $intent.{var}"
+
+  # Pattern F: Continuous value
+  SeekBar:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "value({alias}) == $intent.{var}"
+  RatingBar:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "value({alias}) == $intent.{var}"
+  Slider:
+    safety: "read({alias}, is_enabled) == true"
+    correctness: "value({alias}) == $intent.{var}"
+
+  # Pattern G: Tab/Navigation
+  TabLayout:
+    safety: null
+    correctness: "action(target_text) == $intent.{var}"
+  BottomNavigationView:
+    safety: null
+    correctness: "action(target_text) == $intent.{var}"
+  NavigationView:
+    safety: null
+    correctness: "action(target_text) == $intent.{var}"
+  NavigationRailView:
+    safety: null
+    correctness: "action(target_text) == $intent.{var}"
+  Toolbar:
+    safety: null
+    correctness: "action(target_text) == $intent.{var}"
+
+
+# ──────────────────────────────────────────────────────────
+# Dialog indicators
+# ──────────────────────────────────────────────────────────
+dialog_indicators:
+  classes:
+    - AlertDialog
+    - TimePickerDialog
+    - DatePickerDialog
+    - ProgressDialog
+    - BottomSheetDialog
+    - MaterialAlertDialogBuilder
+    - DialogFragment
+    - BottomSheetDialogFragment
+    - TimePicker
+    - DatePicker
+    - NumberPicker
+  resource_ids:
+    - "android:id/button1"
+    - "android:id/button2"
+    - "android:id/button3"
+
+
+# ──────────────────────────────────────────────────────────
+# Tab navigation indicators
+# ──────────────────────────────────────────────────────────
+tab_indicators:
+  classes:
+    - BottomNavigationView
+    - BottomNavigationItemView
+    - NavigationBarView
+    - TabLayout
+    - TabItem
+    - NavigationRailView
+
+
+# ──────────────────────────────────────────────────────────
+# Error state patterns
+# ──────────────────────────────────────────────────────────
+error_patterns:
+  - "Webpage not available"
+  - "Android System notif"
+  - "App isn't responding"
+  - "has stopped"
+  - "isn't responding"
+  - "Keep waiting"
+  - "Unfortunately"
+  - "No internet"

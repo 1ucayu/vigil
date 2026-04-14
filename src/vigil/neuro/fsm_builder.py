@@ -123,15 +123,6 @@ class FsmBuilder:
 
     # --- Post-processing: duplicate/error state cleanup ---
 
-    ERROR_PAGE_PATTERNS: list[str] = [
-        "Webpage not available",
-        "Android System notif",
-        "App isn't responding",
-        "has stopped",
-        "isn't responding",
-        "Keep waiting",
-    ]
-
     def _merge_scroll_duplicates(self, fsm: AppFSM) -> int:
         """Merge states that share the same (activity_name, page_title).
 
@@ -236,17 +227,14 @@ class FsmBuilder:
         return merged_count
 
     def _remove_error_states(self, fsm: AppFSM) -> int:
-        """Remove transient error/system states from the FSM.
+        """Remove transient error/system states from the FSM."""
+        from vigil.core.platform_priors import get_error_patterns
 
-        Matches state names against ERROR_PAGE_PATTERNS (substring match).
-
-        Returns:
-            Number of states removed.
-        """
+        patterns = get_error_patterns()
         to_remove: list[str] = []
         for state in fsm.states.values():
             name_lower = state.name.lower()
-            for pattern in self.ERROR_PAGE_PATTERNS:
+            for pattern in patterns:
                 if pattern.lower() in name_lower:
                     to_remove.append(state.state_id)
                     break
@@ -267,14 +255,6 @@ class FsmBuilder:
             logger.debug(f"Removed error states: {to_remove}")
 
         return len(to_remove)
-
-    DIALOG_CLASSES: set[str] = {
-        "TimePicker",
-        "DatePicker",
-        "NumberPicker",
-        "AlertDialog",
-        "BottomSheetDialog",
-    }
 
     def _detect_dialog_states(
         self,
@@ -310,6 +290,12 @@ class FsmBuilder:
         screen_elements_cache: dict[str, list[dict[str, Any]]],
     ) -> bool:
         """Check if a state represents a dialog/picker overlay."""
+        from vigil.core.platform_priors import get_dialog_indicators
+
+        indicators = get_dialog_indicators()
+        dialog_classes = set(indicators.get("classes", []))
+        dialog_rids = {rid.lower() for rid in indicators.get("resource_ids", [])}
+
         for sid in state.raw_screens:
             screen = raw_screens.get(sid, {})
             metadata = screen.get("metadata", {})
@@ -318,11 +304,11 @@ class FsmBuilder:
 
             elements = screen_elements_cache.get(sid, [])
             rids = {(el.get("resource_id") or "").lower() for el in elements}
-            if "android:id/button1" in rids and "android:id/button2" in rids:
+            if rids & dialog_rids:
                 return True
 
             classes = {(el.get("class_name") or "").rsplit(".", 1)[-1] for el in elements}
-            if classes & self.DIALOG_CLASSES:
+            if classes & dialog_classes:
                 return True
 
         return False
@@ -391,13 +377,6 @@ class FsmBuilder:
 
         return added
 
-    TAB_NAV_CLASSES: set[str] = {
-        "BottomNavigationView",
-        "TabLayout",
-        "NavigationBarView",
-        "BottomNavigationItemView",
-    }
-
     def _complete_tab_transitions(
         self,
         fsm: AppFSM,
@@ -405,6 +384,10 @@ class FsmBuilder:
         sid_to_state_id: dict[str, str],
     ) -> int:
         """Add missing bidirectional transitions between tab-navigable states."""
+        from vigil.core.platform_priors import get_tab_indicators
+
+        tab_classes = set(get_tab_indicators())
+
         activity_groups: dict[str, list[str]] = defaultdict(list)
         for state in fsm.states.values():
             if state.activity_name and state.hierarchy_level == HierarchyLevel.FRAGMENT:
@@ -422,7 +405,7 @@ class FsmBuilder:
                     elements = screen.get("interactable_elements", screen.get("elements", []))
                     for el in elements:
                         short_cls = (el.get("class_name") or "").rsplit(".", 1)[-1]
-                        if short_cls in self.TAB_NAV_CLASSES:
+                        if short_cls in tab_classes:
                             has_tabs = True
                             break
                     if has_tabs:
