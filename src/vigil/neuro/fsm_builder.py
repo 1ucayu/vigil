@@ -100,6 +100,16 @@ class FsmBuilder:
         if templates_created:
             logger.info(f"Created {templates_created} Sub-FSM templates")
 
+        # Step 9: Detect dialog states and assign hierarchy
+        dialogs = self._detect_dialog_states(fsm, raw_screens, sid_to_state_id)
+        if dialogs:
+            logger.info(f"Detected {dialogs} dialog states (COMPONENT level)")
+
+        # Step 10: Add inferred dismiss transitions for dialogs
+        dismiss = self._add_dialog_dismiss_transitions(fsm, raw_screens, sid_to_state_id)
+        if dismiss:
+            logger.info(f"Added {dismiss} inferred dialog dismiss transitions")
+
         logger.info(
             f"FSM built: {len(fsm.states)} states, {len(fsm.transitions)} transitions, "
             f"initial_state={initial_state}"
@@ -252,6 +262,129 @@ class FsmBuilder:
             logger.debug(f"Removed error states: {to_remove}")
 
         return len(to_remove)
+
+    DIALOG_CLASSES: set[str] = {
+        "TimePicker",
+        "DatePicker",
+        "NumberPicker",
+        "AlertDialog",
+        "BottomSheetDialog",
+    }
+
+    def _detect_dialog_states(
+        self,
+        fsm: AppFSM,
+        raw_screens: dict[str, Any],
+        sid_to_state_id: dict[str, str],
+    ) -> int:
+        """Detect dialog states and set hierarchy_level=COMPONENT with parent."""
+        detected = 0
+
+        screen_elements_cache: dict[str, list[dict[str, Any]]] = {}
+        for sid, screen in raw_screens.items():
+            screen_elements_cache[sid] = screen.get(
+                "interactable_elements", screen.get("elements", [])
+            )
+
+        for state_id, state in fsm.states.items():
+            if self._is_dialog_state(state, raw_screens, screen_elements_cache):
+                state.hierarchy_level = HierarchyLevel.COMPONENT
+
+                parent_id = self._find_dialog_parent(state_id, fsm)
+                if parent_id:
+                    state.parent_state = parent_id
+
+                detected += 1
+
+        return detected
+
+    def _is_dialog_state(
+        self,
+        state: AbstractState,
+        raw_screens: dict[str, Any],
+        screen_elements_cache: dict[str, list[dict[str, Any]]],
+    ) -> bool:
+        """Check if a state represents a dialog/picker overlay."""
+        for sid in state.raw_screens:
+            screen = raw_screens.get(sid, {})
+            metadata = screen.get("metadata", {})
+            if metadata.get("has_modal"):
+                return True
+
+            elements = screen_elements_cache.get(sid, [])
+            rids = {(el.get("resource_id") or "").lower() for el in elements}
+            if "android:id/button1" in rids and "android:id/button2" in rids:
+                return True
+
+            classes = {(el.get("class_name") or "").rsplit(".", 1)[-1] for el in elements}
+            if classes & self.DIALOG_CLASSES:
+                return True
+
+        return False
+
+    @staticmethod
+    def _find_dialog_parent(dialog_state_id: str, fsm: AppFSM) -> str | None:
+        """Find the most likely parent state for a dialog."""
+        source_counts: dict[str, int] = defaultdict(int)
+        for t in fsm.transitions:
+            if t.target == dialog_state_id and t.source != dialog_state_id:
+                source_counts[t.source] += 1
+        if not source_counts:
+            return None
+        return max(source_counts, key=source_counts.get)  # type: ignore[arg-type]
+
+    def _add_dialog_dismiss_transitions(
+        self,
+        fsm: AppFSM,
+        raw_screens: dict[str, Any],
+        sid_to_state_id: dict[str, str],
+    ) -> int:
+        """Add inferred dismiss transitions for dialog states without them."""
+        added = 0
+
+        for state_id, state in fsm.states.items():
+            if state.hierarchy_level != HierarchyLevel.COMPONENT:
+                continue
+            parent_id = state.parent_state
+            if not parent_id:
+                continue
+
+            has_dismiss = any(
+                t.source == state_id and t.target == parent_id for t in fsm.transitions
+            )
+            if has_dismiss:
+                continue
+
+            elements: list[dict[str, Any]] = []
+            for sid in state.raw_screens:
+                screen = raw_screens.get(sid, {})
+                elements = screen.get("interactable_elements", screen.get("elements", []))
+                if elements:
+                    break
+
+            rids = {(el.get("resource_id") or "").lower() for el in elements}
+            if "android:id/button1" in rids or "android:id/button2" in rids:
+                t = Transition(
+                    source=state_id,
+                    target=parent_id,
+                    action={"type": "click", "target_text": "OK/Cancel"},
+                    confidence=0.5,
+                    observed_count=0,
+                )
+                fsm.add_transition(t)
+                added += 1
+            else:
+                t = Transition(
+                    source=state_id,
+                    target=parent_id,
+                    action={"type": "navigate_back"},
+                    confidence=0.5,
+                    observed_count=0,
+                )
+                fsm.add_transition(t)
+                added += 1
+
+        return added
 
     def _build_sub_fsm_templates(self, fsm: AppFSM) -> int:
         """Create Sub-FSM templates for verified dynamic containers.

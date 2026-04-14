@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -246,11 +247,17 @@ class SemanticGrounder:
     ) -> tuple[list[str], float, ContainerType]:
         """Mine and verify structural invariants from multiple observations.
 
-        Returns:
-            (validated_invariants, confidence, derived_container_type)
+        Uses cross-visit statistical diff when >=2 observations available,
+        falls back to LLM-only approach for single observation.
         """
         if not observations:
             return [], 0.0, ContainerType.NONE
+
+        if len(observations) >= 2:
+            candidates, confidence = self._compute_cross_visit_invariants(observations)
+            if candidates:
+                container_type = self._derive_container_type(candidates, observations)
+                return candidates, confidence, container_type
 
         candidates = self._propose_invariants(observations[0])
         if not candidates:
@@ -263,6 +270,54 @@ class SemanticGrounder:
         validated, confidence = self._verify_invariants(candidates, observations)
         container_type = self._derive_container_type(validated, observations)
         return validated, confidence, container_type
+
+    def _compute_cross_visit_invariants(
+        self,
+        observations: list[dict[str, Any]],
+    ) -> tuple[list[str], float]:
+        """Mine invariants from cross-visit structural diff.
+
+        Compares element properties across K visits to find stable properties.
+        """
+        prop_tracker: dict[str, dict[str, list[Any]]] = defaultdict(lambda: defaultdict(list))
+
+        for obs in observations:
+            elements = obs.get("interactable_elements", [])
+            for e in elements:
+                alias = e.get("resource_id") or ""
+                if not alias:
+                    cls = (e.get("class_name") or "").rsplit(".", 1)[-1]
+                    alias = f"{cls}_{e.get('element_id', '')}"
+                if not alias:
+                    continue
+
+                prop_tracker[alias]["text"].append(e.get("text") or "")
+                prop_tracker[alias]["is_checked"].append(e.get("is_checked", False))
+                prop_tracker[alias]["is_enabled"].append(e.get("is_enabled", True))
+                children = e.get("children", [])
+                prop_tracker[alias]["children_count"].append(len(children))
+
+        candidates: list[str] = []
+        n = len(observations)
+
+        for alias, props in prop_tracker.items():
+            for prop_name, values in props.items():
+                if len(values) < n:
+                    continue
+                unique = set(str(v) for v in values)
+                if len(unique) != 1:
+                    continue
+
+                val = values[0]
+                if prop_name == "text" and val:
+                    candidates.append(f'read({alias}, text) == "{val}"')
+                elif prop_name == "is_enabled" and val is True:
+                    candidates.append(f"read({alias}, is_enabled) == true")
+                elif prop_name == "children_count" and isinstance(val, int) and val > 0:
+                    candidates.append(f"count({alias}) == {val}")
+
+        confidence = min(1.0, n / 10)
+        return candidates, round(confidence, 2)
 
     def _propose_invariants(self, observation: dict[str, Any]) -> list[str]:
         """Ask LLM to propose candidate invariant expressions."""

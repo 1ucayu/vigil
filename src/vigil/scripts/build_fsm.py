@@ -89,6 +89,11 @@ def main() -> None:
         help="Extract Activity prior from connected device (provide ADB serial). "
         "For system apps without standalone manifest.",
     )
+    parser.add_argument(
+        "--apk-dir",
+        default=None,
+        help="Path to apktool-decompiled APK directory for resource extraction",
+    )
 
     args = parser.parse_args()
 
@@ -134,6 +139,24 @@ def main() -> None:
             logger.info(
                 f"Stage 0: loaded prior from {prior_path} ({len(prior.activities)} activities)"
             )
+
+    # Extract APK resources if apk-dir provided
+    if args.apk_dir:
+        from vigil.neuro.app_prior import AppPriorExtractor
+
+        apk_dir_path = Path(args.apk_dir)
+        if apk_dir_path.is_dir():
+            if prior is None:
+                manifest = apk_dir_path / "AndroidManifest.xml"
+                if manifest.exists():
+                    prior = AppPriorExtractor().extract_from_manifest(manifest)
+                else:
+                    from vigil.neuro.app_prior import AppPrior
+
+                    prior = AppPrior(package_name=app_package)
+            AppPriorExtractor().extract_resources(apk_dir_path, prior)
+        else:
+            logger.warning(f"APK directory not found: {apk_dir_path}")
 
     # Stages 1-3: Build or load FSM
     if args.fsm:

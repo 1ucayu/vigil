@@ -41,6 +41,14 @@ class ActivityInfo(BaseModel):
     predicted_function: str | None = None
 
 
+class WidgetDecl(BaseModel):
+    """A widget declared in a layout XML file."""
+
+    widget_id: str
+    widget_class: str
+    layout_file: str
+
+
 class AppPrior(BaseModel):
     """Prior knowledge extracted from an Android app."""
 
@@ -49,6 +57,9 @@ class AppPrior(BaseModel):
     activities: list[ActivityInfo] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
     skeleton_edges: list[tuple[str, str]] = Field(default_factory=list)
+    string_constants: dict[str, str] = Field(default_factory=dict)
+    string_arrays: dict[str, list[str]] = Field(default_factory=dict)
+    widget_declarations: list[WidgetDecl] = Field(default_factory=list)
 
 
 class AppPriorExtractor:
@@ -101,6 +112,74 @@ class AppPriorExtractor:
             logger.warning(f"dumpsys failed: {result.stderr}")
             return AppPrior(package_name=package)
         return self._parse_dumpsys(package, result.stdout)
+
+    def extract_resources(self, apk_dir: Path, prior: AppPrior) -> None:
+        """Extract resources from an apktool-decompiled APK directory.
+
+        Parses res/values/strings.xml and res/layout/*.xml into the prior.
+        """
+        strings_path = apk_dir / "res" / "values" / "strings.xml"
+        if strings_path.exists():
+            self._parse_strings_xml(strings_path, prior)
+
+        layout_dir = apk_dir / "res" / "layout"
+        if layout_dir.is_dir():
+            for layout_file in sorted(layout_dir.glob("*.xml")):
+                self._parse_layout_xml(layout_file, prior)
+
+        logger.info(
+            f"Resources extracted: {len(prior.string_constants)} strings, "
+            f"{len(prior.string_arrays)} arrays, "
+            f"{len(prior.widget_declarations)} widgets"
+        )
+
+    @staticmethod
+    def _parse_strings_xml(path: Path, prior: AppPrior) -> None:
+        """Parse res/values/strings.xml."""
+        try:
+            tree = ET.parse(path)  # noqa: S314
+        except ET.ParseError:
+            return
+
+        root = tree.getroot()
+        for elem in root.findall("string"):
+            name = elem.get("name", "")
+            text = elem.text or ""
+            if name and text:
+                prior.string_constants[name] = text
+
+        for elem in root.findall("string-array"):
+            name = elem.get("name", "")
+            if not name:
+                continue
+            items = [item.text or "" for item in elem.findall("item")]
+            if items:
+                prior.string_arrays[name] = items
+
+    @staticmethod
+    def _parse_layout_xml(path: Path, prior: AppPrior) -> None:
+        """Parse a single res/layout/*.xml for widget declarations."""
+        try:
+            tree = ET.parse(path)  # noqa: S314
+        except ET.ParseError:
+            return
+
+        android_ns = "http://schemas.android.com/apk/res/android"
+        layout_name = path.stem
+
+        for elem in tree.iter():
+            widget_id = elem.get(f"{{{android_ns}}}id", "")
+            if not widget_id:
+                continue
+            widget_id = widget_id.replace("@+id/", "").replace("@id/", "")
+            widget_class = elem.tag.rsplit(".", 1)[-1] if "." in elem.tag else elem.tag
+            prior.widget_declarations.append(
+                WidgetDecl(
+                    widget_id=widget_id,
+                    widget_class=widget_class,
+                    layout_file=layout_name,
+                )
+            )
 
     def _parse_manifest_tree(self, tree: ET.ElementTree) -> AppPrior:
         root = tree.getroot()
