@@ -320,6 +320,7 @@ vigil/
 │
 ├── configs/
 │   ├── default.yaml                # default config (LLM model, timeouts, thresholds)
+│   ├── android_platform.yaml       # Android SDK platform priors (widget templates, dialogs)
 │   └── apps/                       # per-app config overrides
 │       ├── settings.yaml
 │       ├── wechat.yaml
@@ -332,10 +333,13 @@ vigil/
 │       │
 │       ├── neuro/                  # OFFLINE: FSM construction pipeline
 │       │   ├── __init__.py
+│       │   ├── app_prior.py       # Stage 0: App Prior Extraction (Manifest/APK)
 │       │   ├── explorer.py         # Stage 1: UI Exploration (BFS/DFS via uiautomator2)
-│       │   ├── state_abstractor.py # Stage 2: State Abstraction (fingerprint + LLM)
+│       │   ├── state_abstractor.py # Stage 2: State Abstraction (fingerprint)
+│       │   ├── semantic_grounder.py# Stage 2.5: Semantic Grounding (multimodal LLM)
 │       │   ├── fsm_builder.py      # Stage 3: Hierarchical FSM Construction
 │       │   ├── dsl_generator.py    # Stage 4: DSL Semantic Guard Generation
+│       │   ├── widget_templates.py # Widget guard template lookup (from YAML)
 │       │   ├── replay_verifier.py  # Stage 5: FSM Verification via Replay
 │       │   └── evolution.py        # Tier 3: Online Micro-Evolution engine
 │       │
@@ -345,6 +349,9 @@ vigil/
 │       │   ├── fsm_checker.py      # Tier 1: FSM structural verification
 │       │   ├── dsl_evaluator.py    # Tier 2: DSL semantic verification (guard eval)
 │       │   ├── decision_engine.py  # Combined ALLOW / DENY / UNCERTAIN + tier routing
+│       │   ├── intent_extractor.py # $intent.* variable extraction from instructions
+│       │   ├── llm_fallback.py     # LLM fallback for UNCERTAIN results
+│       │   ├── trajectory_verifier.py # Multi-step action sequence verification
 │       │   └── invariant_checker.py# State invariant checking (Daikon-style)
 │       │
 │       ├── models/                 # Data structures & serialization
@@ -362,8 +369,9 @@ vigil/
 │       │   ├── ui_parser.py       # Accessibility tree XML → structured repr
 │       │   ├── action_types.py    # Action templates & enums
 │       │   ├── screenshot.py      # Screenshot capture & annotation
-│       │   ├── llm_client.py      # Unified LLM client wrapper (Anthropic / OpenAI)
-│       │   └── config.py          # Pydantic config models + YAML loader
+│       │   ├── llm_client.py      # Unified LLM client wrapper (Anthropic / OpenAI / Proxy)
+│       │   ├── config.py          # Pydantic config models + YAML loader
+│       │   └── platform_priors.py # Android SDK priors loader (from YAML)
 │       │
 │       └── scripts/                # CLI entry points
 │           ├── __init__.py
@@ -429,36 +437,60 @@ vigil/
 ### AppFSM (`src/vigil/models/fsm.py`)
 
 ```python
-import networkx as nx
-from dataclasses import dataclass, field
-from typing import Optional
-from enum import Enum
+from pydantic import BaseModel, Field
+from enum import StrEnum
 
-class HierarchyLevel(Enum):
+class HierarchyLevel(StrEnum):
     APP = "app"
     ACTIVITY = "activity"
     FRAGMENT = "fragment"
     COMPONENT = "component"
 
-@dataclass
-class AbstractState:
-    state_id: str
-    name: str                          # human-readable: "PaymentConfirm"
-    fingerprint: str
-    hierarchy_level: HierarchyLevel
-    parent_state: Optional[str]        # parent in hierarchy
-    activity_name: Optional[str]       # Android Activity class
-    invariants: list[str] = field(default_factory=list)
-    raw_screens: list[str] = field(default_factory=list)
+class ContainerType(StrEnum):
+    STATIC = "static"
+    DYNAMIC = "dynamic"
+    NONE = "none"
 
-@dataclass
-class Transition:
+class StateSemanticProfile(BaseModel):
+    alt_text: str = ""
+    page_function: str = ""
+    expected_actions: list[str] = Field(default_factory=list)
+    icon_labels: dict[str, str] = Field(default_factory=dict)
+    generation_confidence: float = 0.0
+
+class AbstractState(BaseModel):
+    state_id: str
+    name: str
+    fingerprint: str                              # functional (FsmBuilder dedup)
+    structural_fingerprint: str | None = None      # structural (online matching)
+    hierarchy_level: HierarchyLevel
+    parent_state: str | None = None
+    activity_name: str | None = None
+    invariants: list[str] = Field(default_factory=list)
+    raw_screens: list[str] = Field(default_factory=list)
+    container_type: ContainerType = ContainerType.NONE
+    container_resource_id: str | None = None
+    semantic_profile: StateSemanticProfile | None = None
+    state_invariants: list[str] = Field(default_factory=list)
+    invariant_confidence: float = 0.0
+    sub_fsm_template_id: str | None = None
+
+class Transition(BaseModel):
     source: str
     target: str
-    action: dict                       # {"type": "click", "target": ...}
-    guard: Optional[str] = None        # DSL guard expression
-    confidence: float = 0.0            # replay confidence score
+    action: dict[str, Any]                         # {"type": "click", "target": ..., "target_text": ...}
+    guard: str | None = None                       # DSL guard expression
+    confidence: float = 0.0                        # 1.0=observed, 0.5=inferred
     observed_count: int = 0
+
+class SubFsmTemplate(BaseModel):
+    template_id: str
+    source_state_id: str
+    entry_fingerprint: str
+    states: dict[str, AbstractState] = Field(default_factory=dict)
+    transitions: list[Transition] = Field(default_factory=list)
+    parameter_schema: dict[str, str] = Field(default_factory=dict)
+    item_skeleton: str = ""
 
 class AppFSM:
     def __init__(self, app_package: str):
@@ -466,22 +498,18 @@ class AppFSM:
         self.graph = nx.DiGraph()
         self.states: dict[str, AbstractState] = {}
         self.transitions: list[Transition] = []
-        self.initial_state: Optional[str] = None
+        self.initial_state: str | None = None
         self.version: str = "0.1.0"
-        self.evolution_log: list[dict] = []
+        self.evolution_log: list[dict[str, Any]] = []
+        self.sub_fsm_templates: dict[str, SubFsmTemplate] = {}
 
     def add_state(self, state: AbstractState): ...
     def add_transition(self, trans: Transition): ...
     def is_valid_transition(self, from_state: str, action: dict) -> bool: ...
     def is_reachable(self, from_state: str, goal_state: str) -> bool: ...
-    def get_shortest_path(self, from_state: str, goal_state: str) -> list: ...
-    def get_transition_target(self, from_state: str, action: dict) -> Optional[str]: ...
-    def get_transition(self, from_state: str, action: dict) -> Optional[Transition]: ...
-    def find_similar_state(self, fingerprint: str, threshold: float) -> Optional[str]: ...
-    def serialize(self, path: str): ...
-
+    def serialize(self, path: str | Path): ...
     @classmethod
-    def deserialize(cls, path: str) -> 'AppFSM': ...
+    def deserialize(cls, path: str | Path) -> 'AppFSM': ...
 ```
 
 ### DSL Guard Grammar (`docs/dsl_grammar.lark`)
@@ -496,17 +524,22 @@ guard: predicate
      | "(" guard ")"
 
 predicate: read_pred | time_pred | state_pred | value_pred
+         | contains_pred | count_pred | action_pred
 
 read_pred: "read(" ELEMENT "," PROPERTY ")" OP VALUE
 time_pred: "time_in(" TIME "," TIME ")"
 state_pred: "in_state(" STATE_NAME ")"
 value_pred: "value(" ELEMENT ")" OP VALUE
+contains_pred: "contains(" ELEMENT "," VALUE ")"
+count_pred: "count(" ELEMENT ")" OP VALUE
+action_pred: "action(" PROPERTY ")" OP VALUE
 
 OP: "==" | "!=" | ">" | "<" | ">=" | "<="
-ELEMENT: /[a-zA-Z_][a-zA-Z0-9_.]*/
+ELEMENT: /[a-zA-Z_][a-zA-Z0-9_.:\/]*/
 PROPERTY: /[a-zA-Z_][a-zA-Z0-9_]*/
 STATE_NAME: /[a-zA-Z_][a-zA-Z0-9_]*/
-VALUE: ESCAPED_STRING | NUMBER | "true" | "false" | "null"
+VALUE: ESCAPED_STRING | NUMBER | "true" | "false" | "null" | INTENT_VAR
+INTENT_VAR: /\$intent\.[a-zA-Z_][a-zA-Z0-9_]*/
 TIME: /\d{2}:\d{2}/
 
 %import common.ESCAPED_STRING

@@ -1,7 +1,10 @@
 """DSL guard data structures for semantic verification.
 
-Guards are expressions in a formal grammar (defined in docs/dsl_grammar.lark)
-that annotate FSM transitions with runtime-checkable conditions.
+NOTE: The DSLGuard and DSLPredicate models below are structural definitions
+only. Runtime guard evaluation is handled by DSLEvaluator (Lark Transformer)
+in vigil.symbolic.dsl_evaluator, which parses guard strings directly and
+does NOT use these models. These models may be useful for static analysis,
+serialization, or IDE tooling in the future.
 """
 
 from __future__ import annotations
@@ -32,12 +35,15 @@ class LogicalOp(StrEnum):
 
 
 class PredicateType(StrEnum):
-    """Types of DSL predicates."""
+    """Types of DSL predicates (aligned with docs/dsl_grammar.lark)."""
 
     READ = "read"
+    VALUE = "value"
     TIME_IN = "time_in"
     IN_STATE = "in_state"
-    VALUE = "value"
+    CONTAINS = "contains"
+    COUNT = "count"
+    ACTION = "action"
 
 
 class DSLPredicate(BaseModel):
@@ -48,6 +54,9 @@ class DSLPredicate(BaseModel):
         time_in(09:00, 17:00)
         in_state(PaymentConfirm)
         value(recipient_field) != ""
+        contains(wifi_list, $intent.network_name)
+        count(recycler_view) >= 1
+        action(target_text) == $intent.menu_item
     """
 
     predicate_type: PredicateType
@@ -65,13 +74,6 @@ class DSLGuard(BaseModel):
 
     Represents the full guard as a tree of predicates connected by logical operators.
     Raw expression is preserved for serialization; parsed tree is used for evaluation.
-
-    Attributes:
-        raw_expression: The original guard string (e.g., "read(x, y) > 0 && in_state(Foo)").
-        predicates: Flat list of predicates in the expression.
-        is_negated: Whether the entire guard is negated.
-        transition_source: Source state this guard is attached to.
-        transition_target: Target state this guard is attached to.
     """
 
     raw_expression: str
@@ -81,12 +83,15 @@ class DSLGuard(BaseModel):
     transition_target: str | None = None
 
     def evaluate(self, context: dict[str, Any]) -> bool:
-        """Evaluate this guard against a runtime context (screen state).
+        """Not implemented — use DSLEvaluator.evaluate() instead.
 
-        Args:
-            context: Dictionary mapping element.property paths to runtime values.
+        Runtime guard evaluation is handled by
+        vigil.symbolic.dsl_evaluator.DSLEvaluator, which uses a Lark
+        Transformer for direct parse-tree evaluation.
 
-        Returns:
-            True if the guard condition is satisfied, False otherwise.
+        Raises:
+            NotImplementedError: Always. Use DSLEvaluator instead.
         """
-        raise NotImplementedError
+        raise NotImplementedError(
+            "Use vigil.symbolic.dsl_evaluator.DSLEvaluator.evaluate() for guard evaluation"
+        )
