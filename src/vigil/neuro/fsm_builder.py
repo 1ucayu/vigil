@@ -78,7 +78,7 @@ class FsmBuilder:
         # Step 6: Infer hierarchy from activity names
         self._infer_hierarchy(states)
 
-        # Step 6: Assemble FSM
+        # Step 7: Assemble FSM
         fsm = AppFSM(app_package=self._app_package)
         fsm.initial_state = initial_state
 
@@ -87,7 +87,7 @@ class FsmBuilder:
         for t in transitions:
             fsm.add_transition(t)
 
-        # Step 7: Post-processing — merge duplicates and remove error states
+        # Step 8: Post-processing — merge duplicates and remove error states
         merged = self._merge_scroll_duplicates(fsm)
         removed = self._remove_error_states(fsm)
         if merged or removed:
@@ -95,22 +95,22 @@ class FsmBuilder:
                 f"Post-processing: merged {merged} duplicate states, removed {removed} error states"
             )
 
-        # Step 8: Build Sub-FSM templates for dynamic containers
+        # Step 9: Build Sub-FSM templates for dynamic containers
         templates_created = self._build_sub_fsm_templates(fsm)
         if templates_created:
             logger.info(f"Created {templates_created} Sub-FSM templates")
 
-        # Step 9: Detect dialog states and assign hierarchy
+        # Step 10: Detect dialog states and assign hierarchy
         dialogs = self._detect_dialog_states(fsm, raw_screens, sid_to_state_id)
         if dialogs:
             logger.info(f"Detected {dialogs} dialog states (COMPONENT level)")
 
-        # Step 10: Add inferred dismiss transitions for dialogs
+        # Step 11: Add inferred dismiss transitions for dialogs
         dismiss = self._add_dialog_dismiss_transitions(fsm, raw_screens, sid_to_state_id)
         if dismiss:
             logger.info(f"Added {dismiss} inferred dialog dismiss transitions")
 
-        # Step 11: Complete tab navigation transitions
+        # Step 12: Complete tab navigation transitions
         tabs = self._complete_tab_transitions(fsm, raw_screens, sid_to_state_id)
         if tabs:
             logger.info(f"Added {tabs} tab navigation transitions")
