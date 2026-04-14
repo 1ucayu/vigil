@@ -85,6 +85,7 @@ class AbstractState(BaseModel):
     state_id: str
     name: str
     fingerprint: str
+    structural_fingerprint: str | None = None
     hierarchy_level: HierarchyLevel
     parent_state: str | None = None
     activity_name: str | None = None

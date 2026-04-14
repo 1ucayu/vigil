@@ -62,8 +62,9 @@ or synthesized alias like Switch_0). NEVER use e_XXXX IDs.
 2. Element and property names are bare identifiers — no quotes around them.
 3. For menu/navigation clicks, generate: action(target_text) == $intent.<variable>
 4. For toggles/switches, generate: read(<alias>, is_checked) == true/false
-5. For dialog confirmations (OK/Cancel/Pair), return "null" — no precondition needed.
-6. For clicks on dynamic list items, generate: action(target_text) == $intent.<variable>
+5. For Cancel/Dismiss buttons on dialogs, return "null" — cancellation needs no precondition.
+6. For OK/Confirm buttons on dialogs with input controls (TimePicker, DatePicker, \
+EditText), generate a correctness guard checking the input value.
 
 GUARD CATEGORIES:
 7. Safety guards (intent-independent) verify structural preconditions: \

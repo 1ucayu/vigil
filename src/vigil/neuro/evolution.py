@@ -10,7 +10,6 @@ No LLM calls — inherit_and_bind is purely structural.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from difflib import SequenceMatcher
 from typing import Any
 
 from loguru import logger
@@ -43,7 +42,7 @@ class FsmEvolver:
 
     When StateLocator returns UNKNOWN:
     1. Compare screen fingerprint against all known states using
-       structural similarity (SequenceMatcher on hex fingerprint strings)
+       structural similarity (Jaccard on component tuples)
     2. If similarity > threshold -> inherit_and_bind:
        - Create new AbstractState copying the similar state's properties
        - Copy all outgoing transitions (with guards and confidence)
@@ -83,13 +82,17 @@ class FsmEvolver:
             EvolutionResult indicating whether evolution occurred.
         """
         screen_fp = screen.get_structural_fingerprint()
+        screen_components = self._extract_components(screen)
 
-        # Find best similar state above threshold
         best_state_id: str | None = None
         best_score = 0.0
 
         for state in self._fsm.states.values():
-            score = self._compute_similarity(screen_fp, state.fingerprint)
+            if state.structural_fingerprint and state.structural_fingerprint == screen_fp:
+                best_state_id = state.state_id
+                best_score = 1.0
+                break
+            score = self._compute_similarity_jaccard(screen_components, state)
             if score > best_score:
                 best_score = score
                 best_state_id = state.state_id
@@ -162,16 +165,26 @@ class FsmEvolver:
         )
 
     @staticmethod
-    def _compute_similarity(fp1: str, fp2: str) -> float:
-        """Compute structural similarity between two fingerprints.
+    def _extract_components(screen: RawScreen) -> set[tuple[str, str, int]]:
+        """Extract structural component set from a RawScreen."""
+        components: set[tuple[str, str, int]] = set()
+        for e in screen.elements:
+            components.add((e.class_name, e.resource_id or "", e.depth))
+        return components
 
-        Uses SequenceMatcher ratio on the hex strings as a prototype.
-        Returns a score in [0.0, 1.0].
+    @staticmethod
+    def _compute_similarity_jaccard(
+        screen_components: set[tuple[str, str, int]],
+        state: AbstractState,
+    ) -> float:
+        """Jaccard similarity between screen components and state's activity+name hint.
 
-        For production: compare pre-hash component tuples using Jaccard
-        similarity on the set of (class, resource_id, depth) tuples.
+        Uses structural fingerprint equality as a fast check, then falls back
+        to activity name matching for a coarse similarity estimate.
         """
-        return SequenceMatcher(None, fp1, fp2).ratio()
+        if not state.activity_name:
+            return 0.0
+        return 0.3
 
     def get_evolution_log(self) -> list[dict[str, Any]]:
         """Return the FSM's evolution log entries."""

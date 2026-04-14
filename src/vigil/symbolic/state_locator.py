@@ -55,6 +55,8 @@ class StateLocator:
         self._fp_index: dict[str, str] = {}
         for state in fsm.states.values():
             self._fp_index[state.fingerprint] = state.state_id
+            if state.structural_fingerprint:
+                self._fp_index[state.structural_fingerprint] = state.state_id
 
     def locate(self, screen: RawScreen) -> StateLocation:
         """Locate a live screen in the FSM.

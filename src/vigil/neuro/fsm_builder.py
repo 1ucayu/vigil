@@ -110,6 +110,11 @@ class FsmBuilder:
         if dismiss:
             logger.info(f"Added {dismiss} inferred dialog dismiss transitions")
 
+        # Step 11: Complete tab navigation transitions
+        tabs = self._complete_tab_transitions(fsm, raw_screens, sid_to_state_id)
+        if tabs:
+            logger.info(f"Added {tabs} tab navigation transitions")
+
         logger.info(
             f"FSM built: {len(fsm.states)} states, {len(fsm.transitions)} transitions, "
             f"initial_state={initial_state}"
@@ -386,6 +391,84 @@ class FsmBuilder:
 
         return added
 
+    TAB_NAV_CLASSES: set[str] = {
+        "BottomNavigationView",
+        "TabLayout",
+        "NavigationBarView",
+        "BottomNavigationItemView",
+    }
+
+    def _complete_tab_transitions(
+        self,
+        fsm: AppFSM,
+        raw_screens: dict[str, Any],
+        sid_to_state_id: dict[str, str],
+    ) -> int:
+        """Add missing bidirectional transitions between tab-navigable states."""
+        activity_groups: dict[str, list[str]] = defaultdict(list)
+        for state in fsm.states.values():
+            if state.activity_name and state.hierarchy_level == HierarchyLevel.FRAGMENT:
+                activity_groups[state.activity_name].append(state.state_id)
+
+        tab_groups: list[list[str]] = []
+        for _activity, state_ids in activity_groups.items():
+            if len(state_ids) < 2:
+                continue
+            has_tabs = False
+            for sid in state_ids:
+                state = fsm.states[sid]
+                for raw_sid in state.raw_screens:
+                    screen = raw_screens.get(raw_sid, {})
+                    elements = screen.get("interactable_elements", screen.get("elements", []))
+                    for el in elements:
+                        short_cls = (el.get("class_name") or "").rsplit(".", 1)[-1]
+                        if short_cls in self.TAB_NAV_CLASSES:
+                            has_tabs = True
+                            break
+                    if has_tabs:
+                        break
+                if has_tabs:
+                    break
+            if has_tabs:
+                tab_groups.append(state_ids)
+
+        added = 0
+        existing = {(t.source, t.target) for t in fsm.transitions}
+
+        for group in tab_groups:
+            for i, sid_a in enumerate(group):
+                for sid_b in group[i + 1 :]:
+                    if (sid_a, sid_b) not in existing:
+                        fsm.add_transition(
+                            Transition(
+                                source=sid_a,
+                                target=sid_b,
+                                action={
+                                    "type": "click",
+                                    "target_text": fsm.states[sid_b].name,
+                                },
+                                confidence=0.5,
+                                observed_count=0,
+                            )
+                        )
+                        added += 1
+                    if (sid_b, sid_a) not in existing:
+                        fsm.add_transition(
+                            Transition(
+                                source=sid_b,
+                                target=sid_a,
+                                action={
+                                    "type": "click",
+                                    "target_text": fsm.states[sid_a].name,
+                                },
+                                confidence=0.5,
+                                observed_count=0,
+                            )
+                        )
+                        added += 1
+
+        return added
+
     def _build_sub_fsm_templates(self, fsm: AppFSM) -> int:
         """Create Sub-FSM templates for verified dynamic containers.
 
@@ -526,11 +609,13 @@ class FsmBuilder:
             state_counter += 1
             state_id = f"s_{state_counter:03d}"
             name = self._derive_state_name(screen, state_id, trace_dir, app_prior)
+            structural_fp = self._compute_structural_fingerprint(screen)
 
             state = AbstractState(
                 state_id=state_id,
                 name=name,
                 fingerprint=fp,
+                structural_fingerprint=structural_fp or None,
                 hierarchy_level=HierarchyLevel.ACTIVITY,
                 activity_name=screen.get("activity_name"),
                 raw_screens=[screen_id],
@@ -681,6 +766,9 @@ class FsmBuilder:
                     source=source_state,
                     target=target_state,
                     action=fsm_action,
+                    # 1.0 = observed during exploration (pre-replay).
+                    # Stage 5 replay will override with success_count/total_trials.
+                    # Auto-inferred transitions (dialog dismiss, tab) use 0.5.
                     confidence=1.0,
                     observed_count=1,
                 )
