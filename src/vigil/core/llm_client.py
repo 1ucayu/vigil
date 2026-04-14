@@ -97,8 +97,9 @@ class LlmClient:
         and sent as image content blocks.
         """
         if self._provider == "proxy":
-            logger.warning("Proxy provider does not support image input, using text-only mode")
-            return self._generate_proxy(system_prompt, text_prompt)
+            return self._generate_proxy_with_images(
+                system_prompt, text_prompt, images, image_labels
+            )
 
         labels = image_labels or [None] * len(images)
         pil_images = [self._preprocess_image(p) for p in images]
@@ -204,6 +205,51 @@ class LlmClient:
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=self._config.max_tokens,
+                temperature=self._config.temperature,
+            )
+
+        response = self._call_with_retry(_call)
+        if hasattr(response, "usage") and response.usage:
+            logger.debug(
+                f"Proxy tokens: input={response.usage.prompt_tokens}, "
+                f"output={response.usage.completion_tokens}"
+            )
+        return response.choices[0].message.content or ""
+
+    def _generate_proxy_with_images(
+        self,
+        system_prompt: str,
+        text_prompt: str,
+        images: list[Path],
+        image_labels: list[str] | None = None,
+    ) -> str:
+        """Multimodal generation via OpenAI-compatible proxy with base64 images."""
+        labels = image_labels or [None] * len(images)
+        pil_images = [self._preprocess_image(p) for p in images]
+
+        content: list[dict[str, Any]] = []
+        for label, img in zip(labels, pil_images, strict=True):
+            if label:
+                content.append({"type": "text", "text": label})
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=_JPEG_QUALITY)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                }
+            )
+        content.append({"type": "text", "text": text_prompt})
+
+        def _call() -> Any:
+            return self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
                 ],
                 max_tokens=self._config.max_tokens,
                 temperature=self._config.temperature,
