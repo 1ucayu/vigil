@@ -65,13 +65,25 @@ or synthesized alias like Switch_0). NEVER use e_XXXX IDs.
 5. For dialog confirmations (OK/Cancel/Pair), return "null" — no precondition needed.
 6. For clicks on dynamic list items, generate: action(target_text) == $intent.<variable>
 
+GUARD CATEGORIES:
+7. Safety guards (intent-independent) verify structural preconditions: \
+element is enabled/clickable/editable, list has items. Use ONLY literal values.
+8. Correctness guards (intent-dependent) verify user intent alignment: \
+clicked item matches target, input value matches specification. \
+Use $intent.variable_name for runtime values.
+9. When both apply, combine: safety_guard && correctness_guard
+
 Respond with ONLY the guard expression or "null". No explanation, no markdown."""
 
 _USER_PROMPT = """\
 ## Transition Context
 Source state: {source_name}
+{source_description}\
+{source_page_function}\
+{source_expected_actions}\
 Action: {action_type} on element "{target_text}" (alias: {target_alias})
 Target state: {target_name}
+{target_description}\
 
 ## Source Screen Elements (before action)
 {source_table}
@@ -82,6 +94,7 @@ Target state: {target_name}
 ## What changed (source → target)
 {diff_summary}
 
+{widget_hint}\
 {extra_context}\
 Generate a guard expression (or "null" if no precondition is needed):"""
 
@@ -438,12 +451,47 @@ class DslGenerator:
         target_eid = action.get("target", "")
 
         target_alias = ""
-        target_text = ""
+        target_text = action.get("target_text", "")
         for el in source_elements:
             if el.get("element_id") == target_eid:
                 target_alias = el.get("_alias", el.get("resource_id", "")) or ""
-                target_text = el.get("text", "") or ""
+                if not target_text:
+                    target_text = el.get("text", "") or ""
                 break
+
+        # Semantic profile context
+        source_description = ""
+        source_page_function = ""
+        source_expected_actions = ""
+        target_description = ""
+
+        if source_state.semantic_profile:
+            sp = source_state.semantic_profile
+            if sp.alt_text:
+                source_description = f"Description: {sp.alt_text}\n"
+            if sp.page_function:
+                source_page_function = f"Page function: {sp.page_function}\n"
+            if sp.expected_actions:
+                source_expected_actions = f"Expected actions: {', '.join(sp.expected_actions)}\n"
+
+        if target_state.semantic_profile and target_state.semantic_profile.alt_text:
+            target_description = f"Description: {target_state.semantic_profile.alt_text}\n"
+
+        # Widget template hint
+        widget_hint = ""
+        target_class = action.get("target_class", "")
+        if target_class:
+            from vigil.neuro.widget_templates import get_guard_template
+
+            template = get_guard_template(target_class)
+            if template:
+                short_name = target_class.rsplit(".", 1)[-1]
+                parts = [f"## Widget type: {short_name}"]
+                if template.get("safety"):
+                    parts.append(f"Suggested safety: {template['safety']}")
+                if template.get("correctness"):
+                    parts.append(f"Suggested correctness: {template['correctness']}")
+                widget_hint = "\n".join(parts) + "\n\n"
 
         system_prompt = _SYSTEM_PROMPT.format(grammar=self._grammar_text)
         user_prompt = _USER_PROMPT.format(
@@ -452,9 +500,14 @@ class DslGenerator:
             target_text=target_text,
             source_name=source_state.name,
             target_name=target_state.name,
+            source_description=source_description,
+            source_page_function=source_page_function,
+            source_expected_actions=source_expected_actions,
+            target_description=target_description,
             source_table=self._format_elements(source_elements),
             target_table=self._format_elements(target_elements),
             diff_summary=diff_summary or "(no significant changes)",
+            widget_hint=widget_hint,
             extra_context=extra_context,
         )
         return system_prompt, user_prompt

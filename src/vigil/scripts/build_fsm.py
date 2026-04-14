@@ -152,6 +152,7 @@ def main() -> None:
         fsm = builder.build_from_trace(
             trace_path=trace_path,
             include_self_loops=args.include_self_loops,
+            app_prior=prior,
         )
 
     # Stage 2.5: Semantic grounding (optional)

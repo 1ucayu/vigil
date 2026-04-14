@@ -25,6 +25,7 @@ from vigil.models.fsm import (
     SubFsmTemplate,
     Transition,
 )
+from vigil.neuro.app_prior import AppPrior
 
 
 class FsmBuilder:
@@ -41,6 +42,7 @@ class FsmBuilder:
         self,
         trace_path: Path,
         include_self_loops: bool = False,
+        app_prior: AppPrior | None = None,
     ) -> AppFSM:
         """Build an FSM from a serialized exploration trace.
 
@@ -56,7 +58,7 @@ class FsmBuilder:
         raw_traces = data.get("traces", [])
 
         # Step 1: Deduplicate screens by fingerprint → canonical state mapping
-        fp_to_state_id, states = self._build_states(raw_screens, trace_path.parent)
+        fp_to_state_id, states = self._build_states(raw_screens, trace_path.parent, app_prior)
         sid_to_state_id = self._build_screen_mapping(raw_screens, fp_to_state_id)
 
         # Step 2: Build transitions from traces
@@ -363,6 +365,7 @@ class FsmBuilder:
         self,
         raw_screens: dict[str, Any],
         trace_dir: Path | None = None,
+        app_prior: AppPrior | None = None,
     ) -> tuple[dict[str, str], dict[str, AbstractState]]:
         """Build AbstractStates from screens, deduplicating by scroll-aware fingerprint.
 
@@ -389,7 +392,7 @@ class FsmBuilder:
 
             state_counter += 1
             state_id = f"s_{state_counter:03d}"
-            name = self._derive_state_name(screen, state_id, trace_dir)
+            name = self._derive_state_name(screen, state_id, trace_dir, app_prior)
 
             state = AbstractState(
                 state_id=state_id,
@@ -524,6 +527,22 @@ class FsmBuilder:
             action = Action(**action_data)
             fsm_action = action.to_fsm_dict()
 
+            # Enrich action dict with target element metadata
+            if raw_screens and action.target_element_id:
+                source_screen = raw_screens.get(source_sid, {})
+                elements = source_screen.get(
+                    "interactable_elements", source_screen.get("elements", [])
+                )
+                for el in elements:
+                    if el.get("element_id") == action.target_element_id:
+                        text = el.get("text") or ""
+                        desc = el.get("content_description") or ""
+                        fsm_action["target_text"] = text or desc
+                        fsm_action["target_resource_id"] = el.get("resource_id") or ""
+                        fsm_action["target_class"] = el.get("class_name") or ""
+                        fsm_action["target_content_desc"] = desc
+                        break
+
             transitions.append(
                 Transition(
                     source=source_state,
@@ -624,18 +643,30 @@ class FsmBuilder:
                     states[sid].hierarchy_level = HierarchyLevel.FRAGMENT
 
     def _derive_state_name(
-        self, screen: dict[str, Any], fallback_id: str, trace_dir: Path | None = None
+        self,
+        screen: dict[str, Any],
+        fallback_id: str,
+        trace_dir: Path | None = None,
+        app_prior: AppPrior | None = None,
     ) -> str:
         """Derive a human-readable state name from screen metadata.
 
-        Reads the full XML accessibility tree (not just interactable elements)
-        to find title elements like action_bar_title, which are typically
-        non-clickable TextViews containing the page name.
+        Priority: Activity label → page_title from XML → first heading → fallback.
         """
-        # Strategy 1: Parse full XML tree for title elements
+        activity_name = screen.get("activity_name") or ""
+
+        # Strategy 1: Manifest Activity label
+        if app_prior and activity_name:
+            for act in app_prior.activities:
+                name_match = act.name == activity_name or (
+                    activity_name.rsplit(".", 1)[-1] == act.name.rsplit(".", 1)[-1]
+                )
+                if name_match and act.label:
+                    return act.label
+
+        # Strategy 2: page_title from XML (action_bar_title)
         all_elements = self._get_all_elements(screen, trace_dir)
 
-        # Look for title resource IDs in all elements (including non-interactable)
         for el in all_elements:
             rid = el.get("resource_id", "") or ""
             if "action_bar_title" in rid.lower():
@@ -643,7 +674,6 @@ class FsmBuilder:
                 if text and text.strip():
                     return text.strip()
 
-        # Look for broader title patterns
         for el in all_elements:
             rid = el.get("resource_id", "") or ""
             if rid and "title" in rid.lower() and "subtitle" not in rid.lower():
@@ -651,13 +681,13 @@ class FsmBuilder:
                 if text and text.strip() and len(text.strip()) > 1:
                     return text.strip()
 
-        # Strategy 2: content_description from all elements
-        for el in all_elements:
-            cd = el.get("content_description")
-            if cd and cd.strip() and len(cd.strip()) > 2:
-                return cd.strip()
+        # Strategy 3: Short activity class name
+        if activity_name:
+            short = activity_name.rsplit(".", 1)[-1]
+            if short and short not in ("SubSettings", "Settings", "Activity"):
+                return short
 
-        # Strategy 3: first non-empty text from interactable elements
+        # Strategy 4: first non-empty text from interactable elements
         interactable = screen.get("interactable_elements", screen.get("elements", []))
         for el in interactable:
             text = el.get("text")
