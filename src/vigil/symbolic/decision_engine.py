@@ -279,9 +279,21 @@ class DecisionEngine:
             props: dict[str, Any] = {
                 "text": e.text or "",
                 "content_description": e.content_description or "",
+                "value": e.text or "",
+                "is_clickable": e.is_clickable,
+                "is_long_clickable": e.is_long_clickable,
+                "is_checkable": e.is_checkable,
                 "is_checked": e.is_checked,
                 "is_enabled": e.is_enabled,
-                "value": e.text or "",
+                "is_editable": e.is_editable,
+                "is_scrollable": e.is_scrollable,
+                "is_focusable": getattr(e, "is_focusable", False),
+                "is_focused": getattr(e, "is_focused", False),
+                "is_selected": getattr(e, "is_selected", False),
+                "is_password": getattr(e, "is_password", False),
+                "class_name": e.class_name or "",
+                "resource_id": e.resource_id or "",
+                "bounds": e.bounds,
             }
 
             # Add children info for container elements

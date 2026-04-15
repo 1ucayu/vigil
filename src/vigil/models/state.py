@@ -45,6 +45,10 @@ class UIElement(BaseModel):
     is_checkable: bool = False
     is_checked: bool = False
     is_enabled: bool = True
+    is_focusable: bool = False
+    is_focused: bool = False
+    is_selected: bool = False
+    is_password: bool = False
     depth: int = 0
     children: list[str] = Field(default_factory=list)
     parent_id: str | None = None

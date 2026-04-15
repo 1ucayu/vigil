@@ -438,3 +438,37 @@ class TestBuildContextHelpers:
         assert "e_001" in ctx.elements
         assert "e_002" in ctx.elements
         assert "e_003" in ctx.elements
+
+    def test_screen_context_has_all_accessibility_properties(self) -> None:
+        """ScreenContext must expose all AccessibilityNodeInfo properties."""
+        screen = RawScreen(
+            screen_id="scr_1",
+            elements=[
+                UIElement(
+                    element_id="e_001",
+                    class_name="android.widget.Switch",
+                    resource_id="com.test:id/wifi_switch",
+                    text="WiFi",
+                    is_clickable=True,
+                    is_checkable=True,
+                    is_checked=True,
+                    is_enabled=True,
+                    is_editable=False,
+                    is_scrollable=False,
+                    is_focusable=True,
+                ),
+            ],
+        )
+        ctx = DecisionEngine._build_screen_context(screen)
+        props = ctx.elements["com.test:id/wifi_switch"]
+
+        assert props["is_clickable"] is True
+        assert props["is_checkable"] is True
+        assert props["is_checked"] is True
+        assert props["is_enabled"] is True
+        assert props["is_editable"] is False
+        assert props["is_scrollable"] is False
+        assert props["is_focusable"] is True
+        assert props["text"] == "WiFi"
+        assert props["value"] == "WiFi"
+        assert props["class_name"] == "android.widget.Switch"
