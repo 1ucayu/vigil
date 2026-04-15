@@ -10,12 +10,14 @@ from vigil.models.fsm import (
     ContainerType,
     HierarchyLevel,
 )
-from vigil.neuro.app_prior import ActivityInfo, AppPrior
+from vigil.neuro.app_prior import ActivityInfo, AppPrior, WidgetDecl
 from vigil.neuro.semantic_grounder import (
     SemanticGrounder,
     _build_element_table,
     _build_screen_context_from_obs,
+    _build_static_context,
     _functions_consistent,
+    _match_layout_to_activity,
     _parse_json,
 )
 
@@ -392,3 +394,61 @@ class TestHelpers:
         assert "e_001" in ctx.elements
         assert "com.app:id/title" in ctx.elements
         assert ctx.elements["e_001"]["text"] == "WiFi"
+
+
+class TestStaticContextInjection:
+    def test_with_widgets(self) -> None:
+        prior = AppPrior(
+            package_name="com.test",
+            widget_declarations=[
+                WidgetDecl(
+                    widget_id="wifi_switch",
+                    widget_class="Switch",
+                    layout_file="activity_settings",
+                ),
+            ],
+        )
+        ctx = _build_static_context(prior, "com.test.SettingsActivity", [])
+        assert "Switch" in ctx
+        assert "wifi_switch" in ctx
+
+    def test_with_strings(self) -> None:
+        prior = AppPrior(
+            package_name="com.test",
+            string_constants={"cancel": "Cancel", "ok": "OK"},
+        )
+        elements = [{"text": "Cancel"}, {"text": "Submit"}]
+        ctx = _build_static_context(prior, None, elements)
+        assert "Cancel" in ctx
+        assert "Submit" not in ctx
+
+    def test_with_arrays(self) -> None:
+        prior = AppPrior(
+            package_name="com.test",
+            string_arrays={"durations": ["1 min", "5 min", "10 min"]},
+        )
+        ctx = _build_static_context(prior, None, [])
+        assert "durations" in ctx
+        assert "1 min" in ctx
+
+    def test_with_permissions(self) -> None:
+        prior = AppPrior(
+            package_name="com.test",
+            permissions=["android.permission.CAMERA", "android.permission.INTERNET"],
+        )
+        ctx = _build_static_context(prior, None, [])
+        assert "CAMERA" in ctx
+        assert "INTERNET" in ctx
+
+    def test_empty_prior(self) -> None:
+        prior = AppPrior(package_name="com.test")
+        assert _build_static_context(prior, None, []) == ""
+
+    def test_no_prior(self) -> None:
+        assert _build_static_context(None, None, []) == ""
+
+    def test_layout_activity_matching(self) -> None:
+        assert _match_layout_to_activity("activity_alarm", "com.app.AlarmActivity") is True
+        assert _match_layout_to_activity("fragment_settings", "com.app.SettingsActivity") is True
+        assert _match_layout_to_activity("activity_main", "com.app.AlarmActivity") is False
+        assert _match_layout_to_activity("activity_alarm", None) is False

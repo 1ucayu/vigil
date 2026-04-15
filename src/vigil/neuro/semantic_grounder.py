@@ -75,6 +75,90 @@ Return ONLY a JSON array of invariant strings:
 ["count(com.app:id/list) >= 1", "read(action_bar_title, text) != \\"\\""]"""
 
 
+def _match_layout_to_activity(layout_file: str, activity_name: str | None) -> bool:
+    """Heuristically match a layout file name to an Activity name."""
+    if not activity_name:
+        return False
+    short = activity_name.rsplit(".", 1)[-1]
+    short = short.replace("Activity", "").replace("Fragment", "").lower()
+    return short in layout_file.lower()
+
+
+def _build_static_context(
+    app_prior: AppPrior | None,
+    activity_name: str | None,
+    elements: list[dict[str, Any]],
+) -> str:
+    """Build static context string from AppPrior for LLM prompt injection."""
+    if not app_prior:
+        return ""
+
+    parts: list[str] = []
+
+    if app_prior.widget_declarations:
+        relevant = [
+            w
+            for w in app_prior.widget_declarations
+            if _match_layout_to_activity(w.layout_file, activity_name)
+        ]
+        if not relevant:
+            seen: set[str] = set()
+            for w in app_prior.widget_declarations:
+                if w.widget_class not in seen:
+                    relevant.append(w)
+                    seen.add(w.widget_class)
+                    if len(relevant) >= 10:
+                        break
+        if relevant:
+            wl = ", ".join(f"{w.widget_class}(id={w.widget_id})" for w in relevant[:15])
+            parts.append(f"Declared widgets in layout XML: {wl}")
+
+    if app_prior.string_constants and elements:
+        visible_texts = {e.get("text", "") for e in elements if e.get("text")}
+        matched = [
+            f"{k}={v!r}" for k, v in app_prior.string_constants.items() if v in visible_texts
+        ][:8]
+        if matched:
+            parts.append(f"Matched string constants: {', '.join(matched)}")
+
+    if app_prior.string_arrays:
+        summaries: list[str] = []
+        for name, values in list(app_prior.string_arrays.items())[:5]:
+            preview = values[:3]
+            suffix = f"... ({len(values)} total)" if len(values) > 3 else ""
+            summaries.append(f"{name}: [{', '.join(preview)}{suffix}]")
+        if summaries:
+            parts.append(f"String arrays: {'; '.join(summaries)}")
+
+    if app_prior.permissions:
+        interesting_kw = [
+            "CAMERA",
+            "LOCATION",
+            "CONTACTS",
+            "CALENDAR",
+            "SMS",
+            "CALL",
+            "RECORD_AUDIO",
+            "BLUETOOTH",
+            "NFC",
+            "WIFI",
+            "INTERNET",
+            "STORAGE",
+            "NOTIFICATIONS",
+        ]
+        interesting = [
+            p.replace("android.permission.", "")
+            for p in app_prior.permissions
+            if any(kw in p for kw in interesting_kw)
+        ][:8]
+        if interesting:
+            parts.append(f"App permissions: {', '.join(interesting)}")
+
+    if not parts:
+        return ""
+    return "## Static app context (from APK)\n" + "\n".join(parts) + "\n\n"
+
+
 class SemanticGrounder:
     """Stage 2.5: Enrich FSM states with semantic metadata via multimodal LLM.
 
@@ -124,7 +208,7 @@ class SemanticGrounder:
                 continue
 
             profile = self.generate_state_description(state, observations, app_prior)
-            icon_labels = self.annotate_icons(state, observations)
+            icon_labels = self.annotate_icons(state, observations, app_prior)
             if icon_labels:
                 profile.icon_labels = icon_labels
 
@@ -156,6 +240,11 @@ class SemanticGrounder:
                 prompt_parts.append(f"This screen belongs to Activity: {activity_info.name}")
                 if activity_info.label:
                     prompt_parts.append(f"Activity label: {activity_info.label}")
+
+        elements_raw = obs.get("interactable_elements", obs.get("elements", []))
+        static_ctx = _build_static_context(app_prior, state.activity_name, elements_raw)
+        if static_ctx:
+            prompt_parts.append(static_ctx)
 
         element_table = _build_element_table(obs)
         prompt_parts.append(f"Accessibility tree elements:\n{element_table}")
@@ -194,6 +283,7 @@ class SemanticGrounder:
         self,
         state: AbstractState,
         observations: list[dict[str, Any]],
+        app_prior: AppPrior | None = None,
     ) -> dict[str, str]:
         """Label clickable elements that have no text or content_description."""
         obs = observations[0]
@@ -223,6 +313,16 @@ class SemanticGrounder:
             "label. Based on their visual appearance at these coordinates, "
             "provide a semantic label for each.\n\n" + "\n".join(lines)
         )
+
+        if app_prior and app_prior.widget_declarations:
+            relevant = [
+                w
+                for w in app_prior.widget_declarations
+                if _match_layout_to_activity(w.layout_file, state.activity_name)
+            ]
+            if relevant:
+                wids = ", ".join(f"{w.widget_class}(id={w.widget_id})" for w in relevant[:10])
+                user_prompt += f"\n\nKnown widget IDs from layout XML: {wids}"
 
         screenshot_path = obs.get("screenshot_path")
         if screenshot_path and Path(screenshot_path).exists():
@@ -265,7 +365,7 @@ class SemanticGrounder:
                 container_type = self._derive_container_type(candidates, observations)
                 return candidates, confidence, container_type
 
-        candidates = self._propose_invariants(observations[0])
+        candidates = self._propose_invariants(observations[0], app_prior)
         if not candidates:
             return [], 0.0, ContainerType.NONE
 
@@ -360,10 +460,21 @@ class SemanticGrounder:
 
         return invariants, confidence
 
-    def _propose_invariants(self, observation: dict[str, Any]) -> list[str]:
+    def _propose_invariants(
+        self,
+        observation: dict[str, Any],
+        app_prior: AppPrior | None = None,
+    ) -> list[str]:
         """Ask LLM to propose candidate invariant expressions."""
         element_table = _build_element_table(observation)
+
+        static_hint = ""
+        if app_prior:
+            elements_raw = observation.get("interactable_elements", [])
+            static_hint = _build_static_context(app_prior, None, elements_raw)
+
         user_prompt = (
+            f"{static_hint}"
             f"Accessibility tree elements:\n{element_table}\n\n"
             "Propose 3-8 structural invariant expressions for this screen."
         )
