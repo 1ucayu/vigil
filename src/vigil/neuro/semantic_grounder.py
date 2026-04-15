@@ -130,7 +130,9 @@ class SemanticGrounder:
 
             state.semantic_profile = profile
 
-            invariants, confidence, container_type = self.mine_invariants(state, observations)
+            invariants, confidence, container_type = self.mine_invariants(
+                state, observations, app_prior
+            )
             state.state_invariants = invariants
             state.invariant_confidence = confidence
             if container_type != ContainerType.NONE:
@@ -244,6 +246,7 @@ class SemanticGrounder:
         self,
         state: AbstractState,
         observations: list[dict[str, Any]],
+        app_prior: AppPrior | None = None,
     ) -> tuple[list[str], float, ContainerType]:
         """Mine and verify structural invariants from multiple observations.
 
@@ -256,6 +259,9 @@ class SemanticGrounder:
         if len(observations) >= 2:
             candidates, confidence = self._compute_cross_visit_invariants(observations)
             if candidates:
+                candidates, confidence = self._boost_invariants_with_strings(
+                    candidates, confidence, app_prior
+                )
                 container_type = self._derive_container_type(candidates, observations)
                 return candidates, confidence, container_type
 
@@ -265,9 +271,13 @@ class SemanticGrounder:
 
         if len(observations) == 1:
             container_type = self._soft_predict_container_type(candidates)
-            return candidates, 0.5, container_type
+            candidates, confidence = self._boost_invariants_with_strings(candidates, 0.5, app_prior)
+            return candidates, confidence, container_type
 
         validated, confidence = self._verify_invariants(candidates, observations)
+        validated, confidence = self._boost_invariants_with_strings(
+            validated, confidence, app_prior
+        )
         container_type = self._derive_container_type(validated, observations)
         return validated, confidence, container_type
 
@@ -318,6 +328,37 @@ class SemanticGrounder:
 
         confidence = min(1.0, n / 10)
         return candidates, round(confidence, 2)
+
+    @staticmethod
+    def _boost_invariants_with_strings(
+        invariants: list[str],
+        confidence: float,
+        app_prior: AppPrior | None,
+    ) -> tuple[list[str], float]:
+        """Boost confidence for invariants that match strings.xml constants."""
+        if not app_prior or not app_prior.string_constants or not invariants:
+            return invariants, confidence
+
+        import re
+
+        string_values = set(app_prior.string_constants.values())
+        boosted_count = 0
+
+        for inv in invariants:
+            match = re.search(r'==\s*"([^"]+)"', inv)
+            if match and match.group(1) in string_values:
+                boosted_count += 1
+
+        if boosted_count > 0:
+            static_ratio = boosted_count / len(invariants)
+            boosted = confidence + (1.0 - confidence) * static_ratio
+            logger.debug(
+                f"String constant boost: {boosted_count}/{len(invariants)} matched, "
+                f"confidence {confidence:.2f} → {boosted:.2f}"
+            )
+            return invariants, min(1.0, round(boosted, 3))
+
+        return invariants, confidence
 
     def _propose_invariants(self, observation: dict[str, Any]) -> list[str]:
         """Ask LLM to propose candidate invariant expressions."""

@@ -197,7 +197,7 @@ def main() -> None:
         from vigil.neuro.dsl_generator import DslGenerator
 
         config = VigilConfig.from_yaml("configs/default.yaml")
-        generator = DslGenerator(fsm=fsm, config=config)
+        generator = DslGenerator(fsm=fsm, config=config, app_prior=prior)
         fsm = generator.generate_all_guards(
             trace_path=trace_path,
             use_images=not args.no_images,

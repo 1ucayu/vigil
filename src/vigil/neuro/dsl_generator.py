@@ -96,6 +96,7 @@ Target state: {target_name}
 {diff_summary}
 
 {widget_hint}\
+{closed_set_hint}\
 {extra_context}\
 Generate a guard expression (or "null" if no precondition is needed):"""
 
@@ -108,10 +109,16 @@ Generate a guard expression (or "null" if no precondition is needed):"""
 class DslGenerator:
     """Generate DSL guard templates for FSM transitions using LLM + screenshots."""
 
-    def __init__(self, fsm: AppFSM, config: VigilConfig) -> None:
+    def __init__(
+        self,
+        fsm: AppFSM,
+        config: VigilConfig,
+        app_prior: Any | None = None,
+    ) -> None:
         self._fsm = fsm
         self._config = config
         self._llm = LlmClient(config.llm)
+        self._app_prior = app_prior
         grammar_path = _GRAMMAR_PATH
         self._grammar_text = grammar_path.read_text()
         self._parser = Lark(self._grammar_text, parser="earley", start="start")
@@ -482,17 +489,21 @@ class DslGenerator:
         widget_hint = ""
         target_class = action.get("target_class", "")
         if target_class:
-            from vigil.neuro.widget_templates import get_guard_template
-
-            template = get_guard_template(target_class)
+            resolved_class, template = self._resolve_widget_type(
+                target_class, action.get("target_resource_id", "")
+            )
             if template:
-                short_name = target_class.rsplit(".", 1)[-1]
+                short_name = resolved_class.rsplit(".", 1)[-1]
                 parts = [f"## Widget type: {short_name}"]
+                if resolved_class != target_class:
+                    parts.append(f"(resolved from layout XML; runtime class was {target_class})")
                 if template.get("safety"):
                     parts.append(f"Suggested safety: {template['safety']}")
                 if template.get("correctness"):
                     parts.append(f"Suggested correctness: {template['correctness']}")
                 widget_hint = "\n".join(parts) + "\n\n"
+
+        closed_set_hint = self._get_closed_set_hint(target_text)
 
         system_prompt = _SYSTEM_PROMPT.format(grammar=self._grammar_text)
         user_prompt = _USER_PROMPT.format(
@@ -509,9 +520,73 @@ class DslGenerator:
             target_table=self._format_elements(target_elements),
             diff_summary=diff_summary or "(no significant changes)",
             widget_hint=widget_hint,
+            closed_set_hint=closed_set_hint,
             extra_context=extra_context,
         )
         return system_prompt, user_prompt
+
+    # ------------------------------------------------------------------
+    # Widget type resolution + closed-set hints
+    # ------------------------------------------------------------------
+
+    _CONTAINER_CLASSES: set[str] = {
+        "LinearLayout",
+        "RelativeLayout",
+        "FrameLayout",
+        "ConstraintLayout",
+        "CoordinatorLayout",
+        "CardView",
+    }
+
+    def _resolve_widget_type(
+        self, target_class: str, target_resource_id: str
+    ) -> tuple[str, dict[str, str | None] | None]:
+        """Resolve widget type with layout XML fallback for containers."""
+        from vigil.core.platform_priors import get_guard_template
+
+        template = get_guard_template(target_class)
+        if template is not None:
+            return target_class, template
+
+        if self._app_prior is None:
+            return target_class, None
+
+        short_class = target_class.rsplit(".", 1)[-1] if "." in target_class else target_class
+        if short_class not in self._CONTAINER_CLASSES:
+            return target_class, None
+
+        if target_resource_id:
+            clean_rid = (
+                target_resource_id.split("/")[-1]
+                if "/" in target_resource_id
+                else target_resource_id
+            )
+            for decl in self._app_prior.widget_declarations:
+                if decl.widget_id == clean_rid:
+                    t = get_guard_template(decl.widget_class)
+                    if t is not None:
+                        logger.debug(
+                            f"Layout XML fallback: {target_class} → "
+                            f"{decl.widget_class} from {decl.layout_file}"
+                        )
+                        return decl.widget_class, t
+
+        return target_class, None
+
+    def _get_closed_set_hint(self, target_text: str) -> str:
+        """Check if target_text matches a string_array, providing value domain."""
+        if not self._app_prior or not self._app_prior.string_arrays:
+            return ""
+
+        for array_name, values in self._app_prior.string_arrays.items():
+            if target_text in values:
+                return (
+                    f"## Closed-set constraint (from strings.xml)\n"
+                    f"The value must be one of: {values}\n"
+                    f"(source: array '{array_name}')\n\n"
+                )
+
+        return ""
 
     # ------------------------------------------------------------------
     # Validation helpers
