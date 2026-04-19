@@ -4,6 +4,11 @@ app:
   exploration_strategy: "bfs"       # bfs | dfs | hybrid
   exploration_backend: "native"      # native | ape
 
+device:
+  type: auto              # auto | emulator | physical
+  serial: null            # null = resolve via `type` below
+  profile_name: default   # suffix for output dirs (e.g. "emulator_pixel6a_api34")
+
 ape:
   jar_path: "libs/ape.jar"
   device_jar_path: "/data/local/tmp/ape.jar"

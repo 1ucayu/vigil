@@ -22,6 +22,32 @@ class AppConfig(BaseModel):
     exploration_backend: Literal["native", "ape"] = "native"
 
 
+class DeviceConfig(BaseModel):
+    """Configuration for the target Android device.
+
+    ``type`` is descriptive metadata that is logged and used to tag output
+    artifacts (bundle directories, exploration traces). ``serial`` lets
+    users pin a specific device when multiple are visible to ADB; when
+    ``None``, the resolver in ``vigil.core.device_resolver`` picks one
+    deterministically based on ``type``.
+
+    Attributes:
+        type: Device kind to target. ``"auto"`` accepts whatever single
+            device is visible; ``"emulator"``/``"physical"`` filter the
+            ADB device list before selection.
+        serial: Explicit ADB serial. When set, bypasses the resolver
+            entirely and trusts the value.
+        profile_name: Suffix appended to data/bundle directories so that
+            artifacts from different device profiles don't overwrite each
+            other (e.g. ``emulator_pixel6a_api34``). Use ``"default"`` to
+            keep the legacy non-suffixed paths.
+    """
+
+    type: Literal["emulator", "physical", "auto"] = "auto"
+    serial: str | None = None
+    profile_name: str = "default"
+
+
 class ApeConfig(BaseModel):
     """Configuration for APE exploration backend."""
 
@@ -102,6 +128,7 @@ class VigilConfig(BaseModel):
     """
 
     app: AppConfig = Field(default_factory=AppConfig)
+    device: DeviceConfig = Field(default_factory=DeviceConfig)
     ape: ApeConfig = Field(default_factory=ApeConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     state_abstraction: StateAbstractionConfig = Field(default_factory=StateAbstractionConfig)
