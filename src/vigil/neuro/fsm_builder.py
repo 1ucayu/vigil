@@ -56,6 +56,9 @@ class FsmBuilder:
         data = json.loads(trace_path.read_text(encoding="utf-8"))
         raw_screens = data.get("screens", {})
         raw_traces = data.get("traces", [])
+        # Make raw_screens available to downstream helpers (e.g.,
+        # _classify_containers_structural) without threading it as a parameter.
+        self._raw_screens = raw_screens
 
         # Step 1: Deduplicate screens by fingerprint → canonical state mapping
         fp_to_state_id, states = self._build_states(raw_screens, trace_path.parent, app_prior)
@@ -96,6 +99,11 @@ class FsmBuilder:
             )
 
         # Step 9: Build Sub-FSM templates for dynamic containers
+        structurally_labeled = self._classify_containers_structural(fsm)
+        if structurally_labeled:
+            logger.info(
+                f"Structural container classification: {structurally_labeled} DYNAMIC states"
+            )
         templates_created = self._build_sub_fsm_templates(fsm)
         if templates_created:
             logger.info(f"Created {templates_created} Sub-FSM templates")
@@ -452,6 +460,42 @@ class FsmBuilder:
 
         return added
 
+    def _classify_containers_structural(self, fsm: AppFSM) -> int:
+        """Fallback container classification when the grounder wasn't run.
+
+        Labels a state ``DYNAMIC`` when it (a) contains a scrollable element
+        and (b) has at least two outgoing click transitions whose targets
+        share the same functional fingerprint — the structural signature of
+        a list-of-items page. Only runs on states still labeled ``NONE``
+        so grounder decisions are preserved.
+
+        Returns:
+            Number of states newly labeled DYNAMIC.
+        """
+        raw_screens = getattr(self, "_raw_screens", {}) or {}
+        labeled = 0
+
+        for sid, state in fsm.states.items():
+            if state.container_type != ContainerType.NONE:
+                continue
+
+            has_scrollable = False
+            for rsid in state.raw_screens:
+                screen = raw_screens.get(rsid, {})
+                elements = screen.get("interactable_elements", screen.get("elements", []))
+                if any(e.get("is_scrollable") for e in elements):
+                    has_scrollable = True
+                    break
+            if not has_scrollable:
+                continue
+
+            targets = self._find_same_fingerprint_targets(fsm, sid)
+            if len(targets) >= 2:
+                state.container_type = ContainerType.DYNAMIC
+                labeled += 1
+
+        return labeled
+
     def _build_sub_fsm_templates(self, fsm: AppFSM) -> int:
         """Create Sub-FSM templates for verified dynamic containers.
 
@@ -488,13 +532,40 @@ class FsmBuilder:
                     if t.source == representative_target_id:
                         template_transitions.append(t)
 
+            collapsed_target_id_set = {tid for tid, _ in click_targets}
+
+            # Collect observed target_text samples across the collapsed click
+            # transitions to populate parameter_schema with concrete values
+            # instead of a hardcoded placeholder.
+            observed_texts: list[str] = []
+            seen_texts: set[str] = set()
+            for t in fsm.transitions:
+                if (
+                    t.source == state_id
+                    and t.action.get("type") == "click"
+                    and t.target in collapsed_target_id_set
+                ):
+                    txt = (t.action.get("target_text") or "").strip()
+                    if txt and txt not in seen_texts:
+                        seen_texts.add(txt)
+                        observed_texts.append(txt)
+
+            parameter_schema: dict[str, str] = {
+                "item_text": "string",
+                "item_index": "int",
+            }
+            if observed_texts:
+                # Record up to 5 real samples so downstream consumers (paper
+                # eval, runtime binding) can reason about the parameter domain.
+                parameter_schema["item_text_samples"] = "|".join(observed_texts[:5])
+
             tmpl = SubFsmTemplate(
                 template_id=template_id,
                 source_state_id=state_id,
                 entry_fingerprint=target_fp,
                 states=template_states,
                 transitions=template_transitions,
-                parameter_schema={"selected_item": "string"},
+                parameter_schema=parameter_schema,
             )
             fsm.sub_fsm_templates[template_id] = tmpl
             state.sub_fsm_template_id = template_id

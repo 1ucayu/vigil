@@ -20,13 +20,69 @@ class _MockScreen(RawScreen):
         return self._forced_fp
 
 
-@pytest.fixture
-def evolution_fsm() -> AppFSM:
-    """FSM with two states for evolution testing.
+def _screen(
+    screen_id: str,
+    activity_name: str,
+    fingerprint: str,
+    elements: list[UIElement],
+) -> _MockScreen:
+    s = _MockScreen(
+        screen_id=screen_id,
+        activity_name=activity_name,
+        elements=elements,
+    )
+    s._forced_fp = fingerprint
+    return s
 
-    s1 (fp="fp_main") --click--> s2 (fp="fp_wifi")
-    s2 --back--> s1
-    s2 --click--> s3 (fp="fp_detail") with guard
+
+def _wifi_elements() -> list[UIElement]:
+    """Canonical element set for a WiFi-settings-like page."""
+    return [
+        UIElement(
+            element_id="e1",
+            class_name="android.widget.Switch",
+            resource_id="id/wifi_toggle",
+            is_clickable=True,
+            depth=2,
+        ),
+        UIElement(
+            element_id="e2",
+            class_name="android.widget.TextView",
+            resource_id="id/wifi_title",
+            depth=2,
+        ),
+        UIElement(
+            element_id="e3",
+            class_name="android.widget.ListView",
+            resource_id="id/networks",
+            is_scrollable=True,
+            depth=3,
+        ),
+        UIElement(
+            element_id="e4", class_name="android.widget.TextView", resource_id="id/ssid", depth=4
+        ),
+    ]
+
+
+def _main_elements() -> list[UIElement]:
+    """Element set for the 'main settings' page (disjoint from wifi)."""
+    return [
+        UIElement(
+            element_id="m1", class_name="android.widget.ImageView", resource_id="id/icon", depth=2
+        ),
+        UIElement(
+            element_id="m2", class_name="android.widget.TextView", resource_id="id/header", depth=2
+        ),
+    ]
+
+
+@pytest.fixture
+def evolution_fsm_and_screens() -> tuple[AppFSM, dict[str, RawScreen]]:
+    """FSM with raw_screens linked to each state so the evolver can compute Jaccard.
+
+    s1 (MainSettings)  — linked to rs_main
+    s2 (WiFiSettings)  — linked to rs_wifi
+    s3 (WiFiDetail)    — linked to rs_detail
     """
     fsm = AppFSM(app_package="com.test.app")
 
@@ -37,6 +93,7 @@ def evolution_fsm() -> AppFSM:
         structural_fingerprint="fp_main",
         hierarchy_level=HierarchyLevel.ACTIVITY,
         activity_name="com.test.app.Main",
+        raw_screens=["rs_main"],
     )
     s2 = AbstractState(
         state_id="s2",
@@ -46,6 +103,7 @@ def evolution_fsm() -> AppFSM:
         hierarchy_level=HierarchyLevel.FRAGMENT,
         parent_state="s1",
         activity_name="com.test.app.Main",
+        raw_screens=["rs_wifi"],
     )
     s3 = AbstractState(
         state_id="s3",
@@ -55,6 +113,7 @@ def evolution_fsm() -> AppFSM:
         hierarchy_level=HierarchyLevel.FRAGMENT,
         parent_state="s2",
         activity_name="com.test.app.Main",
+        raw_screens=[],  # deliberately empty for 0-score test
     )
 
     fsm.add_state(s1)
@@ -64,11 +123,7 @@ def evolution_fsm() -> AppFSM:
 
     fsm.add_transition(
         Transition(
-            source="s1",
-            target="s2",
-            action={"type": "click"},
-            confidence=0.95,
-            observed_count=10,
+            source="s1", target="s2", action={"type": "click"}, confidence=0.95, observed_count=10
         )
     )
     fsm.add_transition(
@@ -91,164 +146,196 @@ def evolution_fsm() -> AppFSM:
         )
     )
 
-    return fsm
-
-
-def _make_screen(fingerprint: str) -> _MockScreen:
-    """Create a RawScreen subclass that returns the given fingerprint."""
-    screen = _MockScreen(
-        screen_id="scr_test",
-        activity_name="com.test.app.Main",
-        elements=[
-            UIElement(
-                element_id="e_001",
-                class_name="android.widget.TextView",
-                text="Test",
-                is_clickable=True,
-            )
-        ],
-    )
-    screen._forced_fp = fingerprint
-    return screen
+    raw_screens: dict[str, RawScreen] = {
+        "rs_main": _screen("rs_main", "com.test.app.Main", "fp_main", _main_elements()),
+        "rs_wifi": _screen("rs_wifi", "com.test.app.Main", "fp_wifi", _wifi_elements()),
+    }
+    return fsm, raw_screens
 
 
 class TestInheritAndBind:
-    def test_inherit_and_bind(self, evolution_fsm: AppFSM) -> None:
-        # "fp_wifj" is very similar to "fp_wifi" (1 char diff)
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.25)
-        screen = _make_screen("fp_wifj")
+    def test_inherit_and_bind(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        # Same elements as wifi → Jaccard 1.0 with s2
+        screen = _screen("scr_new", "com.test.app.Main", "fp_wifi_new", _wifi_elements())
         result = evolver.try_evolution(screen)
 
         assert result.evolved is True
         assert result.method == "inherit_and_bind"
         assert result.state_id == "s_evo_001"
-        assert result.inherited_from is not None
-        assert result.similarity_score > 0.0
+        assert result.inherited_from == "s2"
+        assert result.similarity_score == pytest.approx(1.0)
 
-        # New state added to FSM
-        assert "s_evo_001" in evolution_fsm.states
-        new_state = evolution_fsm.states["s_evo_001"]
-        assert new_state.fingerprint == "fp_wifj"
+        new_state = fsm.states["s_evo_001"]
+        assert new_state.fingerprint == "fp_wifi_new"
         assert "(evolved)" in new_state.name
 
-    def test_inherited_activity(self, evolution_fsm: AppFSM) -> None:
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.25)
-        screen = _make_screen("fp_wifj")
+    def test_inherited_activity(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        screen = _screen("scr_new", "com.test.app.Main", "fp_wifi_new", _wifi_elements())
         result = evolver.try_evolution(screen)
 
-        inherited_from = evolution_fsm.states[result.inherited_from]
-        new_state = evolution_fsm.states[result.state_id]
+        inherited_from = fsm.states[result.inherited_from]
+        new_state = fsm.states[result.state_id]
         assert new_state.activity_name == inherited_from.activity_name
         assert new_state.hierarchy_level == inherited_from.hierarchy_level
 
-    def test_inherited_transitions(self, evolution_fsm: AppFSM) -> None:
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.25)
-        screen = _make_screen("fp_wifj")
+    def test_inherited_transitions(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        screen = _screen("scr_new", "com.test.app.Main", "fp_wifi_new", _wifi_elements())
         result = evolver.try_evolution(screen)
 
-        # Find outgoing transitions of the inherited-from state
         inherited_from = result.inherited_from
-        original_outgoing = [t for t in evolution_fsm.transitions if t.source == inherited_from]
-        new_outgoing = [t for t in evolution_fsm.transitions if t.source == result.state_id]
+        original_outgoing = [t for t in fsm.transitions if t.source == inherited_from]
+        new_outgoing = [t for t in fsm.transitions if t.source == result.state_id]
 
         assert len(new_outgoing) == len(original_outgoing)
         original_types = sorted(t.action.get("type") for t in original_outgoing)
         new_types = sorted(t.action.get("type") for t in new_outgoing)
         assert new_types == original_types
 
-        # Check guards are preserved
         for new_t in new_outgoing:
             for orig_t in original_outgoing:
                 if new_t.action.get("type") == orig_t.action.get("type"):
                     assert new_t.guard == orig_t.guard
                     assert new_t.target == orig_t.target
 
-    def test_no_match(self, evolution_fsm: AppFSM) -> None:
-        # Very high threshold — nothing will match
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.99)
-        screen = _make_screen("zzzzzzzzzzzzzzzz")
+    def test_no_match(self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        # Wholly disjoint elements from any known state
+        disjoint = [
+            UIElement(element_id="x1", class_name="zzz.Foo", resource_id="id/foo", depth=7),
+        ]
+        screen = _screen("scr_new", "com.other", "fp_new", disjoint)
         result = evolver.try_evolution(screen)
 
         assert result.evolved is False
         assert result.method == "none"
         assert result.state_id is None
 
-    def test_no_match_preserves_fsm(self, evolution_fsm: AppFSM) -> None:
-        original_count = len(evolution_fsm.states)
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.99)
-        screen = _make_screen("zzzzzzzzzzzzzzzz")
+    def test_no_match_preserves_fsm(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        original_count = len(fsm.states)
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.99)
+        screen = _screen(
+            "scr_new",
+            "com.other",
+            "fp_new",
+            [
+                UIElement(element_id="x1", class_name="zzz.Foo", depth=7),
+            ],
+        )
         evolver.try_evolution(screen)
 
-        assert len(evolution_fsm.states) == original_count
+        assert len(fsm.states) == original_count
+
+
+class TestExactFingerprintShortCircuit:
+    def test_exact_fingerprint_match(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.99)
+        # Reuse s2's fingerprint — short-circuit to score=1.0
+        screen = _screen("scr_new", "com.test.app.Main", "fp_wifi", _wifi_elements())
+        result = evolver.try_evolution(screen)
+        assert result.evolved is True
+        assert result.similarity_score == pytest.approx(1.0)
+        assert result.inherited_from == "s2"
 
 
 class TestEvolutionLog:
-    def test_evolution_log_entry(self, evolution_fsm: AppFSM) -> None:
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.25)
-        screen = _make_screen("fp_wifj")
-        evolver.try_evolution(screen)
+    def test_evolution_log_entry(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        evolver.try_evolution(
+            _screen("s_new", "com.test.app.Main", "fp_wifi_new", _wifi_elements())
+        )
 
         log = evolver.get_evolution_log()
         assert len(log) == 1
         entry = log[0]
         assert entry["new_state_id"] == "s_evo_001"
-        assert entry["inherited_from"] is not None
+        assert entry["inherited_from"] == "s2"
         assert entry["method"] == "inherit_and_bind"
         assert "timestamp" in entry
         assert "similarity_score" in entry
-        assert entry["screen_fingerprint"] == "fp_wifj"
+        assert entry["screen_fingerprint"] == "fp_wifi_new"
 
-    def test_no_evolution_no_log(self, evolution_fsm: AppFSM) -> None:
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.99)
-        screen = _make_screen("zzzzzzzzzzzzzzzz")
-        evolver.try_evolution(screen)
-
+    def test_no_evolution_no_log(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.99)
+        evolver.try_evolution(
+            _screen(
+                "s_new",
+                "com.other",
+                "fp_new",
+                [
+                    UIElement(element_id="x1", class_name="zzz.Foo", depth=7),
+                ],
+            )
+        )
         assert len(evolver.get_evolution_log()) == 0
 
 
 class TestSequentialEvolution:
-    def test_sequential_ids(self, evolution_fsm: AppFSM) -> None:
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.25)
-        screen1 = _make_screen("fp_wifj")
-        screen2 = _make_screen("fp_wifl")
-        r1 = evolver.try_evolution(screen1)
-        r2 = evolver.try_evolution(screen2)
+    def test_sequential_ids(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        r1 = evolver.try_evolution(_screen("a", "com.test.app.Main", "fp_wifi_a", _wifi_elements()))
+        r2 = evolver.try_evolution(_screen("b", "com.test.app.Main", "fp_wifi_b", _wifi_elements()))
 
         assert r1.state_id == "s_evo_001"
         assert r2.state_id == "s_evo_002"
-        assert "s_evo_001" in evolution_fsm.states
-        assert "s_evo_002" in evolution_fsm.states
-
-    def test_sequential_log(self, evolution_fsm: AppFSM) -> None:
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.25)
-        evolver.try_evolution(_make_screen("fp_wifj"))
-        evolver.try_evolution(_make_screen("fp_wifl"))
-
-        assert len(evolver.get_evolution_log()) == 2
+        assert "s_evo_001" in fsm.states
+        assert "s_evo_002" in fsm.states
 
 
 class TestCacheToDisk:
-    def test_cache_and_reload(self, evolution_fsm: AppFSM, tmp_path) -> None:
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.25)
-        evolver.try_evolution(_make_screen("fp_wifj"))
+    def test_cache_and_reload(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]], tmp_path
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        evolver.try_evolution(_screen("a", "com.test.app.Main", "fp_wifi_a", _wifi_elements()))
 
         path = tmp_path / "fsm.json"
         evolver.cache_to_disk(str(path))
 
         reloaded = AppFSM.deserialize(path)
         assert "s_evo_001" in reloaded.states
-        assert reloaded.states["s_evo_001"].fingerprint == "fp_wifj"
+        assert reloaded.states["s_evo_001"].fingerprint == "fp_wifi_a"
         assert len(reloaded.evolution_log) == 1
 
 
 class TestEvolvedStateLocator:
-    def test_evolved_state_found_by_locator(self, evolution_fsm: AppFSM) -> None:
-        evolver = FsmEvolver(evolution_fsm, similarity_threshold=0.25)
-        evolver.try_evolution(_make_screen("fp_wifj"))
+    def test_evolved_state_found_by_locator(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        evolver.try_evolution(_screen("a", "com.test.app.Main", "fp_wifi_a", _wifi_elements()))
 
-        # Re-create locator with the updated FSM
-        locator = StateLocator(evolution_fsm)
-        loc = locator.locate_by_fingerprint("fp_wifj")
+        locator = StateLocator(fsm)
+        loc = locator.locate_by_fingerprint("fp_wifi_a")
 
         assert loc.result == LocateResult.EXACT
         assert loc.state_id == "s_evo_001"
@@ -256,37 +343,52 @@ class TestEvolvedStateLocator:
 
 
 class TestComputeSimilarity:
-    def test_identical(self) -> None:
-        components: set[tuple[str, str, int]] = {("Button", "id/btn", 2)}
-        state = AbstractState(
-            state_id="s1",
-            name="Test",
-            fingerprint="fp1",
-            hierarchy_level=HierarchyLevel.ACTIVITY,
-            activity_name="com.test.Activity",
-        )
-        score = FsmEvolver._compute_similarity_jaccard(components, state)
-        assert score >= 0.0
+    def test_identical_components(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        # s2 has rs_wifi → same components as wifi_elements
+        wifi_comps = FsmEvolver._extract_components(raw_screens["rs_wifi"])
+        score = evolver._compute_similarity_jaccard(wifi_comps, "s2")
+        assert score == pytest.approx(1.0)
 
-    def test_completely_different(self) -> None:
-        components: set[tuple[str, str, int]] = {("X", "id/x", 1)}
-        state = AbstractState(
-            state_id="s1",
-            name="Test",
-            fingerprint="fp1",
-            hierarchy_level=HierarchyLevel.ACTIVITY,
-        )
-        score = FsmEvolver._compute_similarity_jaccard(components, state)
+    def test_disjoint_components(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        foreign = {("zzz.Foo", "id/foo", 7)}
+        score = evolver._compute_similarity_jaccard(foreign, "s2")
         assert score == 0.0
 
-    def test_partial_match(self) -> None:
-        components: set[tuple[str, str, int]] = {("Button", "id/btn", 2)}
-        state = AbstractState(
-            state_id="s1",
-            name="Test",
-            fingerprint="fp1",
-            hierarchy_level=HierarchyLevel.ACTIVITY,
-            activity_name="com.test.Activity",
-        )
-        score = FsmEvolver._compute_similarity_jaccard(components, state)
-        assert 0.0 <= score <= 1.0
+    def test_partial_overlap(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        # 4 wifi components; take 2 + 2 foreign → 2 intersect / 6 union = 1/3
+        wifi_comps = FsmEvolver._extract_components(raw_screens["rs_wifi"])
+        picked = set(list(wifi_comps)[:2])
+        foreign = {("zzz.A", "id/a", 9), ("zzz.B", "id/b", 9)}
+        score = evolver._compute_similarity_jaccard(picked | foreign, "s2")
+        assert score == pytest.approx(2 / 6)
+
+    def test_state_without_raw_screens_scores_zero(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, raw_screens = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, raw_screens=raw_screens, similarity_threshold=0.5)
+        wifi_comps = FsmEvolver._extract_components(raw_screens["rs_wifi"])
+        # s3 has raw_screens=[] → no cached components → 0.0
+        score = evolver._compute_similarity_jaccard(wifi_comps, "s3")
+        assert score == 0.0
+
+    def test_evolver_without_raw_screens_all_zero(
+        self, evolution_fsm_and_screens: tuple[AppFSM, dict[str, RawScreen]]
+    ) -> None:
+        fsm, _ = evolution_fsm_and_screens
+        evolver = FsmEvolver(fsm, similarity_threshold=0.5)  # no raw_screens
+        screen = _screen("scr_new", "com.test.app.Main", "fp_wifi_new", _wifi_elements())
+        result = evolver.try_evolution(screen)
+        assert result.evolved is False

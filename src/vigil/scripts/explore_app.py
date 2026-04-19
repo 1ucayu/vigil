@@ -80,6 +80,12 @@ def main() -> None:
         action="store_true",
         help="Extract Activity prior from connected device via 'adb dumpsys'",
     )
+    parser.add_argument(
+        "--device-type",
+        choices=["emulator", "physical", "auto"],
+        default=None,
+        help="Filter candidate devices by type when --serial is not given",
+    )
 
     args = parser.parse_args()
 
@@ -102,23 +108,37 @@ def main() -> None:
         config.ape.running_minutes = args.minutes
     if args.ape_jar is not None:
         config.ape.jar_path = args.ape_jar
+    if args.device_type is not None:
+        config.device.type = args.device_type
 
     backend = args.backend or config.app.exploration_backend
 
-    # Auto-detect device serial if not provided
+    # Resolve device serial (CLI --serial > config.device.serial > type-filtered auto)
     serial = args.serial
     if serial is None:
-        from adbutils import adb
+        from vigil.core.device_resolver import resolve_device_serial
 
-        devices = adb.device_list()
-        if not devices:
-            logger.error("No ADB devices found. Connect a device and try again.")
+        try:
+            serial = resolve_device_serial(config.device)
+        except RuntimeError as e:
+            logger.error(str(e))
             sys.exit(1)
-        serial = devices[0].serial
-        logger.info(f"Auto-detected device: {serial}")
 
-    # Run exploration with selected backend
-    output_dir = Path(args.output_dir) if args.output_dir else None
+    logger.info(
+        f"Target device: serial={serial} type={config.device.type} "
+        f"profile={config.device.profile_name}"
+    )
+
+    # Resolve output directory. When the user pins a non-default device
+    # profile, suffix the data dir so different device profiles don't
+    # overwrite each other's exploration artifacts.
+    if args.output_dir is not None:
+        output_dir: Path | None = Path(args.output_dir)
+    elif config.device.profile_name != "default":
+        app_name = args.app.replace(".", "_")
+        output_dir = Path(f"data/apps/{app_name}__{config.device.profile_name}")
+    else:
+        output_dir = None
 
     # Extract Activity prior (optional)
     app_prior = None

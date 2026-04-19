@@ -839,7 +839,8 @@ class TestBuildSubFsmTemplates:
         tmpl = fsm.sub_fsm_templates["tmpl_s_list"]
         assert tmpl.source_state_id == "s_list"
         assert tmpl.entry_fingerprint == "fp_detail_shared"
-        assert tmpl.parameter_schema == {"selected_item": "string"}
+        assert tmpl.parameter_schema["item_text"] == "string"
+        assert tmpl.parameter_schema["item_index"] == "int"
 
     def test_state_gets_template_id(self) -> None:
         fsm = self._make_dynamic_fsm()
@@ -975,3 +976,103 @@ class TestTemplateBasedValidation:
             )
         )
         assert fsm.is_valid_transition("s1", {"type": "click"}) is False
+
+
+class TestClassifyContainersStructural:
+    """Structural fallback for container_type when grounder hasn't run."""
+
+    @staticmethod
+    def _fsm_with_list_page() -> AppFSM:
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_list",
+                name="ItemList",
+                fingerprint="fp_list",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                raw_screens=["rs_list"],
+            )
+        )
+        for i in range(1, 4):
+            fsm.add_state(
+                AbstractState(
+                    state_id=f"s_detail_{i}",
+                    name=f"Detail {i}",
+                    fingerprint="fp_detail_shared",
+                    hierarchy_level=HierarchyLevel.FRAGMENT,
+                )
+            )
+            fsm.add_transition(
+                Transition(
+                    source="s_list",
+                    target=f"s_detail_{i}",
+                    action={"type": "click", "target_text": f"Item {i}"},
+                    observed_count=1,
+                )
+            )
+        return fsm
+
+    def test_scrollable_list_labeled_dynamic(self) -> None:
+        fsm = self._fsm_with_list_page()
+        builder = FsmBuilder("com.test.app")
+        builder._raw_screens = {
+            "rs_list": {
+                "elements": [
+                    {"class_name": "android.widget.RecyclerView", "is_scrollable": True},
+                    {"class_name": "android.widget.TextView", "is_scrollable": False},
+                ]
+            }
+        }
+        count = builder._classify_containers_structural(fsm)
+        assert count == 1
+        assert fsm.states["s_list"].container_type == ContainerType.DYNAMIC
+
+    def test_no_scrollable_not_labeled(self) -> None:
+        fsm = self._fsm_with_list_page()
+        builder = FsmBuilder("com.test.app")
+        builder._raw_screens = {
+            "rs_list": {
+                "elements": [
+                    {"class_name": "android.widget.TextView", "is_scrollable": False},
+                ]
+            }
+        }
+        count = builder._classify_containers_structural(fsm)
+        assert count == 0
+        assert fsm.states["s_list"].container_type == ContainerType.NONE
+
+    def test_preserves_existing_label(self) -> None:
+        fsm = self._fsm_with_list_page()
+        fsm.states["s_list"].container_type = ContainerType.STATIC
+        builder = FsmBuilder("com.test.app")
+        builder._raw_screens = {
+            "rs_list": {
+                "elements": [
+                    {"class_name": "android.widget.RecyclerView", "is_scrollable": True},
+                ]
+            }
+        }
+        count = builder._classify_containers_structural(fsm)
+        assert count == 0
+        assert fsm.states["s_list"].container_type == ContainerType.STATIC
+
+    def test_template_built_without_grounder(self) -> None:
+        """Classifier + template builder together produce a template on raw FSM."""
+        fsm = self._fsm_with_list_page()
+        builder = FsmBuilder("com.test.app")
+        builder._raw_screens = {
+            "rs_list": {
+                "elements": [
+                    {"class_name": "android.widget.RecyclerView", "is_scrollable": True},
+                ]
+            }
+        }
+        builder._classify_containers_structural(fsm)
+        templates = builder._build_sub_fsm_templates(fsm)
+        assert templates == 1
+        tmpl = fsm.sub_fsm_templates["tmpl_s_list"]
+        # parameter_schema should include observed target_text samples
+        assert "item_text_samples" in tmpl.parameter_schema
+        samples = tmpl.parameter_schema["item_text_samples"]
+        # At least one of the three observed labels should appear
+        assert any(f"Item {i}" in samples for i in (1, 2, 3))

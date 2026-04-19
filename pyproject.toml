@@ -65,6 +65,7 @@ vigil-build = "vigil.scripts.build_fsm:main"
 vigil-verify = "vigil.scripts.verify_fsm:main"
 vigil-visualize = "vigil.scripts.visualize_fsm:main"
 vigil-verify-action = "vigil.scripts.verify_action:main"
+vigil-doctor = "vigil.scripts.doctor:main"
 vigil-agent-run = "vigil.integration.agent_runner:main"
 
 [build-system]

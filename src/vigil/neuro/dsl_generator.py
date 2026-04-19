@@ -52,6 +52,13 @@ Available predicates:
 - in_state(name) — check current FSM state
 - time_in(HH:MM, HH:MM) — time range check
 
+Readable properties for read(elem, prop) — use these names exactly:
+  text, content_description, value, class_name, resource_id, bounds,
+  is_clickable, is_long_clickable, is_checkable, is_checked,
+  is_enabled, is_editable, is_scrollable, is_focusable,
+  is_focused, is_selected, is_password, children_count
+Any other property name will evaluate to null at runtime.
+
 Use $intent.variable_name for values that depend on the user's instruction \
 and are only known at runtime. Choose descriptive variable names \
 (e.g., $intent.wifi_name, $intent.target_setting, $intent.device_name).
@@ -731,10 +738,16 @@ class DslGenerator:
                             "text": e.text or "",
                             "content_description": e.content_description or "",
                             "is_clickable": e.is_clickable,
+                            "is_long_clickable": e.is_long_clickable,
                             "is_scrollable": e.is_scrollable,
                             "is_editable": e.is_editable,
                             "is_checkable": e.is_checkable,
                             "is_checked": e.is_checked,
+                            "is_enabled": e.is_enabled,
+                            "is_focusable": e.is_focusable,
+                            "is_focused": e.is_focused,
+                            "is_selected": e.is_selected,
+                            "is_password": e.is_password,
                             "bounds": e.bounds,
                         }
                         for e in ui_elements
@@ -752,18 +765,45 @@ class DslGenerator:
 
     @staticmethod
     def _format_elements(elements: list[dict[str, Any]]) -> str:
-        """Format element list as a compact table with aliases."""
+        """Format element list as a compact table with aliases.
+
+        Columns mirror the property keys exposed by the runtime
+        ``DecisionEngine._build_screen_context`` so the LLM only generates
+        guards over properties that exist at evaluation time.
+        """
         if not elements:
             return "(no interactable elements)"
-        lines = ["| Alias (use in guards) | Class | Text | Clickable | Checkable | Checked |"]
+
+        prop_cols: list[tuple[str, str]] = [
+            ("Clickable", "is_clickable"),
+            ("LongClickable", "is_long_clickable"),
+            ("Checkable", "is_checkable"),
+            ("Checked", "is_checked"),
+            ("Editable", "is_editable"),
+            ("Enabled", "is_enabled"),
+            ("Scrollable", "is_scrollable"),
+            ("Focused", "is_focused"),
+            ("Selected", "is_selected"),
+            ("Password", "is_password"),
+        ]
+        # Drop columns that are uniformly False across the screen — saves tokens
+        # without hiding signal the LLM could act on.
+        active_cols = [
+            (label, key) for label, key in prop_cols if any(el.get(key) for el in elements)
+        ]
+
+        header = (
+            "| Alias (use in guards) | Class | Text | "
+            + " | ".join(label for label, _ in active_cols)
+            + " |"
+        )
+        lines = [header]
         for el in elements:
             alias = el.get("_alias", el.get("resource_id", el.get("element_id", "")))
             cls = el.get("class_name", "")
             if cls and "." in cls:
                 cls = cls.rsplit(".", maxsplit=1)[-1]
-            text = (el.get("text", "") or "")[:40]
-            clickable = el.get("is_clickable", False)
-            chkable = el.get("is_checkable", False)
-            chked = el.get("is_checked", False)
-            lines.append(f"| {alias} | {cls} | {text} | {clickable} | {chkable} | {chked} |")
+            text = (el.get("text", "") or "")[:30]
+            row_vals = [str(el.get(key, False)) for _, key in active_cols]
+            lines.append(f"| {alias} | {cls} | {text} | " + " | ".join(row_vals) + " |")
         return "\n".join(lines)

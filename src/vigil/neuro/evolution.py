@@ -62,11 +62,25 @@ class FsmEvolver:
     def __init__(
         self,
         fsm: AppFSM,
+        raw_screens: dict[str, RawScreen] | None = None,
         similarity_threshold: float = 0.80,
     ) -> None:
         self._fsm = fsm
+        self._raw_screens = raw_screens or {}
         self._threshold = similarity_threshold
         self._evolution_count = 0
+        # Precompute per-state component sets from raw_screens. States whose
+        # raw_screens are not available score 0.0 at match time (logged+skipped).
+        self._state_components: dict[str, set[tuple[str, str, int]]] = {}
+        for sid, state in fsm.states.items():
+            comps: set[tuple[str, str, int]] = set()
+            for rsid in state.raw_screens:
+                rs = self._raw_screens.get(rsid)
+                if rs is None:
+                    continue
+                comps.update(self._extract_components(rs))
+            if comps:
+                self._state_components[sid] = comps
 
     def try_evolution(self, screen: RawScreen) -> EvolutionResult:
         """Attempt to evolve the FSM for an unseen screen.
@@ -92,7 +106,7 @@ class FsmEvolver:
                 best_state_id = state.state_id
                 best_score = 1.0
                 break
-            score = self._compute_similarity_jaccard(screen_components, state)
+            score = self._compute_similarity_jaccard(screen_components, state.state_id)
             if score > best_score:
                 best_score = score
                 best_state_id = state.state_id
@@ -172,19 +186,23 @@ class FsmEvolver:
             components.add((e.class_name, e.resource_id or "", e.depth))
         return components
 
-    @staticmethod
     def _compute_similarity_jaccard(
+        self,
         screen_components: set[tuple[str, str, int]],
-        state: AbstractState,
+        state_id: str,
     ) -> float:
-        """Jaccard similarity between screen components and state's activity+name hint.
+        """Jaccard similarity between screen components and a known state's
+        cached component set.
 
-        Uses structural fingerprint equality as a fast check, then falls back
-        to activity name matching for a coarse similarity estimate.
+        Returns 0.0 if the state has no cached components (e.g., raw_screens
+        weren't provided at evolver construction).
         """
-        if not state.activity_name:
+        state_comps = self._state_components.get(state_id)
+        if not state_comps or not screen_components:
             return 0.0
-        return 0.3
+        intersection = len(screen_components & state_comps)
+        union = len(screen_components | state_comps)
+        return intersection / union if union > 0 else 0.0
 
     def get_evolution_log(self) -> list[dict[str, Any]]:
         """Return the FSM's evolution log entries."""
