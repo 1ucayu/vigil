@@ -36,3 +36,16 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# mobile agents: keep our scaffolding, ignore upstream clones + venvs + weights
+mobile_agents/m3a/android_world/
+mobile_agents/mobile-agent-v2/MobileAgent/
+mobile_agents/mobiagent/MobiAgent/
+mobile_agents/**/.venv/
+mobile_agents/**/weights/
+mobile_agents/**/*.apk
+mobile_agents/**/.env
+mobile_agents/**/__pycache__/
+# allow commit-SHA receipts
+!mobile_agents/**/README_COMMIT.txt
+!mobile_agents/**/COMMIT.txt

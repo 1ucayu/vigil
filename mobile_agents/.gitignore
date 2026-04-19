@@ -1,0 +1,28 @@
+# Upstream clones (git-ignored at folder level)
+m3a/android_world/
+mobile-agent-v2/MobileAgent/
+mobiagent/MobiAgent/
+
+# Isolated venvs
+**/.venv/
+
+# Weights, APKs, large binaries
+**/weights/
+**/*.apk
+
+# Secrets
+**/.env
+
+# Caches
+**/__pycache__/
+**/*.pyc
+
+# Logs
+*.log
+/tmp/emulator_boot.log
+
+# Keep committed metadata
+!**/COMMIT.txt
+!**/README.md
+!**/README_COMMIT.txt
+!**/.env.example
