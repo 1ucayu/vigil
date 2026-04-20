@@ -55,14 +55,29 @@ class FsmBuilder:
         """
         data = json.loads(trace_path.read_text(encoding="utf-8"))
         raw_screens = data.get("screens", {})
-        raw_traces = data.get("traces", [])
+        # Drop sentinel traces emitted by the explorer when cold-start, replay,
+        # or action execution failed — their target_state_id is a reserved
+        # uppercase label, not a real state hash.
+        _SENTINELS = frozenset({"COLD_START_FAILED", "ACTION_FAILED", "LEFT_APP"})  # noqa: N806
+        raw_traces = [
+            t for t in data.get("traces", []) if t.get("target_state_id") not in _SENTINELS
+        ]
         # Make raw_screens available to downstream helpers (e.g.,
         # _classify_containers_structural) without threading it as a parameter.
         self._raw_screens = raw_screens
 
-        # Step 1: Deduplicate screens by fingerprint → canonical state mapping
-        fp_to_state_id, states = self._build_states(raw_screens, trace_path.parent, app_prior)
-        sid_to_state_id = self._build_screen_mapping(raw_screens, fp_to_state_id)
+        # Step 1: Build canonical states. If the trace ships ``state_id`` per
+        # screen (new explorer format), trust it directly — it's a functional,
+        # text-anchored identity already. Otherwise fall back to the original
+        # fingerprint-based dedup for backward compatibility with older traces.
+        if self._trace_has_state_ids(raw_screens):
+            sid_to_state_id, states = self._build_states_from_state_ids(
+                raw_screens, trace_path.parent, app_prior
+            )
+            fp_to_state_id = {}
+        else:
+            fp_to_state_id, states = self._build_states(raw_screens, trace_path.parent, app_prior)
+            sid_to_state_id = self._build_screen_mapping(raw_screens, fp_to_state_id)
 
         # Step 2: Build transitions from traces
         transitions = self._build_transitions(
@@ -765,6 +780,66 @@ class FsmBuilder:
             if fp in fp_to_state_id:
                 sid_to_state_id[screen_id] = fp_to_state_id[fp]
         return sid_to_state_id
+
+    @staticmethod
+    def _trace_has_state_ids(raw_screens: dict[str, Any]) -> bool:
+        """Return True iff every screen in the trace carries a non-empty ``state_id``."""
+        if not raw_screens:
+            return False
+        for screen in raw_screens.values():
+            sid = screen.get("state_id") if isinstance(screen, dict) else None
+            if not sid:
+                return False
+        return True
+
+    def _build_states_from_state_ids(
+        self,
+        raw_screens: dict[str, Any],
+        trace_dir: Path | None = None,
+        app_prior: AppPrior | None = None,
+    ) -> tuple[dict[str, str], dict[str, AbstractState]]:
+        """Build AbstractStates directly from per-screen ``state_id``.
+
+        This is the new-explorer path: the ``state_id`` is already a functional,
+        text-anchored identity, so no fingerprint computation is needed. Each
+        unique ``state_id`` in the trace becomes one AbstractState.
+
+        Returns:
+            (screen_id -> canonical_state_id, canonical_state_id -> AbstractState).
+        """
+        sid_to_state_id: dict[str, str] = {}
+        states: dict[str, AbstractState] = {}
+        state_id_to_canonical: dict[str, str] = {}
+        state_counter = 0
+
+        for screen_id, screen in raw_screens.items():
+            text_sid: str = screen.get("state_id") or ""
+            if not text_sid:
+                continue
+            canonical = state_id_to_canonical.get(text_sid)
+            if canonical is None:
+                state_counter += 1
+                canonical = f"s_{state_counter:03d}"
+                state_id_to_canonical[text_sid] = canonical
+                structural_fp = self._compute_structural_fingerprint(screen)
+                states[canonical] = AbstractState(
+                    state_id=canonical,
+                    name=self._derive_state_name(screen, canonical, trace_dir, app_prior),
+                    fingerprint=text_sid,
+                    structural_fingerprint=structural_fp or None,
+                    hierarchy_level=HierarchyLevel.ACTIVITY,
+                    activity_name=screen.get("activity_name"),
+                    raw_screens=[screen_id],
+                )
+            else:
+                states[canonical].raw_screens.append(screen_id)
+            sid_to_state_id[screen_id] = canonical
+
+        logger.info(
+            f"Built {len(states)} abstract states from {len(raw_screens)} raw screens "
+            "(state_id path)"
+        )
+        return sid_to_state_id, states
 
     def _build_transitions(
         self,

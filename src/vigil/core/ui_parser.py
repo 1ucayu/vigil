@@ -121,11 +121,19 @@ def _parse_node(
         return node.attrib.get(attr_name, "false") == "true"
 
     class_name = node.attrib.get("class", "")
+    node_package = node.attrib.get("package", "")
     is_editable = _bool("focusable") and class_name.endswith("EditText")
+
+    input_type_raw = node.attrib.get("input-type") or node.attrib.get("inputType") or "0"
+    try:
+        input_type = int(input_type_raw)
+    except ValueError:
+        input_type = 0
 
     element = UIElement(
         element_id=element_id,
         class_name=class_name,
+        package=node_package,
         resource_id=node.attrib.get("resource-id") or None,
         text=node.attrib.get("text") or None,
         content_description=node.attrib.get("content-desc") or None,
@@ -144,6 +152,7 @@ def _parse_node(
         depth=depth,
         children=child_ids,
         parent_id=parent_id,
+        input_type=input_type,
     )
     elements.append(element)
     return element_id

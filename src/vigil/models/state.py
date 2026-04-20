@@ -6,9 +6,42 @@ before state abstraction (Stage 2) maps them to AbstractStates.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+_DYNAMIC_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\d+\.\d+\s*[GMK]B"), "<SIZE>"),
+    (re.compile(r"\d+\s*[GMK]B"), "<SIZE>"),
+    (re.compile(r"\d+%"), "<PCT>"),
+    (re.compile(r"\d{1,2}:\d{2}(\s*[AP]M)?"), "<TIME>"),
+    (re.compile(r"\b\d+\b"), "<N>"),
+]
+
+_TOOLBAR_ANCESTOR_TOKENS: tuple[str, ...] = ("app_bar", "toolbar", "action_bar")
+
+EMPTY_SCREEN_ID = "EMPTY_SCREEN"
+
+
+def _normalize_dynamic(text: str) -> str:
+    """Apply dynamic-content normalization patterns in order."""
+    t = text
+    for pat, repl in _DYNAMIC_PATTERNS:
+        t = pat.sub(repl, t)
+    return t.strip()
+
+
+def _short_rid(rid: str, class_name: str) -> str:
+    """Return the short form of a resource-id, falling back to class name tail."""
+    if ":id/" in rid:
+        return rid.split(":id/", 1)[1]
+    if rid:
+        return rid
+    if class_name:
+        return class_name.rsplit(".", 1)[-1]
+    return ""
 
 
 class UIElement(BaseModel):
@@ -34,6 +67,7 @@ class UIElement(BaseModel):
 
     element_id: str
     class_name: str
+    package: str = ""
     resource_id: str | None = None
     text: str | None = None
     content_description: str | None = None
@@ -52,6 +86,7 @@ class UIElement(BaseModel):
     depth: int = 0
     children: list[str] = Field(default_factory=list)
     parent_id: str | None = None
+    input_type: int = 0
 
     def get_grouping_skeleton(self) -> tuple:
         """Return a coarse structural skeleton for equivalence grouping.
@@ -141,6 +176,162 @@ class RawScreen(BaseModel):
             )
         ]
 
+    def _classify_scrollable(
+        self, scrollable_elem: UIElement, elements_by_id: dict[str, UIElement]
+    ) -> str:
+        """Classify a scrollable by direct-row count (feature D).
+
+        Row-count heuristic:
+          - 0 rows                    -> "empty"
+          - 1 row that is itself a wrapper -> recurse
+          - 1-15 rows (after unwrap)  -> "heterogeneous" (preserve per-row anchors)
+          - 16+ rows                  -> "homogeneous" (collapse to sentinel)
+
+        Rationale: Android Preference menus in apps like Settings have 3-11
+        heterogeneous rows whose titles are page identity. Content lists
+        (email, contacts, file browsers) typically have 20+ homogeneous
+        rows whose titles are content, not identity — collapsing prevents
+        N-way state explosion.
+        """
+        direct_children = [e for e in self.elements if e.parent_id == scrollable_elem.element_id]
+        if not direct_children:
+            return "empty"
+        if len(direct_children) == 1:
+            return self._classify_scrollable(direct_children[0], elements_by_id)
+        row_count = len(direct_children)
+        if row_count <= 15:
+            return "heterogeneous"
+        return "homogeneous"
+
+    def get_functional_state_key(self, app_package: str) -> tuple[str, frozenset[tuple[str, str]]]:
+        """Text-anchored functional state identity.
+
+        Returns (anchor_container_rid, frozenset of (rid_short, normalized_text)
+        anchor tuples).
+
+        anchor_container_rid is the resource-id of the first child of the element
+        whose resource-id is ``android:id/content``. Empty string if not found.
+
+        Anchors include every element with non-empty text (or content-description)
+        that is:
+          - interactable (click / long-click / checkable / editable), OR
+          - has resource-id ``android:id/title`` (Preference list row labels), OR
+          - is a TextView inside an ancestor whose resource-id contains any of
+            ``app_bar`` / ``toolbar`` / ``action_bar`` (page titles).
+
+        Explicitly excluded:
+          - Elements with resource-id ``android:id/summary`` (dynamic content).
+          - Elements whose package is neither ``app_package`` nor ``"android"``
+            (cross-app UI injections such as com.android.systemui).
+          - Elements with empty text AND empty content-description.
+          - Descendants of a scrollable container classified as "homogeneous"
+            (feature D: list content collapse — replaced by a single
+            ``list_<rid>=non_empty|empty`` sentinel anchor per such list).
+
+        Text is normalized (see _DYNAMIC_PATTERNS) so numeric values, sizes,
+        percentages, and timestamps do not destabilize state identity.
+        """
+        elements_by_id: dict[str, UIElement] = {e.element_id: e for e in self.elements}
+
+        anchor_container = ""
+        for e in self.elements:
+            if e.resource_id == "android:id/content":
+                children = [c for c in self.elements if c.parent_id == e.element_id]
+                if children:
+                    children.sort(key=lambda c: c.depth)
+                    anchor_container = children[0].resource_id or ""
+                break
+
+        def is_inside_toolbar(elem: UIElement) -> bool:
+            cur: UIElement | None = elem
+            depth_guard = 0
+            while cur is not None and cur.parent_id is not None and depth_guard < 30:
+                parent = elements_by_id.get(cur.parent_id)
+                if parent is None:
+                    return False
+                rid = parent.resource_id or ""
+                if any(tok in rid for tok in _TOOLBAR_ANCESTOR_TOKENS):
+                    return True
+                cur = parent
+                depth_guard += 1
+            return False
+
+        # Feature D: classify each scrollable and mark descendants of
+        # "homogeneous" ones for anchor exclusion.
+        scrollable_classification: dict[str, str] = {}
+        for e in self.elements:
+            if e.is_scrollable:
+                scrollable_classification[e.element_id] = self._classify_scrollable(
+                    e, elements_by_id
+                )
+
+        def homogeneous_ancestor_id(elem: UIElement) -> str | None:
+            cur: UIElement | None = elem
+            depth_guard = 0
+            while cur is not None and cur.parent_id is not None and depth_guard < 50:
+                parent = elements_by_id.get(cur.parent_id)
+                if parent is None:
+                    return None
+                if scrollable_classification.get(parent.element_id) == "homogeneous":
+                    return parent.element_id
+                cur = parent
+                depth_guard += 1
+            return None
+
+        anchors: set[tuple[str, str]] = set()
+        for e in self.elements:
+            if e.package and e.package != app_package and e.package != "android":
+                continue
+            if e.resource_id == "android:id/summary":
+                continue
+            if homogeneous_ancestor_id(e) is not None:
+                continue  # descendants of homogeneous lists collapse to sentinel
+
+            raw = e.text or e.content_description or ""
+            if not raw:
+                continue
+            text = _normalize_dynamic(raw)
+            if not text:
+                continue
+
+            is_interactable = (
+                e.is_clickable or e.is_long_clickable or e.is_checkable or e.is_editable
+            )
+            is_title = e.resource_id == "android:id/title"
+            is_toolbar_text = "TextView" in (e.class_name or "") and is_inside_toolbar(e)
+            if not (is_interactable or is_title or is_toolbar_text):
+                continue
+
+            anchors.add((_short_rid(e.resource_id or "", e.class_name or ""), text))
+
+        # Emit list sentinels for homogeneous and empty scrollables.
+        for scroll_id, classification in scrollable_classification.items():
+            if classification == "heterogeneous":
+                continue
+            scroll_elem = elements_by_id[scroll_id]
+            sentinel_rid = _short_rid(scroll_elem.resource_id or "", scroll_elem.class_name or "")
+            if not sentinel_rid:
+                continue
+            value = "empty" if classification == "empty" else "non_empty"
+            anchors.add((f"list_{sentinel_rid}", value))
+
+        return (anchor_container, frozenset(anchors))
+
+    def get_state_id(self, app_package: str) -> str:
+        """Deterministic 12-char state id derived from the functional state key.
+
+        Returns the literal ``EMPTY_SCREEN`` if both the anchor container is
+        empty AND no anchors were collected (empty capture, crash/ANR dialog,
+        fully black screen). Callers must treat this as a non-registrable
+        observation.
+        """
+        container, anchors = self.get_functional_state_key(app_package)
+        if not container and not anchors:
+            return EMPTY_SCREEN_ID
+        sorted_anchors = sorted(f"{r}={t}" for r, t in anchors)
+        key_str = container + "||" + "|".join(sorted_anchors)
+        return hashlib.sha256(key_str.encode()).hexdigest()[:12]
+
     def get_structural_fingerprint(self, scroll_aware: bool = True) -> str:
         """Generate a structural fingerprint ignoring dynamic content.
 
@@ -156,8 +347,6 @@ class RawScreen(BaseModel):
 
         Used by Stage 2 (State Abstraction) for rule-based grouping.
         """
-        import hashlib
-
         # Find depths of scrollable containers — their children are scroll-volatile
         scrollable_depths: set[int] = set()
         if scroll_aware:

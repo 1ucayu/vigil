@@ -1,28 +1,32 @@
-"""Stage 1: UI Exploration via uiautomator2.
+"""Stage 1: UI Exploration as plain BFS with scroll-to-enumerate and restart-per-action.
 
-BFS/DFS traversal of Android app screens. At each screen, enumerates interactable
-elements, executes each action, and records the resulting screen (accessibility tree
-XML + screenshot PNG + element list).
+Algorithm:
 
-Smart stopping: when a scrollable container has homogeneous children (>=60% share
-the same element skeleton AND >=3 such children), only 2 representative item clicks
-are explored instead of all N — reducing per-container cost from O(N) to O(1).
+    pop state_id from queue
+    cold-start + navigate to state_id
+    enumerate clickables by scrolling until anchor set stops changing
+    for each enumerated clickable:
+        cold-start + navigate + click + capture post screen
+        record whatever state we actually saw (may drift from intended)
+        queue novel target states
 
-Locality-aware scheduling: 5-tier frontier priority minimizes costly replay navigation
-by preferring actions from the current screen, forward-adjacent, back-reachable,
-or sibling screens before falling back to full app restart + replay.
+Drift is not a failure. If replay lands somewhere other than the
+intended source state, we record the actual source plus the intended
+one and move on. The FSM builder aggregates facts; the explorer does
+not promise nav_path precision.
 
-Action dedup: tracks executed actions by (activity_name, action_type, bounds) signature
-to prevent re-exploring the same action when fingerprint drift causes a revisited
-screen to appear "new".
+Sentinel ``target_state_id`` values flag non-transitional outcomes for
+downstream filters: ``COLD_START_FAILED`` (couldn't foreground the
+app), ``ACTION_FAILED`` (device API raised), ``LEFT_APP`` (ended up
+outside the target package).
 """
 
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,224 +35,158 @@ import uiautomator2 as u2
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from vigil.core.action_types import enumerate_actions
 from vigil.core.config import VigilConfig
 from vigil.core.ui_parser import parse_hierarchy_xml
 from vigil.models.action import Action, ActionType
 from vigil.models.state import RawScreen, UIElement
 from vigil.neuro.app_prior import AppPrior
 
-STRUCTURAL_GROUP_MIN_SIZE = 4
-STRUCTURAL_GROUP_REPRESENTATIVES = 2
-
-SEARCH_RID_PATTERNS: frozenset[str] = frozenset(
-    {
-        "search_bar",
-        "search_view",
-        "search_src_text",
-        "search_button",
-        "search_edit",
-        "search_plate",
-        "search_close_btn",
-        "search_action",
-    }
+SENTINEL_COLD_START_FAILED = "COLD_START_FAILED"
+SENTINEL_ACTION_FAILED = "ACTION_FAILED"
+SENTINEL_LEFT_APP = "LEFT_APP"
+SENTINEL_TARGETS = frozenset(
+    {SENTINEL_COLD_START_FAILED, SENTINEL_ACTION_FAILED, SENTINEL_LEFT_APP}
 )
 
-
-def _filter_search_actions(actions: list[Action], screen: RawScreen) -> tuple[list[Action], int]:
-    """Remove actions targeting search bar elements."""
-    elements_by_id = {e.element_id: e for e in screen.elements}
-
-    def _is_search(eid: str) -> bool:
-        el = elements_by_id.get(eid)
-        if el is None:
-            return False
-        rid = (el.resource_id or "").lower()
-        return any(p in rid for p in SEARCH_RID_PATTERNS)
-
-    filtered = [a for a in actions if not (a.target_element_id and _is_search(a.target_element_id))]
-    return filtered, len(actions) - len(filtered)
-
-
-_ACTION_WAIT: dict[ActionType, float] = {
+# Feature A: priority weights. Click-equivalent actions default to 1.0;
+# navigation / scroll actions are deprioritized because they tend to revisit
+# already-known states rather than discover new ones.
+ACTION_TYPE_WEIGHT: dict[ActionType, float] = {
+    ActionType.CLICK: 1.0,
+    ActionType.LONG_PRESS: 1.0,
+    ActionType.INPUT_TEXT: 1.0,
     ActionType.NAVIGATE_BACK: 0.3,
-    ActionType.NAVIGATE_HOME: 0.3,
-    ActionType.SCROLL_UP: 0.3,
-    ActionType.SCROLL_DOWN: 0.3,
-    ActionType.CLICK: 0.6,
-    ActionType.LONG_PRESS: 0.6,
-    ActionType.INPUT_TEXT: 0.5,
+    ActionType.NAVIGATE_HOME: 0.2,
+    ActionType.SCROLL_DOWN: 0.5,
+    ActionType.SCROLL_UP: 0.5,
 }
 
 
-@dataclass
-class StructuralGroupingContext:
-    """Tracks structural equivalence groups and behavioral verification.
+def action_key(action: Action) -> str:
+    """In-state dedup key. Resource-id primary; 50-px bounds bucket fallback."""
+    if action.target_resource_id:
+        return f"{action.action_type.value}|{action.target_resource_id}"
+    bounds = action.target_bounds or [0, 0, 0, 0]
+    qb = ",".join(str(round(x / 50) * 50) for x in bounds)
+    return f"{action.action_type.value}|qb:{qb}"
 
-    Lifecycle: PENDING → CONFIRMED_EQUIVALENT or CONFIRMED_HETEROGENEOUS.
+
+def _now_iso() -> str:
+    return datetime.now(tz=UTC).isoformat()
+
+
+def _short_target(action: Action) -> str:
+    if action.target_resource_id:
+        rid = action.target_resource_id
+        return f"rid={rid.split(':id/', 1)[1] if ':id/' in rid else rid}"
+    if action.target_bounds:
+        return f"bounds={action.target_bounds}"
+    return "-"
+
+
+def _is_edit_text(element: UIElement) -> bool:
+    """Heuristic: is this element an Android EditText / text-input widget?"""
+    if element.is_editable:
+        return True
+    return "EditText" in (element.class_name or "")
+
+
+def _generate_edit_value(element: UIElement) -> str:
+    """Pick a plausible text value for an EditText.
+
+    Priority:
+      1. Hint / content-desc keyword matching (email, password, phone, ...).
+      2. ``android:inputType`` bitmask inference.
+      3. Generic ``test123`` fallback.
+
+    Always returns a non-empty ASCII string.
     """
+    hint = (element.content_description or "").lower()
+    if any(kw in hint for kw in ("email", "e-mail")):
+        return "test@example.com"
+    if any(kw in hint for kw in ("password", "pwd", "pass")):
+        return "TestPass123!"
+    if any(kw in hint for kw in ("phone", "mobile", "tel")):
+        return "5551234567"
+    if any(kw in hint for kw in ("search", "query", "find")):
+        return "test"
+    if any(kw in hint for kw in ("url", "website", "link")):
+        return "https://example.com"
+    if "name" in hint:
+        return "Test User"
 
-    pending: dict[str, dict[str, Any]] = field(default_factory=dict)
-    confirmed_equivalent: set[str] = field(default_factory=set)
-    confirmed_heterogeneous: set[str] = field(default_factory=set)
-    deferred_actions: dict[str, list[tuple[str, Action]]] = field(default_factory=dict)
+    it = element.input_type or 0
+    type_class = it & 0x0F
+    type_variation = it & 0xFF0
+    if type_class == 0x02:  # TYPE_CLASS_NUMBER
+        return "12345"
+    if type_class == 0x03:  # TYPE_CLASS_PHONE
+        return "5551234567"
+    if type_class == 0x04:  # TYPE_CLASS_DATETIME
+        return "2026-01-01"
+    if type_class == 0x01:  # TYPE_CLASS_TEXT
+        if type_variation == 0x20:  # EMAIL
+            return "test@example.com"
+        if type_variation in (0x80, 0xE0):  # PASSWORD / WEB_PASSWORD
+            return "TestPass123!"
+        if type_variation == 0x10:  # URI
+            return "https://example.com"
+    return "test123"
 
 
-def apply_structural_grouping(
-    screen: RawScreen,
-    actions: list[Action],
-    ctx: StructuralGroupingContext,
-    screen_id: str,
-) -> list[Action]:
-    """Layer 1: Structural Equivalence Prediction.
+def _build_interact_action(element: UIElement) -> Action:
+    """Build a single interaction action for an interactable element.
 
-    Groups click actions by (parent_id, grouping_skeleton). Large groups
-    keep only 2 representatives; rest are deferred for behavioral verification.
-    Subsumes smart stopping + toggle filtering under one principle.
+    Priority: INPUT_TEXT for EditText (with generated text), LONG_PRESS
+    for long-click-only elements, otherwise CLICK.
     """
-    elements_by_id = {e.element_id: e for e in screen.elements}
-
-    groups: dict[str, list[tuple[Action, UIElement]]] = defaultdict(list)
-    ungrouped: list[Action] = []
-
-    for action in actions:
-        if action.action_type != ActionType.CLICK or not action.target_element_id:
-            ungrouped.append(action)
-            continue
-
-        element = elements_by_id.get(action.target_element_id)
-        if element is None or element.parent_id is None:
-            ungrouped.append(action)
-            continue
-
-        skeleton = element.get_grouping_skeleton()
-        group_key = f"{element.parent_id}|{skeleton}"
-
-        if group_key in ctx.confirmed_equivalent:
-            continue
-
-        groups[group_key].append((action, element))
-
-    kept: list[Action] = list(ungrouped)
-
-    for group_key, members in groups.items():
-        if len(members) < STRUCTURAL_GROUP_MIN_SIZE:
-            kept.extend(a for a, _ in members)
-            continue
-
-        if group_key in ctx.confirmed_heterogeneous:
-            kept.extend(a for a, _ in members)
-            continue
-
-        members.sort(key=lambda pair: pair[1].element_id)
-        reps = [members[0], members[-1]]
-        rep_ids = {el.element_id for _, el in reps}
-
-        deferred: list[tuple[str, Action]] = []
-        for action, el in members:
-            if el.element_id in rep_ids:
-                kept.append(action)
-            else:
-                deferred.append((screen_id, action))
-
-        ctx.pending[group_key] = {
-            "source_screen_id": screen_id,
-            "representative_element_ids": [el.element_id for _, el in reps],
-            "total_members": len(members),
-            "detail_fingerprints": [],
-        }
-        ctx.deferred_actions[group_key] = deferred
-
-    return kept
+    if _is_edit_text(element):
+        return Action(
+            action_type=ActionType.INPUT_TEXT,
+            target_element_id=element.element_id,
+            target_bounds=element.bounds,
+            target_resource_id=element.resource_id,
+            input_text=_generate_edit_value(element),
+        )
+    at = ActionType.CLICK
+    if element.is_long_clickable and not element.is_clickable:
+        at = ActionType.LONG_PRESS
+    return Action(
+        action_type=at,
+        target_element_id=element.element_id,
+        target_bounds=element.bounds,
+        target_resource_id=element.resource_id,
+    )
 
 
-def record_behavioral_result(
-    ctx: StructuralGroupingContext,
-    source_screen_id: str,
-    target_element_id: str,
-    target_fingerprint: str,
-) -> list[tuple[str, Action]]:
-    """Layer 2: Behavioral Equivalence Verification.
-
-    After a representative is executed, record its target fingerprint.
-    When all representatives are done: same fp → EQUIVALENT (skip rest),
-    different fps → HETEROGENEOUS (replenish rest).
-    """
-    replenish: list[tuple[str, Action]] = []
-
-    for group_key, info in list(ctx.pending.items()):
-        if source_screen_id != info["source_screen_id"]:
-            continue
-        if target_element_id not in info["representative_element_ids"]:
-            continue
-
-        info["detail_fingerprints"].append(target_fingerprint)
-
-        if len(info["detail_fingerprints"]) >= STRUCTURAL_GROUP_REPRESENTATIVES:
-            unique_fps = set(info["detail_fingerprints"])
-
-            if len(unique_fps) == 1:
-                ctx.confirmed_equivalent.add(group_key)
-                logger.info(f"Group {group_key[:30]} EQUIVALENT ({info['total_members']} members)")
-            else:
-                ctx.confirmed_heterogeneous.add(group_key)
-                replenish.extend(ctx.deferred_actions.get(group_key, []))
-                logger.info(
-                    f"Group {group_key[:30]} HETEROGENEOUS — replenishing {len(replenish)} actions"
-                )
-
-            del ctx.pending[group_key]
-            ctx.deferred_actions.pop(group_key, None)
-
-        return replenish
-
-    return replenish
-
-
-def _match_activity(activity_name: str, declared: set[str]) -> str | None:
-    """Match an observed activity_name against declared Activity names."""
-    if activity_name in declared:
-        return activity_name
-    for d in declared:
-        if d.endswith(activity_name) or activity_name.endswith(d):
-            return d
-        short = d.rsplit(".", 1)[-1]
-        obs_short = activity_name.rsplit(".", 1)[-1]
-        if short == obs_short:
-            return d
+def _build_scroll_down(screen: RawScreen) -> Action | None:
+    """First scrollable element's bounds drive the gesture. None if no scrollable."""
+    for e in screen.elements:
+        if e.is_scrollable and e.bounds and (e.bounds[3] - e.bounds[1]) > 0:
+            return Action(
+                action_type=ActionType.SCROLL_DOWN,
+                target_element_id=e.element_id,
+                target_bounds=e.bounds,
+                target_resource_id=e.resource_id,
+            )
     return None
 
 
-def _action_signature(action: Action) -> str:
-    """Compute a stable signature for dedup.
-
-    Does NOT include activity_name — on MIUI the same page can report
-    different activity names across captures, breaking dedup.
-    """
-    if action.target_resource_id:
-        return f"{action.action_type.value}|rid:{action.target_resource_id}"
-
-    if action.target_bounds:
-        qb = [round(b / 50) * 50 for b in action.target_bounds]
-        bounds_str = ",".join(str(b) for b in qb)
-        return f"{action.action_type.value}|qb:{bounds_str}"
-
-    return f"{action.action_type.value}|global"
-
-
 class ExplorationTrace(BaseModel):
-    """A single exploration step: source screen -> action -> target screen."""
+    """One observation record. Compatible with the previous trace schema;
+    adds ``intended_source_state_id`` and drops ``failure_reason``."""
 
     step_number: int
-    source_screen_id: str
+    source_state_id: str = ""
+    intended_source_state_id: str = ""
+    source_screen_id: str = ""
     action: Action
-    target_screen_id: str
+    target_state_id: str = ""
+    target_screen_id: str = ""
     timestamp: str
 
 
 class ExplorationResult(BaseModel):
-    """Output of a complete app exploration run."""
-
     app_package: str
     screens: dict[str, RawScreen] = Field(default_factory=dict)
     traces: list[ExplorationTrace] = Field(default_factory=list)
@@ -262,24 +200,14 @@ class ExplorationResult(BaseModel):
 
 
 class AppExplorer:
-    """BFS/DFS exploration engine for Android apps via uiautomator2.
+    """Plain BFS explorer. See module docstring for rationale."""
 
-    Connects to an Android device, traverses app screens by exercising
-    interactable elements, captures accessibility trees + screenshots,
-    and records exploration traces.
-
-    Args:
-        device_serial: ADB serial of the target device.
-        app_package: Android package name to explore.
-        config: Vigil configuration.
-        output_dir: Base output directory (default: data/apps/<app_name>/).
-        app_prior: Optional AppPrior for Activity coverage guidance.
-    """
-
-    MAX_BACK_PRESSES = 10
-    MAX_SCROLLS_PER_ELEMENT = 8
-    STABILITY_WAIT = 0.8
-    DEVICE_RETRIES = 3
+    POST_ACTION_WAIT: float = 1.0
+    POST_LAUNCH_WAIT: float = 2.5
+    WAIT_FOR_FOREGROUND: float = 10.0
+    COLD_START_HOME_WAIT: float = 0.5
+    COLD_START_STOP_WAIT: float = 1.0
+    MAX_SCROLLS: int = 8
 
     def __init__(
         self,
@@ -292,534 +220,309 @@ class AppExplorer:
         self._serial = device_serial
         self._app_package = app_package
         self._config = config
+        self._app_prior = app_prior
         self._device: u2.Device | None = None
         self._screen_counter = 0
-        self._app_prior = app_prior
-
         if output_dir is None:
-            app_name = app_package.replace(".", "_")
-            self._output_dir = Path(f"data/apps/{app_name}")
+            self._output_dir = Path(f"data/apps/{app_package.replace('.', '_')}")
         else:
             self._output_dir = output_dir
+        for sub in ("screens", "trees", "traces"):
+            (self._output_dir / sub).mkdir(parents=True, exist_ok=True)
 
-        (self._output_dir / "screens").mkdir(parents=True, exist_ok=True)
-        (self._output_dir / "trees").mkdir(parents=True, exist_ok=True)
-        (self._output_dir / "traces").mkdir(parents=True, exist_ok=True)
+        # Feature A/B instance state. These are attached to self so
+        # _priority_score / _pick_next_action / _perform_one_observation
+        # can read and mutate them without threading through arguments.
+        # - _nav_paths: canonical replay nav_path from app entry per state_id
+        # - _all_actions_per_state: enumerated outgoing actions, keyed by action_key
+        # - _explored_per_state: action_keys already consumed (success or ACTION_FAILED)
+        # - _blacklisted_per_state: action_keys skipped from future picks
+        #   (LEFT_APP anchored on intended source; scroll-no-yield on actual source)
+        # - _global_action_type_count: total execution attempts per ActionType
+        self._nav_paths: dict[str, list[Action]] = {}
+        self._all_actions_per_state: dict[str, dict[str, Action]] = {}
+        self._explored_per_state: dict[str, set[str]] = defaultdict(set)
+        self._blacklisted_per_state: dict[str, set[str]] = defaultdict(set)
+        self._global_action_type_count: dict[ActionType, int] = defaultdict(int)
+
+    # ------------------------------------------------------------------ public
 
     def explore(self) -> ExplorationResult:
-        """Run the exploration and return structured results."""
-        start_time = time.monotonic()
-        self._connect_device()
-        assert self._device is not None
-
-        logger.info(f"Starting app: {self._app_package}")
-        self._device.app_start(self._app_package, stop=True)
-        if not self._wait_for_app_foreground():
-            logger.error("App did not come to foreground")
-            return ExplorationResult(app_package=self._app_package)
-
-        initial_screen = self._capture_screen()
-        if initial_screen is None:
-            logger.error("Failed to capture initial screen")
-            return ExplorationResult(app_package=self._app_package)
-
-        min_elements = 3
-        if len(initial_screen.get_interactable_elements()) < min_elements:
-            logger.warning(
-                f"Initial screen has only {len(initial_screen.get_interactable_elements())} "
-                f"interactable elements, waiting for app to fully load..."
-            )
-            for _ in range(3):
-                time.sleep(2.0)
-                initial_screen = self._capture_screen()
-                if (
-                    initial_screen is not None
-                    and len(initial_screen.get_interactable_elements()) >= min_elements
-                ):
-                    break
-            else:
-                if initial_screen is None:
-                    logger.error("Failed to capture initial screen after retries")
-                    return ExplorationResult(app_package=self._app_package)
-
-        initial_fp = initial_screen.get_structural_fingerprint()
-
-        visited: set[str] = {initial_fp}
-        screens: dict[str, RawScreen] = {initial_screen.screen_id: initial_screen}
-        traces: list[ExplorationTrace] = []
-
-        # Activity coverage tracking
-        declared_activities: set[str] = set()
-        if self._app_prior:
-            declared_activities = {a.name for a in self._app_prior.activities}
-            logger.info(
-                f"Activity prior loaded: {len(declared_activities)} declared Activities, "
-                f"entry={self._app_prior.entry_activity}"
-            )
-        covered_activities: set[str] = set()
-        if initial_screen.activity_name and declared_activities:
-            matched = _match_activity(initial_screen.activity_name, declared_activities)
-            if matched:
-                covered_activities.add(matched)
-
-        fp_to_sid: dict[str, str] = {initial_fp: initial_screen.screen_id}
-        nav_paths: dict[str, list[tuple[Action, str]]] = {initial_screen.screen_id: []}
-        nav_failures: dict[str, int] = {}
-        max_nav_failures = 3
-
-        # Action dedup: track executed actions by stable signature
-        executed_actions: set[str] = set()
-
-        # Track action signatures currently in the frontier to avoid duplicates
-        frontier_sigs: set[str] = set()
-
-        # Actions that caused the app to exit — permanently skip
-        leave_app_blacklist: set[str] = set()
-
-        # Adjacency graph for local navigation
-        forward_edges: dict[str, list[tuple[Action, str]]] = {}
-        back_edges: dict[str, str] = {}
-
-        # Navigation statistics
-        nav_stats: dict[str, int] = {
-            "p1_current": 0,
-            "p2_forward": 0,
-            "p3_back": 0,
-            "p4_sibling": 0,
-            "p5_replay": 0,
-            "local_nav_ok": 0,
-            "local_nav_fail": 0,
-            "replay_ok": 0,
-            "replay_fail": 0,
-            "actions_deduped": 0,
-            "blacklisted_skips": 0,
-            "deferred_actions": 0,
-            "replenished_actions": 0,
-            "depth_skips": 0,
-            "fuzzy_matches": 0,
-            "groups_formed": 0,
-            "groups_equivalent": 0,
-            "groups_heterogeneous": 0,
-            "back_chain_ok": 0,
-            "back_chain_fail": 0,
-            "keyboard_checks": 0,
-            "direct_launches": 0,
-            "search_skips": 0,
-        }
-
-        skip_actions: set[ActionType] = {
-            ActionType.INPUT_TEXT,
-            ActionType.NAVIGATE_HOME,
-            ActionType.SCROLL_UP,
-            ActionType.LONG_PRESS,
-        }
-
-        # Screen depth tracking
-        screen_depth: dict[str, int] = {initial_screen.screen_id: 0}
-        max_depth = 4
-
-        # Deferred frontier for nav-failed screens
-        deferred_frontier: deque[tuple[str, Action]] = deque()
-
-        # Direct Activity launch tracking
-        failed_launches: set[str] = set()
-        direct_launch_screens: set[str] = set()
-
-        # Build initial frontier
-        frontier: deque[tuple[str, Action]] = deque()
-        grouping_ctx = StructuralGroupingContext()
-        initial_actions = enumerate_actions(initial_screen, exclude=skip_actions)
-        initial_actions = [a for a in initial_actions if a.action_type != ActionType.NAVIGATE_BACK]
-        initial_actions = apply_structural_grouping(
-            initial_screen, initial_actions, grouping_ctx, initial_screen.screen_id
-        )
-        initial_actions, sr = _filter_search_actions(initial_actions, initial_screen)
-        nav_stats["search_skips"] += sr
-        for action in initial_actions:
-            sig = _action_signature(action)
-            frontier.append((initial_screen.screen_id, action))
-            frontier_sigs.add(sig)
-
-        # Discover hidden content via scrolling on initial screen
-        scroll_screens = self._handle_scroll_discovery(initial_screen)
-        for ss in scroll_screens:
-            ss_fp = ss.get_structural_fingerprint()
-            if ss_fp not in visited:
-                visited.add(ss_fp)
-                screens[ss.screen_id] = ss
-                fp_to_sid[ss_fp] = ss.screen_id
-                for new_action in enumerate_actions(ss, exclude=skip_actions):
-                    sig = _action_signature(new_action)
-                    if sig not in executed_actions and sig not in frontier_sigs:
-                        frontier.append((initial_screen.screen_id, new_action))
-                        frontier_sigs.add(sig)
-
-        if scroll_screens:
-            logger.info(
-                f"Initial screen scroll discovery: found {len(scroll_screens)} "
-                f"additional scroll positions, frontier now has {len(frontier)} actions"
-            )
-            self._restart_app()
-            current_fp = initial_fp
-
-        max_steps = self._config.app.max_exploration_steps
-        step = 0
-        current_fp = initial_fp
-
+        budget = self._config.app.max_exploration_steps
         logger.info(
-            f"Starting {self._config.app.exploration_strategy} exploration "
-            f"(max {max_steps} steps, {len(frontier)} initial actions)"
+            f"Budget: {budget} observations — est. {max(1, round(budget * 25 / 60))} min wall-clock"
         )
+        started = time.monotonic()
+        self._connect_device()
+        if not self._cold_start_app():
+            raise RuntimeError(f"Could not launch {self._app_package}")
 
-        if not self._app_prior:
-            logger.info(
-                "No app prior — direct Activity launch disabled. "
-                "Use --prior-from-device for better coverage."
-            )
+        entry = self._capture_screen()
+        if entry is None:
+            raise RuntimeError("Initial capture failed after cold-start")
+        entry_sid = entry.get_state_id(self._app_package)
+        self._nav_paths[entry_sid] = []
+        screens: dict[str, RawScreen] = {entry.screen_id: entry}
+        traces: list[ExplorationTrace] = []
+        counts = {"cold_start_failures": 0, "left_app": 0, "action_failures": 0}
+        enumerate_queue: deque[str] = deque([entry_sid])
+        done = 0
 
-        while step < max_steps:
-            # Frontier refill: direct Activity launch when both queues empty
-            if not frontier and not deferred_frontier and declared_activities:
-                launched = self._launch_uncovered_activity(
-                    declared_activities=declared_activities,
-                    covered_activities=covered_activities,
-                    screens=screens,
-                    fp_to_sid=fp_to_sid,
-                    nav_paths=nav_paths,
-                    screen_depth=screen_depth,
-                    frontier=frontier,
-                    frontier_sigs=frontier_sigs,
-                    executed_actions=executed_actions,
-                    skip_actions=skip_actions,
-                    failed_launches=failed_launches,
-                    direct_launch_screens=direct_launch_screens,
-                    grouping_ctx=grouping_ctx,
-                )
-                if launched:
-                    nav_stats["direct_launches"] += 1
-                    current_fp = self._identify_current_fp()
-                    continue
-                else:
-                    break
+        while done < budget:
+            # Enumerate one pending state per outer iteration so priority
+            # selection always has up-to-date candidates. We enumerate the
+            # shallowest unenumerated state (BFS-ordered discovery).
+            unenumerated = [
+                sid for sid in enumerate_queue if sid not in self._all_actions_per_state
+            ]
+            if unenumerated:
+                unenumerated.sort(key=lambda s: len(self._nav_paths[s]))
+                sid = unenumerated[0]
+                enumerate_queue.remove(sid)
+                actions = self._enumerate_all_clickables(sid, self._nav_paths[sid])
+                self._all_actions_per_state[sid] = {action_key(a): a for a in actions}
+                logger.info(f"state={sid[:6]} enumerated {len(actions)} actions")
 
-            if not frontier and not deferred_frontier:
+            picked = self._pick_next_action()
+            if picked is None:
+                if enumerate_queue:
+                    continue  # more states awaiting enumeration
+                logger.info("Exploration complete: no more unexplored actions")
                 break
 
-            # Replenish from deferred if main frontier is low
-            if len(frontier) < 5 and deferred_frontier:
-                batch = min(10, len(deferred_frontier))
-                retried_sids: set[str] = set()
-                for _ in range(batch):
-                    item = deferred_frontier.popleft()
-                    frontier.append(item)
-                    retried_sids.add(item[0])
-                    frontier_sigs.add(_action_signature(item[1]))
-                for sid in retried_sids:
-                    nav_failures.pop(sid, None)
-                nav_stats["replenished_actions"] += batch
-
-            if not frontier:
-                continue
-
-            source_screen_id, action, pop_tier = self._pop_frontier_prefer_current(
-                frontier,
-                fp_to_sid.get(current_fp, ""),
-                step,
-                max_steps,
-                forward_edges=forward_edges,
-                back_edges=back_edges,
-            )
-            tier_keys = {
-                1: "p1_current",
-                2: "p2_forward",
-                3: "p3_back",
-                4: "p4_sibling",
-                5: "p5_replay",
-            }
-            nav_stats[tier_keys[pop_tier]] += 1
-
-            # Remove from frontier membership tracking
-            if source_screen_id in screens:
-                pop_sig = _action_signature(action)
-                frontier_sigs.discard(pop_sig)
-
-            # Skip blacklisted actions
-            bl_sig = _action_signature(action)
-            if bl_sig in leave_app_blacklist:
-                nav_stats["blacklisted_skips"] += 1
-                continue
-
-            # Navigate to source screen if we're not already there
-            source_fp = screens[source_screen_id].get_structural_fingerprint()
-            if current_fp != source_fp:
-                nav_ok = False
-                current_sid = fp_to_sid.get(current_fp, "")
-
-                if pop_tier in (2, 3, 4):
-                    nav_ok = self._try_local_navigation(
-                        source_screen_id=source_screen_id,
-                        current_screen_id=current_sid,
-                        screens=screens,
-                        forward_edges=forward_edges,
-                        back_edges=back_edges,
-                    )
-                    if nav_ok:
-                        nav_stats["local_nav_ok"] += 1
-                    else:
-                        nav_stats["local_nav_fail"] += 1
-
-                if not nav_ok:
-                    nav_ok = self._try_back_to_screen(source_screen_id, screens)
-                    if nav_ok:
-                        nav_stats["back_chain_ok"] += 1
-                    else:
-                        nav_stats["back_chain_fail"] += 1
-
-                if not nav_ok:
-                    nav_ok = self._navigate_to_screen_via_replay(
-                        source_screen_id, screens, nav_paths, direct_launch_screens
-                    )
-                    if nav_ok:
-                        nav_stats["replay_ok"] += 1
-                    else:
-                        nav_stats["replay_fail"] += 1
-
-                if nav_ok:
-                    current_fp = source_fp
-                    nav_failures.pop(source_screen_id, None)
-                else:
-                    current_fp = self._identify_current_fp()
-                    nav_failures[source_screen_id] = nav_failures.get(source_screen_id, 0) + 1
-                    if nav_failures[source_screen_id] >= max_nav_failures:
-                        deferred = [(sid, act) for sid, act in frontier if sid == source_screen_id]
-                        for sid, act in deferred:
-                            if sid in screens:
-                                d_sig = _action_signature(act)
-                                frontier_sigs.discard(d_sig)
-                        frontier = deque(
-                            (sid, act) for sid, act in frontier if sid != source_screen_id
-                        )
-                        if deferred:
-                            deferred_frontier.extend(deferred)
-                            nav_stats["deferred_actions"] += len(deferred)
-                            logger.info(
-                                f"Deferred {len(deferred)} actions for "
-                                f"{source_screen_id} (will retry later)"
-                            )
-                    continue
-
-            # Execute the action
-            logger.debug(
-                f"Step {step + 1}/{max_steps}: "
-                f"{action.action_type.value} on {action.target_element_id or 'global'} "
-                f"from {source_screen_id}"
-            )
-            executed = self._execute_action(action)
-            self._wait_for_stability(action.action_type)
-            step += 1
-
-            if not executed:
-                continue
-
-            # Only check keyboard after actions that could trigger it
-            if (
-                action.action_type in (ActionType.CLICK, ActionType.INPUT_TEXT)
-                and action.target_element_id
-                and source_screen_id in screens
-            ):
-                el_map = {e.element_id: e for e in screens[source_screen_id].elements}
-                target_el = el_map.get(action.target_element_id)
-                if target_el and (
-                    target_el.is_editable or "EditText" in (target_el.class_name or "")
-                ):
-                    self._dismiss_keyboard_if_showing()
-                    nav_stats["keyboard_checks"] += 1
-
-            if not self._is_within_app():
-                logger.debug("Left target app, recovering")
-                bl_act_sig = _action_signature(action)
-                leave_app_blacklist.add(bl_act_sig)
-                if not self._restart_app():
-                    logger.error("Cannot recover app, stopping exploration")
-                    break
-                current_fp = self._identify_current_fp()
-                continue
-
-            target_screen = self._capture_screen()
-            if target_screen is None:
-                continue
-
-            target_fp = target_screen.get_structural_fingerprint()
-            canonical_target_id = fp_to_sid.get(target_fp, target_screen.screen_id)
-
-            # Ensure canonical screen is in screens dict
-            if canonical_target_id not in screens:
-                screens[canonical_target_id] = target_screen
-
-            # Record trace
-            trace = ExplorationTrace(
-                step_number=step,
-                source_screen_id=source_screen_id,
+            state_id, action = picked
+            done += 1
+            t0 = time.monotonic()
+            trace, pre_screen, post_screen = self._perform_one_observation(
+                intended_source_state_id=state_id,
+                intended_nav_path=self._nav_paths[state_id],
                 action=action,
-                target_screen_id=canonical_target_id,
-                timestamp=_now_iso(),
+                step=done,
             )
+            elapsed = time.monotonic() - t0
+            self._log_step(trace, len(self._nav_paths[state_id]), elapsed)
             traces.append(trace)
-            current_fp = target_fp
 
-            # Record executed action signature for dedup
-            exec_sig = _action_signature(action)
-            executed_actions.add(exec_sig)
+            key = action_key(action)
+            self._explored_per_state[state_id].add(key)
 
-            # Update adjacency graph
-            if source_screen_id not in forward_edges:
-                forward_edges[source_screen_id] = []
-            if not any(
-                a.action_type == action.action_type
-                and a.target_bounds == action.target_bounds
-                and tid == canonical_target_id
-                for a, tid in forward_edges[source_screen_id]
-            ):
-                forward_edges[source_screen_id].append((action, canonical_target_id))
-            if action.action_type == ActionType.CLICK and canonical_target_id != source_screen_id:
-                back_edges[canonical_target_id] = source_screen_id
-
-            # Behavioral verification for structural grouping
-            replenished = record_behavioral_result(
-                grouping_ctx, source_screen_id, action.target_element_id or "", target_fp
-            )
-            if replenished:
-                for r_sid, r_action in replenished:
-                    sig = _action_signature(r_action)
-                    if sig not in executed_actions and sig not in frontier_sigs:
-                        frontier.append((r_sid, r_action))
-                        frontier_sigs.add(sig)
-                nav_stats["groups_heterogeneous"] += 1
-                nav_stats["replenished_actions"] += len(replenished)
-
-            # --- Screen registration (first visit only) ---
-            if target_fp not in visited:
-                visited.add(target_fp)
-                screens[target_screen.screen_id] = target_screen
-                fp_to_sid[target_fp] = target_screen.screen_id
-
-                source_path = nav_paths.get(source_screen_id, [])
-                nav_paths[canonical_target_id] = source_path + [(action, canonical_target_id)]
-                screen_depth[canonical_target_id] = screen_depth.get(source_screen_id, 0) + 1
-
-                logger.info(
-                    f"New screen discovered: {target_screen.screen_id} "
-                    f"(activity={target_screen.activity_name}, "
-                    f"total={len(screens)})"
-                )
-
-                # Track Activity coverage
-                if target_screen.activity_name and declared_activities:
-                    matched = _match_activity(target_screen.activity_name, declared_activities)
-                    if matched and matched not in covered_activities:
-                        covered_activities.add(matched)
-                        remaining = len(declared_activities) - len(covered_activities)
-                        logger.info(
-                            f"Activity covered: {matched} "
-                            f"({len(covered_activities)}/{len(declared_activities)}, "
-                            f"{remaining} remaining)"
-                        )
-
-                # Handle scrollable content (only on first visit)
-                scroll_screens = self._handle_scroll_discovery(target_screen)
-                for ss in scroll_screens:
-                    ss_fp = ss.get_structural_fingerprint()
-                    if ss_fp not in visited:
-                        visited.add(ss_fp)
-                        screens[ss.screen_id] = ss
-                        fp_to_sid[ss_fp] = ss.screen_id
-                        for scroll_action in enumerate_actions(ss, exclude=skip_actions):
-                            sig = _action_signature(scroll_action)
-                            if sig not in executed_actions and sig not in frontier_sigs:
-                                frontier.append((target_screen.screen_id, scroll_action))
-                                frontier_sigs.add(sig)
-
-                if scroll_screens:
-                    current_fp = self._identify_current_fp()
-
-            # --- Action enumeration (every visit, dedup prevents re-execution) ---
-            depth = screen_depth.get(canonical_target_id, 0)
-            if depth > max_depth:
-                nav_stats["depth_skips"] += 1
+            if trace.target_state_id == SENTINEL_COLD_START_FAILED:
+                counts["cold_start_failures"] += 1
+            elif trace.target_state_id == SENTINEL_LEFT_APP:
+                counts["left_app"] += 1
+                self._blacklisted_per_state[state_id].add(key)
+            elif trace.target_state_id == SENTINEL_ACTION_FAILED:
+                counts["action_failures"] += 1
             else:
-                new_actions_list = list(enumerate_actions(target_screen, exclude=skip_actions))
-                new_actions_list = apply_structural_grouping(
-                    target_screen, new_actions_list, grouping_ctx, canonical_target_id
+                # Scroll-no-yield check: identical anchors pre/post → blacklist
+                # at ACTUAL source so we don't try the dead scroll again if the
+                # replay lands on a truly stable page.
+                if (
+                    action.action_type in (ActionType.SCROLL_UP, ActionType.SCROLL_DOWN)
+                    and pre_screen is not None
+                    and post_screen is not None
+                ):
+                    _, pre_anchors = pre_screen.get_functional_state_key(self._app_package)
+                    _, post_anchors = post_screen.get_functional_state_key(self._app_package)
+                    if pre_anchors == post_anchors:
+                        self._blacklisted_per_state[trace.source_state_id].add(key)
+
+            if pre_screen is not None:
+                screens[pre_screen.screen_id] = pre_screen
+            if post_screen is not None:
+                screens[post_screen.screen_id] = post_screen
+
+            tgt = trace.target_state_id
+            if tgt and tgt not in SENTINEL_TARGETS and tgt not in self._nav_paths:
+                self._nav_paths[tgt] = [*self._nav_paths[state_id], action]
+                enumerate_queue.append(tgt)
+
+        self._log_summary()
+        return self._finalize(
+            traces, screens, self._nav_paths, counts, done, time.monotonic() - started
+        )
+
+    # ---------------------------------------------------------- scheduling
+
+    def _priority_score(self, state_id: str, action: Action) -> float:
+        """Higher is better. Feature A: depth × type weight × log-frequency decay."""
+        nav_depth = len(self._nav_paths.get(state_id, []))
+        type_weight = ACTION_TYPE_WEIGHT.get(action.action_type, 1.0)
+        global_freq = self._global_action_type_count[action.action_type]
+        depth_factor = 1.0 / (1.0 + nav_depth)
+        freq_factor = 1.0 / (1.0 + math.log1p(global_freq))
+        return depth_factor * type_weight * freq_factor
+
+    def _pick_next_action(self) -> tuple[str, Action] | None:
+        """Argmax of _priority_score across all enumerated states' outgoing
+        actions that are neither explored nor blacklisted. Ties break on
+        insertion order (dicts are ordered)."""
+        best: tuple[str, Action] | None = None
+        best_score = 0.0
+        for state_id, actions in self._all_actions_per_state.items():
+            explored = self._explored_per_state[state_id]
+            blacklisted = self._blacklisted_per_state[state_id]
+            for key, action in actions.items():
+                if key in explored or key in blacklisted:
+                    continue
+                score = self._priority_score(state_id, action)
+                if score > best_score:
+                    best_score = score
+                    best = (state_id, action)
+        return best
+
+    def _log_summary(self) -> None:
+        """Feature A/B reporting: action-type counts + top blacklisted states."""
+        logger.info("Summary: action-type execution counts")
+        for at, n in sorted(self._global_action_type_count.items(), key=lambda kv: -kv[1]):
+            logger.info(f"  {at.value:<14} {n}")
+        top = sorted(self._blacklisted_per_state.items(), key=lambda kv: -len(kv[1]))[:5]
+        if top:
+            logger.info("Summary: top blacklisted states")
+            for sid, keys in top:
+                if keys:
+                    logger.info(f"  {sid[:6]}: {len(keys)} blacklisted")
+
+    # ---------------------------------------------------------- core phases
+
+    def _enumerate_all_clickables(self, state_id: str, nav_path: list[Action]) -> list[Action]:
+        """Restart + navigate + scroll to collect all clickables on the page."""
+        if not self._cold_start_app():
+            logger.warning(f"cold-start failed during enumerate of {state_id[:6]}")
+            return []
+        for step in nav_path:
+            self._execute_action(step)
+            time.sleep(self.POST_ACTION_WAIT)
+
+        collected: dict[str, Action] = {}
+        last_anchors: frozenset[tuple[str, str]] | None = None
+
+        for _ in range(self.MAX_SCROLLS):
+            screen = self._capture_screen()
+            if screen is None:
+                break
+            for e in screen.elements:
+                interactable = (
+                    e.is_clickable or e.is_long_clickable or e.is_checkable or e.is_editable
                 )
-                new_actions_list, sr = _filter_search_actions(new_actions_list, target_screen)
-                nav_stats["search_skips"] += sr
-                added = 0
-                for new_action in new_actions_list:
-                    sig = _action_signature(new_action)
-                    if (
-                        sig not in executed_actions
-                        and sig not in frontier_sigs
-                        and sig not in leave_app_blacklist
-                    ):
-                        frontier.append((canonical_target_id, new_action))
-                        frontier_sigs.add(sig)
-                        added += 1
-                skipped = len(new_actions_list) - added
-                if skipped > 0:
-                    nav_stats["actions_deduped"] += skipped
+                if not interactable:
+                    continue
+                pkg = (e.package or "").strip()
+                if pkg and pkg != self._app_package and pkg != "android":
+                    continue
+                action = _build_interact_action(e)
+                collected.setdefault(action_key(action), action)
 
-        elapsed = time.monotonic() - start_time
+            _, anchors = screen.get_functional_state_key(self._app_package)
+            if last_anchors is not None and anchors == last_anchors:
+                break
+            last_anchors = anchors
+            scroll = _build_scroll_down(screen)
+            if scroll is None:
+                break
+            self._execute_action(scroll)
+            time.sleep(self.POST_ACTION_WAIT)
 
-        # Log navigation statistics
-        total_pops = sum(nav_stats[k] for k in tier_keys.values())
-        local_keys = ["p1_current", "p2_forward", "p3_back", "p4_sibling"]
-        local_pops = sum(nav_stats[k] for k in local_keys)
-        if total_pops > 0:
-            logger.info(
-                f"Nav stats: {total_pops} pops — "
-                f"P1={nav_stats['p1_current']} P2={nav_stats['p2_forward']} "
-                f"P3={nav_stats['p3_back']} P4={nav_stats['p4_sibling']} "
-                f"P5={nav_stats['p5_replay']} | "
-                f"deduped={nav_stats['actions_deduped']} actions"
+        return list(collected.values())
+
+    def _perform_one_observation(
+        self,
+        intended_source_state_id: str,
+        intended_nav_path: list[Action],
+        action: Action,
+        step: int,
+    ) -> tuple[ExplorationTrace, RawScreen | None, RawScreen | None]:
+        """One cold-start + replay + click cycle. See module docstring for sentinels."""
+        ts = _now_iso()
+
+        def _trace(
+            *,
+            src: str,
+            src_screen_id: str = "",
+            target: str,
+            target_screen_id: str = "",
+        ) -> ExplorationTrace:
+            return ExplorationTrace(
+                step_number=step,
+                intended_source_state_id=intended_source_state_id,
+                source_state_id=src,
+                source_screen_id=src_screen_id,
+                action=action,
+                target_state_id=target,
+                target_screen_id=target_screen_id,
+                timestamp=ts,
             )
-            pct = local_pops / total_pops * 100
-            logger.info(f"Locality ratio: {pct:.0f}% of pops avoided replay")
 
-        if declared_activities:
-            uncovered = declared_activities - covered_activities
-            logger.info(
-                f"Activity coverage: {len(covered_activities)}/{len(declared_activities)} "
-                f"({len(covered_activities) / len(declared_activities) * 100:.0f}%)"
+        if not self._cold_start_app():
+            return (
+                _trace(src=intended_source_state_id, target=SENTINEL_COLD_START_FAILED),
+                None,
+                None,
             )
-            if uncovered:
-                logger.warning(f"Uncovered Activities: {sorted(uncovered)}")
+        for nav_step in intended_nav_path:
+            self._execute_action(nav_step)
+            time.sleep(self.POST_ACTION_WAIT)
 
-        result = ExplorationResult(
-            app_package=self._app_package,
-            screens=screens,
-            traces=traces,
-            total_steps=step,
-            unique_screens=len(screens),
-            duration_seconds=round(elapsed, 2),
-            output_dir=str(self._output_dir),
-            declared_activities=sorted(declared_activities),
-            covered_activities=sorted(covered_activities),
-            nav_stats=nav_stats,
+        pre = self._capture_screen()
+        if pre is None:
+            return _trace(src=intended_source_state_id, target=SENTINEL_LEFT_APP), None, None
+        actual_src = pre.get_state_id(self._app_package)
+
+        # Feature A: count attempts per action_type (not successes), so the
+        # frequency decay can't be gamed by a misbehaving type that always
+        # fails.
+        self._global_action_type_count[action.action_type] += 1
+
+        if not self._execute_action(action):
+            return (
+                _trace(src=actual_src, src_screen_id=pre.screen_id, target=SENTINEL_ACTION_FAILED),
+                pre,
+                None,
+            )
+        time.sleep(self.POST_ACTION_WAIT)
+
+        if not self._is_within_app():
+            return (
+                _trace(src=actual_src, src_screen_id=pre.screen_id, target=SENTINEL_LEFT_APP),
+                pre,
+                None,
+            )
+        post = self._capture_screen()
+        if post is None:
+            return (
+                _trace(src=actual_src, src_screen_id=pre.screen_id, target=SENTINEL_LEFT_APP),
+                pre,
+                None,
+            )
+        return (
+            _trace(
+                src=actual_src,
+                src_screen_id=pre.screen_id,
+                target=post.get_state_id(self._app_package),
+                target_screen_id=post.screen_id,
+            ),
+            pre,
+            post,
         )
 
-        self._save_result(result)
-        if self._app_prior:
-            self._save_prior()
-
+    def _log_step(self, trace: ExplorationTrace, depth: int, elapsed: float) -> None:
+        drift = (
+            "(as expected)"
+            if trace.source_state_id == trace.intended_source_state_id
+            else f"(drifted from {trace.intended_source_state_id[:6]})"
+        )
+        tgt = trace.target_state_id
+        tgt_short = tgt if tgt in SENTINEL_TARGETS else tgt[:6]
         logger.info(
-            f"Exploration complete: {step} steps, {len(screens)} unique screens, {elapsed:.1f}s"
+            f"step {trace.step_number} | replay({depth}) -> "
+            f"src={trace.source_state_id[:6]} {drift} | "
+            f"{trace.action.action_type.value} {_short_target(trace.action)} | "
+            f"tgt={tgt_short} | {elapsed:.1f}s"
         )
-        return result
 
-    # --- Device interaction ---
+    # ---------------------------------------------------------- device I/O
 
     def _connect_device(self) -> None:
-        """Establish connection to the Android device."""
         logger.info(f"Connecting to device: {self._serial}")
         self._device = u2.connect(self._serial)
         info = self._device.info
@@ -827,68 +530,77 @@ class AppExplorer:
             f"Connected: {info.get('productName', 'unknown')} (SDK {info.get('sdkInt', '?')})"
         )
 
-    def _capture_screen(self) -> RawScreen | None:
-        """Capture the current screen state (hierarchy + screenshot)."""
+    def _cold_start_app(self) -> bool:
+        """``app_stop`` → home → ``app_start(stop=True)`` → wait for foreground."""
         assert self._device is not None
-        self._screen_counter += 1
-        screen_id = f"scr_{self._screen_counter:04d}"
+        dev, pkg = self._device, self._app_package
+        steps: tuple[tuple[str, Any, float], ...] = (
+            ("app_stop", lambda: dev.app_stop(pkg), self.COLD_START_STOP_WAIT),
+            ("home", lambda: dev.press("home"), self.COLD_START_HOME_WAIT),
+            ("app_start", lambda: dev.app_start(pkg, stop=True), self.POST_LAUNCH_WAIT),
+        )
+        for label, op, wait in steps:
+            try:
+                op()
+            except Exception:
+                logger.debug(f"cold_start.{label} raised", exc_info=True)
+            time.sleep(wait)
+        return self._wait_for_app_foreground()
 
+    def _capture_screen(self) -> RawScreen | None:
+        assert self._device is not None
         try:
             current = self._device.app_current()
-            activity_name = current.get("activity", "")
             package_name = current.get("package", "")
-
+            if package_name and package_name != self._app_package:
+                return None
+            activity_name = current.get("activity", "")
             xml_string = self._device.dump_hierarchy()
-
-            screenshot_path = self._output_dir / "screens" / f"{screen_id}.png"
-            self._device.screenshot(str(screenshot_path))
-
-            xml_path = self._output_dir / "trees" / f"{screen_id}.xml"
-            xml_path.write_text(xml_string, encoding="utf-8")
-
-            elements = parse_hierarchy_xml(xml_string, app_package=self._app_package)
-
-            screen = RawScreen(
-                screen_id=screen_id,
-                activity_name=activity_name,
-                package_name=package_name,
-                screenshot_path=str(screenshot_path),
-                xml_tree_path=str(xml_path),
-                elements=elements,
-                timestamp=_now_iso(),
-                metadata={"device_serial": self._serial},
-            )
-            return screen
-
         except Exception:
-            logger.exception(f"Failed to capture screen {screen_id}")
+            logger.exception("dump_hierarchy failed")
             return None
+        self._screen_counter += 1
+        screen_id = f"scr_{self._screen_counter:04d}"
+        screenshot_path = self._output_dir / "screens" / f"{screen_id}.png"
+        xml_path = self._output_dir / "trees" / f"{screen_id}.xml"
+        try:
+            self._device.screenshot(str(screenshot_path))
+        except Exception:
+            logger.debug(f"screenshot failed for {screen_id}", exc_info=True)
+        try:
+            xml_path.write_text(xml_string, encoding="utf-8")
+        except Exception:
+            logger.debug(f"xml persist failed for {screen_id}", exc_info=True)
+        elements = parse_hierarchy_xml(xml_string, app_package=self._app_package)
+        if not elements:
+            return None
+        return RawScreen(
+            screen_id=screen_id,
+            activity_name=activity_name or None,
+            package_name=package_name or None,
+            screenshot_path=str(screenshot_path),
+            xml_tree_path=str(xml_path),
+            elements=elements,
+            timestamp=_now_iso(),
+            metadata={"device_serial": self._serial},
+        )
 
     def _execute_action(self, action: Action) -> bool:
-        """Execute an action on the device.
-
-        Returns:
-            True if executed, False if it couldn't be performed.
-        """
+        """Dispatch; return False iff the device API raised."""
         assert self._device is not None
-
         try:
-            if action.action_type == ActionType.CLICK:
-                if not action.target_bounds:
-                    logger.debug(f"Skipping click: no bounds for {action.target_element_id}")
-                    return False
-                cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
-                cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
-                self._device.click(cx, cy)
-
-            elif action.action_type == ActionType.LONG_PRESS:
+            t = action.action_type
+            if t in (ActionType.CLICK, ActionType.LONG_PRESS):
                 if not action.target_bounds:
                     return False
                 cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
                 cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
-                self._device.long_click(cx, cy)
-
-            elif action.action_type == ActionType.INPUT_TEXT:
+                if t is ActionType.LONG_PRESS:
+                    self._device.long_click(cx, cy)
+                else:
+                    self._device.click(cx, cy)
+                return True
+            if t == ActionType.INPUT_TEXT:
                 if action.target_bounds:
                     cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
                     cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
@@ -896,538 +608,147 @@ class AppExplorer:
                     time.sleep(0.3)
                 if action.input_text:
                     self._device.send_keys(action.input_text)
-
-            elif action.action_type == ActionType.SCROLL_UP:
-                if action.target_bounds:
-                    cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
-                    cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
-                    h = action.target_bounds[3] - action.target_bounds[1]
-                    self._device.swipe(cx, cy, cx, cy - h // 3, duration=0.3)
-                else:
-                    self._device.swipe_ext("up")
-
-            elif action.action_type == ActionType.SCROLL_DOWN:
-                if action.target_bounds:
-                    cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
-                    cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
-                    h = action.target_bounds[3] - action.target_bounds[1]
-                    self._device.swipe(cx, cy, cx, cy + h // 3, duration=0.3)
-                else:
-                    self._device.swipe_ext("down")
-
-            elif action.action_type == ActionType.NAVIGATE_BACK:
+                # Dismiss the soft keyboard so the post-action screen dump
+                # reflects the real UI (the IME otherwise occludes ~half the
+                # screen and corrupts state identity).
+                try:
+                    if hasattr(self._device, "hide_keyboard"):
+                        self._device.hide_keyboard()
+                    else:
+                        self._device.press("back")
+                except Exception:
+                    logger.debug("keyboard dismiss failed", exc_info=True)
+                time.sleep(0.3)
+                return True
+            if t in (ActionType.SCROLL_UP, ActionType.SCROLL_DOWN):
+                return self._swipe_scroll(t, action)
+            if t == ActionType.NAVIGATE_BACK:
                 self._device.press("back")
-
-            elif action.action_type == ActionType.NAVIGATE_HOME:
+                return True
+            if t == ActionType.NAVIGATE_HOME:
                 self._device.press("home")
-
-            return True
-
+                return True
         except Exception:
-            logger.warning(f"Failed to execute action: {action.action_type.value}")
+            logger.exception(f"execute_action({action.action_type.value}) raised")
             return False
+        return False
 
-    def _wait_for_stability(self, action_type: ActionType | None = None) -> None:
-        """Wait for the screen to stabilize after an action."""
-        wait = (
-            _ACTION_WAIT.get(action_type, self.STABILITY_WAIT)
-            if action_type
-            else self.STABILITY_WAIT
-        )
-        time.sleep(wait)
-
-    def _dismiss_keyboard_if_showing(self) -> None:
-        """Detect and dismiss soft keyboard to prevent fingerprint corruption."""
+    def _swipe_scroll(self, t: ActionType, action: Action) -> bool:
+        """SCROLL_DOWN: finger high→low (reveal content below). SCROLL_UP: opposite."""
         assert self._device is not None
-        try:
-            current_xml = self._device.dump_hierarchy()
-            ime_indicators = [
-                "com.google.android.inputmethod",
-                "com.android.inputmethod",
-                "com.sohu.inputmethod",
-                "com.baidu.input",
-                "com.iflytek.inputmethod",
-                "com.miui.contentcatcher",
-            ]
-            if any(indicator in current_xml for indicator in ime_indicators):
-                logger.debug("Keyboard detected, dismissing")
-                self._device.press("back")
-                time.sleep(0.5)
-        except Exception:
-            pass
+        if action.target_bounds:
+            cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
+            top, bot = action.target_bounds[1], action.target_bounds[3]
+        else:
+            try:
+                w, h = self._device.window_size()
+            except Exception:
+                w, h = 1080, 2400
+            cx, top, bot = w // 2, 0, h
+        y_low = int(top + (bot - top) * 0.2)
+        y_high = int(top + (bot - top) * 0.8)
+        if t is ActionType.SCROLL_DOWN:
+            self._device.swipe(cx, y_high, cx, y_low, duration=0.3)
+        else:
+            self._device.swipe(cx, y_low, cx, y_high, duration=0.3)
+        return True
 
-    def _wait_for_app_foreground(self, timeout: float = 10.0) -> bool:
-        """Poll until the target app is in the foreground."""
-        deadline = time.monotonic() + timeout
+    def _wait_for_app_foreground(self, timeout: float | None = None) -> bool:
+        deadline = time.monotonic() + (timeout or self.WAIT_FOR_FOREGROUND)
         while time.monotonic() < deadline:
             if self._is_within_app():
                 return True
-            time.sleep(1.0)
+            time.sleep(0.5)
         return False
 
     def _is_within_app(self) -> bool:
-        """Check if the target app is still in the foreground."""
         assert self._device is not None
         try:
-            current = self._device.app_current()
-            return current.get("package", "") == self._app_package
+            return bool(self._device.app_current().get("package", "") == self._app_package)
         except Exception:
             return False
 
-    def _recover_from_crash(self) -> bool:
-        """Try to return to the target app after leaving it."""
-        assert self._device is not None
-        for _ in range(3):
-            self._device.press("back")
-            time.sleep(0.5)
-            if self._is_within_app():
-                return True
-        try:
-            self._device.app_start(self._app_package)
-            time.sleep(2.0)
-            return self._is_within_app()
-        except Exception:
-            return False
+    # ---------------------------------------------------------- finalize
 
-    def _navigate_to_screen_via_replay(
+    def _finalize(
         self,
-        target_screen_id: str,
+        traces: list[ExplorationTrace],
         screens: dict[str, RawScreen],
-        nav_paths: dict[str, list[tuple[Action, str]]],
-        direct_launch_screens: set[str] | None = None,
-    ) -> bool:
-        """Navigate to a target screen by restarting the app and replaying actions."""
-        assert self._device is not None
-        target_screen = screens.get(target_screen_id)
-        if target_screen is None:
-            return False
-
-        target_fp = target_screen.get_structural_fingerprint()
-
-        # Direct-launched screens: use am start instead of replay
-        if (
-            direct_launch_screens
-            and target_screen_id in direct_launch_screens
-            and target_screen.activity_name
-        ):
-            component = f"{self._app_package}/{target_screen.activity_name}"
-            try:
-                self._device.shell(f"am start -n {component}")
-                time.sleep(2.0)
-            except Exception:
-                return False
-            return self._verify_arrived_at(target_fp, target_screen)
-
-        target_fp = target_screen.get_structural_fingerprint()
-        path = nav_paths.get(target_screen_id)
-        if path is None:
-            return False
-
-        logger.debug(f"Navigating to {target_screen_id} via replay ({len(path)} steps)")
-        if not self._restart_app():
-            return False
-
-        if not path:
-            return self._verify_arrived_at(target_fp, target_screen)
-
-        for replay_action, _ in path:
-            if not self._is_within_app():
-                logger.debug("Left app during replay")
-                return False
-            self._execute_action(replay_action)
-            self._wait_for_stability(replay_action.action_type)
-
-        arrived = self._verify_arrived_at(target_fp, target_screen)
-        if not arrived:
-            logger.debug(f"Replay ended at wrong screen (expected {target_fp[:12]})")
-        return arrived
-
-    def _try_local_navigation(
-        self,
-        source_screen_id: str,
-        current_screen_id: str,
-        screens: dict[str, RawScreen],
-        forward_edges: dict[str, list[tuple[Action, str]]],
-        back_edges: dict[str, str],
-    ) -> bool:
-        """Try to reach source_screen_id without full replay.
-
-        Attempts: forward click, back press, or back + forward (sibling).
-        """
-        assert self._device is not None
-        source_screen = screens[source_screen_id]
-        source_fp = source_screen.get_structural_fingerprint()
-
-        # Forward click
-        if current_screen_id in forward_edges:
-            for edge_action, edge_target in forward_edges[current_screen_id]:
-                if edge_target == source_screen_id:
-                    logger.debug(f"Local nav: forward to {source_screen_id}")
-                    self._execute_action(edge_action)
-                    self._wait_for_stability(edge_action.action_type)
-                    return self._verify_arrived_at(source_fp, source_screen)
-
-        # Back press to parent
-        parent = back_edges.get(current_screen_id, "")
-        if parent == source_screen_id:
-            logger.debug(f"Local nav: back to {source_screen_id}")
-            self._execute_action(Action(action_type=ActionType.NAVIGATE_BACK))
-            self._wait_for_stability(ActionType.NAVIGATE_BACK)
-            return self._verify_arrived_at(source_fp, source_screen)
-
-        # Back to parent + forward to sibling
-        if parent and parent in forward_edges:
-            for edge_action, edge_target in forward_edges[parent]:
-                if edge_target == source_screen_id:
-                    logger.debug(f"Local nav: back to {parent} then forward to {source_screen_id}")
-                    self._execute_action(Action(action_type=ActionType.NAVIGATE_BACK))
-                    self._wait_for_stability(ActionType.NAVIGATE_BACK)
-
-                    if parent in screens:
-                        parent_screen = screens[parent]
-                        parent_fp = parent_screen.get_structural_fingerprint()
-                        if not self._verify_arrived_at(parent_fp, parent_screen):
-                            return False
-
-                    self._execute_action(edge_action)
-                    self._wait_for_stability(edge_action.action_type)
-                    return self._verify_arrived_at(source_fp, source_screen)
-
-        return False
-
-    def _verify_arrived_at(
-        self,
-        expected_fp: str,
-        target_screen: RawScreen | None = None,
-    ) -> bool:
-        """Check if current screen matches expected, with fuzzy fallback."""
-        screen = self._capture_screen()
-        if screen is None:
-            return False
-        fp = screen.get_structural_fingerprint()
-        if fp == expected_fp:
-            return True
-        if target_screen is not None:
-            same_activity = (
-                screen.activity_name and screen.activity_name == target_screen.activity_name
-            )
-            if same_activity and self._fingerprint_similarity(screen, target_screen) >= 0.75:
-                return True
-        return False
-
-    @staticmethod
-    def _fingerprint_similarity(screen_a: RawScreen, screen_b: RawScreen) -> float:
-        """Jaccard similarity of structural element sets between two screens."""
-
-        def _structural_set(scr: RawScreen) -> set[str]:
-            return {f"{e.class_name}|{e.resource_id or ''}" for e in scr.elements}
-
-        set_a = _structural_set(screen_a)
-        set_b = _structural_set(screen_b)
-        if not set_a and not set_b:
-            return 1.0
-        if not set_a or not set_b:
-            return 0.0
-        return len(set_a & set_b) / len(set_a | set_b)
-
-    def _handle_scroll_discovery(self, screen: RawScreen) -> list[RawScreen]:
-        """Scroll scrollable elements to discover hidden content."""
-        assert self._device is not None
-        discovered: list[RawScreen] = []
-
-        scrollable_elements = [e for e in screen.elements if e.is_scrollable and e.is_enabled]
-        if not scrollable_elements:
-            return discovered
-
-        def _element_ids(scr: RawScreen) -> set[str]:
-            ids: set[str] = set()
-            for e in scr.elements:
-                if e.resource_id:
-                    ids.add(f"rid:{e.resource_id}")
-                elif e.bounds:
-                    qb = tuple(round(b / 50) * 50 for b in e.bounds)
-                    ids.add(f"{e.class_name}:{qb}")
-            return ids
-
-        prev_elements = _element_ids(screen)
-
-        for element in scrollable_elements:
-            for _ in range(self.MAX_SCROLLS_PER_ELEMENT):
-                cx = (element.bounds[0] + element.bounds[2]) // 2
-                cy = (element.bounds[1] + element.bounds[3]) // 2
-                h = element.bounds[3] - element.bounds[1]
-                self._device.swipe(cx, cy, cx, cy - h // 3, duration=0.3)
-                time.sleep(0.5)
-
-                if not self._is_within_app():
-                    logger.debug("Scroll exited the app, stopping scroll discovery")
-                    self._recover_from_crash()
-                    return discovered
-
-                new_screen = self._capture_screen()
-                if new_screen is None:
-                    break
-
-                new_elements = _element_ids(new_screen)
-                if not (new_elements - prev_elements):
-                    break
-
-                discovered.append(new_screen)
-                prev_elements = prev_elements | new_elements
-
-        return discovered
-
-    def _restart_app(self) -> bool:
-        """Restart the target app and wait for it to load.
-
-        Tries soft restart first (bring to foreground without killing),
-        then falls back to hard restart (kill + relaunch).
-        """
-        assert self._device is not None
-        self._device.app_start(self._app_package)
-        if self._wait_for_app_foreground(timeout=3.0):
-            return True
-        self._device.app_start(self._app_package, stop=True)
-        if self._wait_for_app_foreground():
-            return True
-        logger.warning(f"App {self._app_package} did not come to foreground, retrying")
-        self._device.app_start(self._app_package, stop=True)
-        time.sleep(3.0)
-        return self._wait_for_app_foreground()
-
-    def _try_back_to_screen(
-        self,
-        target_screen_id: str,
-        screens: dict[str, RawScreen],
-        max_presses: int = 3,
-    ) -> bool:
-        """Try pressing back up to max_presses times to reach target screen."""
-        assert self._device is not None
-        target_screen = screens.get(target_screen_id)
-        if target_screen is None:
-            return False
-        target_fp = target_screen.get_structural_fingerprint()
-        for _ in range(max_presses):
-            self._device.press("back")
-            time.sleep(0.4)
-            if not self._is_within_app():
-                self._restart_app()
-                return False
-            if self._verify_arrived_at(target_fp, target_screen):
-                return True
-        return False
-
-    def _launch_uncovered_activity(
-        self,
-        declared_activities: set[str],
-        covered_activities: set[str],
-        screens: dict[str, RawScreen],
-        fp_to_sid: dict[str, str],
-        nav_paths: dict[str, list[tuple[Action, str]]],
-        screen_depth: dict[str, int],
-        frontier: deque[tuple[str, Action]],
-        frontier_sigs: set[str],
-        executed_actions: set[str],
-        skip_actions: set[ActionType],
-        failed_launches: set[str],
-        direct_launch_screens: set[str],
-        grouping_ctx: StructuralGroupingContext,
-    ) -> bool:
-        """Directly launch an uncovered Activity when the frontier is empty.
-
-        Tries each uncovered Activity via am start. On success, captures the
-        screen, enumerates actions, and refills the frontier.
-        """
-        assert self._device is not None
-
-        uncovered = declared_activities - covered_activities - failed_launches
-        if not uncovered:
-            return False
-
-        candidates = sorted(uncovered, key=lambda a: (len(a), a))
-
-        for activity_name in candidates:
-            component = f"{self._app_package}/{activity_name}"
-            logger.info(f"Direct-launching Activity: {component}")
-
-            try:
-                self._device.shell(f"am start -n {component}")
-                time.sleep(2.5)
-            except Exception:
-                failed_launches.add(activity_name)
+        nav_paths: dict[str, list[Action]],
+        counts: dict[str, int],
+        total_steps: int,
+        duration: float,
+    ) -> ExplorationResult:
+        covered: set[str] = set()
+        for t in traces:
+            if t.target_state_id in SENTINEL_TARGETS:
                 continue
-
-            if not self._is_within_app():
-                failed_launches.add(activity_name)
-                self._restart_app()
-                continue
-
-            screen = self._capture_screen()
-            if screen is None:
-                failed_launches.add(activity_name)
-                continue
-
-            fp = screen.get_structural_fingerprint()
-            covered_activities.add(activity_name)
-            if screen.activity_name and declared_activities:
-                matched = _match_activity(screen.activity_name, declared_activities)
-                if matched:
-                    covered_activities.add(matched)
-
-            canonical_sid = fp_to_sid.get(fp)
-            if canonical_sid is None:
-                canonical_sid = screen.screen_id
-                fp_to_sid[fp] = canonical_sid
-                screens[canonical_sid] = screen
-                screen_depth[canonical_sid] = 0
-                nav_paths[canonical_sid] = []
-                direct_launch_screens.add(canonical_sid)
-
-                logger.info(
-                    f"New screen from direct launch: {canonical_sid} "
-                    f"(activity={screen.activity_name}, total={len(screens)})"
-                )
-
-            new_actions = list(enumerate_actions(screen, exclude=skip_actions))
-            new_actions = [a for a in new_actions if a.action_type != ActionType.NAVIGATE_BACK]
-            new_actions = apply_structural_grouping(
-                screen, new_actions, grouping_ctx, canonical_sid
-            )
-            new_actions, _ = _filter_search_actions(new_actions, screen)
-
-            added = 0
-            for action in new_actions:
-                sig = _action_signature(action)
-                if sig not in executed_actions and sig not in frontier_sigs:
-                    frontier.append((canonical_sid, action))
-                    frontier_sigs.add(sig)
-                    added += 1
-
-            if added > 0:
-                logger.info(
-                    f"Direct launch refilled frontier: {added} actions from {activity_name}"
-                )
-                return True
-
-        return False
-
-    def _identify_current_screen(self) -> tuple[str, RawScreen | None]:
-        """Capture the current screen and return (fingerprint, screen)."""
-        if not self._is_within_app() and not self._restart_app():
-            return "", None
-        screen = self._capture_screen()
-        if screen is None:
-            return "", None
-        return screen.get_structural_fingerprint(), screen
-
-    def _identify_current_fp(self) -> str:
-        """Capture the current screen and return its fingerprint."""
-        fp, _ = self._identify_current_screen()
-        return fp
-
-    # --- Frontier management ---
-
-    def _pop_frontier_prefer_current(
-        self,
-        frontier: deque[tuple[str, Action]],
-        current_screen_id: str,
-        current_step: int,
-        max_steps: int,
-        forward_edges: dict[str, list[tuple[Action, str]]] | None = None,
-        back_edges: dict[str, str] | None = None,
-    ) -> tuple[str, Action, int]:
-        """Pop from frontier with 5-tier locality-aware priority.
-
-        P1: Current screen (cost=0)
-        P2: Forward-adjacent via observed transition (cost=1)
-        P3: Back-reachable parent (cost=1)
-        P4: Sibling via back+forward (cost=2)
-        P5: Fallback — full replay required
-        """
-        forward_edges = forward_edges or {}
-        back_edges = back_edges or {}
-
-        # P1: Current screen
-        if current_screen_id:
-            for i, (sid, act) in enumerate(frontier):
-                if sid == current_screen_id:
-                    del frontier[i]
-                    return (sid, act, 1)
-
-        # P2: Forward-adjacent
-        if current_screen_id and current_screen_id in forward_edges:
-            adjacent_sids = {tid for _, tid in forward_edges[current_screen_id]}
-            for i, (sid, act) in enumerate(frontier):
-                if sid in adjacent_sids:
-                    del frontier[i]
-                    return (sid, act, 2)
-
-        # P3: Back-reachable parent
-        parent_sid = back_edges.get(current_screen_id, "") if current_screen_id else ""
-        if parent_sid:
-            for i, (sid, act) in enumerate(frontier):
-                if sid == parent_sid:
-                    del frontier[i]
-                    return (sid, act, 3)
-
-        # P4: Sibling (other children of same parent)
-        if parent_sid and parent_sid in forward_edges:
-            sibling_sids = {tid for _, tid in forward_edges[parent_sid]}
-            sibling_sids.discard(current_screen_id)
-            if sibling_sids:
-                for i, (sid, act) in enumerate(frontier):
-                    if sid in sibling_sids:
-                        del frontier[i]
-                        return (sid, act, 4)
-
-        # P5: Fallback
-        strategy = self._config.app.exploration_strategy
-        if strategy == "dfs":
-            return (*frontier.pop(), 5)
-        elif strategy == "hybrid":
-            if current_step < int(max_steps * 0.6):
-                return (*frontier.popleft(), 5)
-            else:
-                return (*frontier.pop(), 5)
-        else:
-            return (*frontier.popleft(), 5)
-
-    # --- Persistence ---
+            scr = screens.get(t.source_screen_id)
+            if scr is not None and scr.activity_name:
+                covered.add(scr.activity_name)
+        declared: list[str] = (
+            list(getattr(self._app_prior, "activities", [])) if self._app_prior is not None else []
+        )
+        nav_stats = {
+            "observations_total": total_steps,
+            "states_discovered": len(nav_paths),
+            **counts,
+        }
+        result = ExplorationResult(
+            app_package=self._app_package,
+            screens=screens,
+            traces=traces,
+            total_steps=total_steps,
+            unique_screens=len(nav_paths),
+            duration_seconds=round(duration, 2),
+            output_dir=str(self._output_dir),
+            declared_activities=declared,
+            covered_activities=sorted(covered),
+            nav_stats=nav_stats,
+        )
+        self._save_result(result)
+        logger.info(
+            f"Done: {total_steps} observations, {len(nav_paths)} states, "
+            f"{result.duration_seconds:.1f}s — saved to {result.output_dir}"
+        )
+        return result
 
     def _save_result(self, result: ExplorationResult) -> None:
-        """Save the full exploration result as a JSON trace file."""
         timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
         trace_path = self._output_dir / "traces" / f"exploration_{timestamp}.json"
-
-        compact_screens: dict[str, Any] = {}
+        compact: dict[str, Any] = {}
         for sid, s in result.screens.items():
-            interactable = s.get_interactable_elements()
-            compact_screens[sid] = {
+            container, anchors = s.get_functional_state_key(self._app_package)
+            compact[sid] = {
                 "screen_id": s.screen_id,
                 "activity_name": s.activity_name,
                 "package_name": s.package_name,
                 "screenshot_path": s.screenshot_path,
                 "xml_tree_path": s.xml_tree_path,
                 "fingerprint": s.get_structural_fingerprint(),
+                "state_id": s.get_state_id(self._app_package),
+                "state_key_anchor_container": container,
+                "state_key_anchors": sorted([list(t) for t in anchors]),
                 "total_elements": len(s.elements),
-                "interactable_elements": [e.model_dump(mode="json") for e in interactable],
+                "interactable_elements": [
+                    e.model_dump(mode="json") for e in s.get_interactable_elements()
+                ],
                 "timestamp": s.timestamp,
-                "metadata": self._extract_metadata(s),
+                "metadata": {},
             }
-
         data: dict[str, Any] = {
             "app_package": result.app_package,
             "device_serial": self._serial,
-            "exploration_strategy": self._config.app.exploration_strategy,
+            "exploration_strategy": "bfs_restart_per_action",
             "max_steps": self._config.app.max_exploration_steps,
             "total_steps": result.total_steps,
             "unique_screens": result.unique_screens,
             "duration_seconds": result.duration_seconds,
             "timestamp": _now_iso(),
-            "screens": compact_screens,
+            "screens": compact,
             "traces": [t.model_dump(mode="json") for t in result.traces],
+            "nav_stats": result.nav_stats,
         }
-
         if result.declared_activities:
             data["activity_coverage"] = {
                 "declared": result.declared_activities,
@@ -1435,53 +756,8 @@ class AppExplorer:
                 "coverage_ratio": (
                     len(result.covered_activities) / len(result.declared_activities)
                     if result.declared_activities
-                    else 0
+                    else 0.0
                 ),
             }
-
-        if result.nav_stats:
-            data["nav_stats"] = result.nav_stats
-
         trace_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
         logger.info(f"Exploration trace saved to {trace_path}")
-
-    def _save_prior(self) -> None:
-        """Save the app prior as JSON alongside exploration data."""
-        assert self._app_prior is not None
-        prior_path = self._output_dir / "prior.json"
-        prior_path.write_text(
-            json.dumps(self._app_prior.model_dump(), indent=2, default=str),
-            encoding="utf-8",
-        )
-        logger.info(f"App prior saved to {prior_path}")
-
-    @staticmethod
-    def _extract_metadata(screen: RawScreen) -> dict[str, Any]:
-        """Extract page_title and other metadata from a screen's elements."""
-        metadata: dict[str, Any] = {}
-
-        for e in screen.elements:
-            rid = e.resource_id or ""
-            if "action_bar_title" in rid.lower() and e.text and e.text.strip():
-                metadata["page_title"] = e.text.strip()
-                return metadata
-
-        for e in screen.elements:
-            rid = e.resource_id or ""
-            if (
-                rid
-                and "title" in rid.lower()
-                and "subtitle" not in rid.lower()
-                and e.text
-                and e.text.strip()
-                and len(e.text.strip()) > 1
-            ):
-                metadata["page_title"] = e.text.strip()
-                return metadata
-
-        return metadata
-
-
-def _now_iso() -> str:
-    """Return current UTC time as ISO 8601 string."""
-    return datetime.now(tz=UTC).isoformat()

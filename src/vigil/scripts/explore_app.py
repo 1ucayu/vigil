@@ -35,7 +35,17 @@ def main() -> None:
         "--steps",
         type=int,
         default=None,
-        help="Max exploration steps (overrides config)",
+        help=(
+            "Max observations (alias: --budget). Each observation is an "
+            "independent cold-start + nav-path replay — ~20-30s wall-clock on "
+            "Settings. Default: 100 if neither flag is given."
+        ),
+    )
+    parser.add_argument(
+        "--budget",
+        type=int,
+        default=None,
+        help="Semantic alias for --steps. If both are given, --budget wins.",
     )
     parser.add_argument(
         "--strategy",
@@ -100,8 +110,20 @@ def main() -> None:
         config = VigilConfig()
 
     # Apply CLI overrides
-    if args.steps is not None:
-        config.app.max_exploration_steps = args.steps
+    if args.budget is not None:
+        effective_budget = args.budget
+        budget_source = "--budget"
+    elif args.steps is not None:
+        effective_budget = args.steps
+        budget_source = "--steps"
+    else:
+        effective_budget = 100
+        budget_source = "default"
+    config.app.max_exploration_steps = effective_budget
+    logger.info(
+        f"Budget: {effective_budget} observations (from {budget_source}) — "
+        f"estimated {max(1, round(effective_budget * 25 / 60))} min wall-clock"
+    )
     if args.strategy is not None:
         config.app.exploration_strategy = args.strategy
     if args.minutes is not None:
