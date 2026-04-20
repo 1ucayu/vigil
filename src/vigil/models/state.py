@@ -332,21 +332,130 @@ class RawScreen(BaseModel):
         key_str = container + "||" + "|".join(sorted_anchors)
         return hashlib.sha256(key_str.encode()).hexdigest()[:12]
 
+    def extract_page_title(self) -> str:
+        """Best-effort extraction of the page title as a stable text anchor.
+
+        Tried in order:
+          1. Element with ``resource_id`` containing ``action_bar_title`` that
+             has non-empty text.
+          2. Element with ``resource_id`` containing ``collapsing_toolbar`` —
+             its content-description (Settings' pattern), or any descendant
+             TextView text.
+          3. The first TextView sibling of a ``Navigate up`` ImageButton
+             (generic toolbar pattern).
+
+        Returns the empty string when no title anchor can be found. Does NOT
+        normalize numeric / dynamic content — the page title on a real app
+        rarely carries notification counts or timestamps, and preserving
+        capitalization helps FSM state naming downstream.
+        """
+        # Strategy 1: action_bar_title
+        for e in self.elements:
+            rid = (e.resource_id or "").lower()
+            if "action_bar_title" in rid:
+                t = (e.text or "").strip()
+                if t:
+                    return t
+
+        # Strategy 2: collapsing_toolbar (Settings' pattern — content-desc on
+        # the toolbar container, or descendant TextView text).
+        by_id = {e.element_id: e for e in self.elements}
+        for e in self.elements:
+            rid = (e.resource_id or "").lower()
+            if "collapsing_toolbar" not in rid:
+                continue
+            cd = (e.content_description or "").strip()
+            if cd:
+                return cd
+            # Walk descendants for the first non-empty TextView text.
+            stack = list(e.children)
+            seen: set[str] = set()
+            depth_guard = 0
+            while stack and depth_guard < 60:
+                depth_guard += 1
+                cid = stack.pop()
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                child = by_id.get(cid)
+                if child is None:
+                    continue
+                if "TextView" in (child.class_name or "") and child.text:
+                    t = child.text.strip()
+                    if t:
+                        return t
+                stack.extend(child.children)
+
+        # Strategy 3: first TextView sibling of a "Navigate up" button.
+        for e in self.elements:
+            if (e.content_description or "").strip() != "Navigate up":
+                continue
+            parent = by_id.get(e.parent_id) if e.parent_id else None
+            if parent is None:
+                continue
+            for cid in parent.children:
+                if cid == e.element_id:
+                    continue
+                sib = by_id.get(cid)
+                if sib is None:
+                    continue
+                if "TextView" in (sib.class_name or "") and sib.text:
+                    t = sib.text.strip()
+                    if t:
+                        return t
+        return ""
+
+    def get_hybrid_state_id(self, app_package: str) -> str:
+        """Hybrid state identity: structural fingerprint + activity + page title.
+
+        Combines the scroll-aware structural skeleton (distinguishes pages
+        with genuinely different widget trees) with the activity name and
+        page title (distinguishes pages that share a skeleton but have
+        different semantic roles — e.g. Settings' Internet / Battery / Apps
+        / Location SubSettings all have the same Preference-framework
+        skeleton but different toolbar titles).
+
+        Intentionally *excludes* Preference row labels, list content, and
+        other body text, so a page with 3 Wi-Fi networks and a page with
+        5 Wi-Fi networks collapse to the same state.
+
+        Returns the literal ``EMPTY_SCREEN`` when the screen has no
+        elements. Truncated to 12 hex chars to match :meth:`get_state_id`.
+        """
+        if not self.elements:
+            return EMPTY_SCREEN_ID
+        struct_fp = self.get_structural_fingerprint()
+        activity = self.activity_name or ""
+        title = self.extract_page_title()
+        key = f"{struct_fp}|{activity}|{title}"
+        return hashlib.sha256(key.encode()).hexdigest()[:12]
+
     def get_structural_fingerprint(self, scroll_aware: bool = True) -> str:
         """Generate a structural fingerprint ignoring dynamic content.
 
         Hashes (activity_name, sorted element structure tuples) where each element
         contributes (class_name, resource_id, depth, interactability_flags).
-        Text and content_description are deliberately excluded — they vary across
-        instances of the same structural screen (e.g., different WiFi networks).
+        Text, content_description, checked state, and bounds are deliberately
+        excluded — they vary across instances of the same structural screen
+        (e.g., different WiFi networks, account names, notification counts).
+
+        Truncated to 12 hex characters to match :meth:`get_state_id`'s short
+        log-friendly form. Returns ``EMPTY_SCREEN`` if no elements are present
+        (broken capture / black screen) so callers can detect unclassifiable
+        screens with the same sentinel as ``get_state_id``.
 
         Args:
             scroll_aware: If True, exclude children of scrollable containers from
                 the fingerprint. This merges scroll-equivalent screens (same page
                 at different scroll positions) into a single state.
 
-        Used by Stage 2 (State Abstraction) for rule-based grouping.
+        Used as the primary identity for explorer scheduling — Stoat-style
+        model compaction (FSE'17). Text-anchored ``get_state_id`` remains
+        available as a secondary label for logging and FSM state naming.
         """
+        if not self.elements:
+            return EMPTY_SCREEN_ID
+
         # Find depths of scrollable containers — their children are scroll-volatile
         scrollable_depths: set[int] = set()
         if scroll_aware:
@@ -374,4 +483,4 @@ class RawScreen(BaseModel):
             components.append((e.class_name, e.resource_id or "", e.depth, interactability))
         components.sort()
         fingerprint_input = (self.activity_name or "", tuple(components))
-        return hashlib.sha256(str(fingerprint_input).encode()).hexdigest()[:16]
+        return hashlib.sha256(str(fingerprint_input).encode()).hexdigest()[:12]

@@ -1004,7 +1004,7 @@ class TestLocality:
     ) -> None:
         # Simulate: current == intended, pre-capture returns same state_id.
         pre = _screen([_elem(resource_id="com.app:id/x")])
-        sid = pre.get_state_id("com.android.settings")
+        sid = pre.get_hybrid_state_id("com.android.settings")
         explorer._current_state_id = sid
         explorer._nav_paths[sid] = []
         with (
@@ -1054,7 +1054,7 @@ class TestLocality:
                 action=_sid_click(),
                 step=1,
             )
-        assert explorer._current_state_id == post.get_state_id("com.android.settings")
+        assert explorer._current_state_id == post.get_hybrid_state_id("com.android.settings")
 
     def test_current_state_cleared_on_left_app(self, explorer: AppExplorer) -> None:
         pre = _screen([_elem(resource_id="com.app:id/pre")])

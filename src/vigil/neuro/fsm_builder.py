@@ -515,89 +515,107 @@ class FsmBuilder:
         """Create Sub-FSM templates for verified dynamic containers.
 
         Detects states with container_type=DYNAMIC that have multiple outgoing
-        click transitions whose targets share the same structural fingerprint.
-        Collapses those N transitions into a single SubFsmTemplate reference.
+        click transitions whose targets share the same ``structural_fingerprint``
+        (the text-agnostic structural skeleton — the correct identity for
+        "list of structurally-identical detail pages" patterns like an email
+        inbox or a Wi-Fi network list).
+
+        Collapses those N transitions into a single SubFsmTemplate reference:
+        keeps one representative target state (with its descendant subgraph
+        up to depth 5), removes the N-1 duplicates, redirects their incoming
+        transitions to the representative, and stamps
+        ``sub_fsm_template_id`` on the container state.
+
+        Emits a diagnostic log at INFO when 0 templates are created but
+        DYNAMIC containers exist — separates a data-coverage gap (few
+        items observed per container) from a code bug.
 
         Returns:
             Number of templates created.
         """
         templates_created = 0
+        dynamic_state_ids = [
+            sid for sid, s in fsm.states.items() if s.container_type == ContainerType.DYNAMIC
+        ]
 
-        for state_id, state in list(fsm.states.items()):
-            if state.container_type != ContainerType.DYNAMIC:
+        for state_id in list(dynamic_state_ids):
+            state = fsm.states.get(state_id)
+            if state is None:
                 continue
 
             click_targets = self._find_same_fingerprint_targets(fsm, state_id)
             if len(click_targets) < 2:
                 continue
 
-            target_fp = click_targets[0][1]
+            shared_fp = click_targets[0][1]
             representative_target_id = click_targets[0][0]
+            if representative_target_id == fsm.initial_state:
+                # Defensive: never collapse the entry state away.
+                continue
 
-            templates_created += 1
             template_id = f"tmpl_{state_id}"
-
             rep_state = fsm.states.get(representative_target_id)
-            template_states: dict[str, AbstractState] = {}
-            template_transitions: list[Transition] = []
 
-            if rep_state:
+            # Template subgraph: representative + DFS descendants (bounded
+            # depth 5) excluding any transition that returns to the container
+            # source state. Prevents the whole FSM from being swallowed into
+            # one template when navigate-back forms a back-edge.
+            template_states: dict[str, AbstractState] = {}
+            if rep_state is not None:
                 template_states[representative_target_id] = rep_state
-                for t in fsm.transitions:
-                    if t.source == representative_target_id:
-                        template_transitions.append(t)
+                self._collect_template_subgraph(
+                    fsm,
+                    root_id=representative_target_id,
+                    exclude_id=state_id,
+                    max_depth=5,
+                    out=template_states,
+                )
+            template_transitions: list[Transition] = [
+                t
+                for t in fsm.transitions
+                if t.source in template_states and t.target in template_states
+            ]
 
             collapsed_target_id_set = {tid for tid, _ in click_targets}
-
-            # Collect observed target_text samples across the collapsed click
-            # transitions to populate parameter_schema with concrete values
-            # instead of a hardcoded placeholder.
-            observed_texts: list[str] = []
-            seen_texts: set[str] = set()
-            for t in fsm.transitions:
-                if (
-                    t.source == state_id
-                    and t.action.get("type") == "click"
-                    and t.target in collapsed_target_id_set
-                ):
-                    txt = (t.action.get("target_text") or "").strip()
-                    if txt and txt not in seen_texts:
-                        seen_texts.add(txt)
-                        observed_texts.append(txt)
-
-            parameter_schema: dict[str, str] = {
-                "item_text": "string",
-                "item_index": "int",
-            }
-            if observed_texts:
-                # Record up to 5 real samples so downstream consumers (paper
-                # eval, runtime binding) can reason about the parameter domain.
-                parameter_schema["item_text_samples"] = "|".join(observed_texts[:5])
+            parameter_schema = self._infer_parameter_schema(fsm, state_id, collapsed_target_id_set)
+            item_skeleton = rep_state.structural_fingerprint or "" if rep_state else ""
 
             tmpl = SubFsmTemplate(
                 template_id=template_id,
                 source_state_id=state_id,
-                entry_fingerprint=target_fp,
+                entry_fingerprint=shared_fp,
                 states=template_states,
                 transitions=template_transitions,
                 parameter_schema=parameter_schema,
+                item_skeleton=item_skeleton,
             )
             fsm.sub_fsm_templates[template_id] = tmpl
             state.sub_fsm_template_id = template_id
+            templates_created += 1
 
-            collapsed_target_ids = {tid for tid, _ in click_targets[1:]}
-            for tid in collapsed_target_ids:
-                if tid in fsm.states and tid != representative_target_id:
+            # Collapse: redirect source→collapsed transitions to the
+            # representative, then remove non-representative states from the
+            # FSM (states dict + graph nodes). Their non-source-originating
+            # transitions are pruned during the post-pass below.
+            collapsed_others = {tid for tid, _ in click_targets[1:]}
+            for t in fsm.transitions:
+                if t.source == state_id and t.target in collapsed_others:
+                    t.target = representative_target_id
+
+            for tid in collapsed_others:
+                if tid in fsm.states:
                     del fsm.states[tid]
                 if tid in fsm.graph:
                     fsm.graph.remove_node(tid)
 
+            # Drop any lingering transitions that still touch removed states,
+            # then rebuild graph edges from the authoritative transitions
+            # list (same post-pass pattern used by _merge_scroll_duplicates).
             fsm.transitions = [
                 t
                 for t in fsm.transitions
-                if t.target not in collapsed_target_ids and t.source not in collapsed_target_ids
+                if t.source not in collapsed_others and t.target not in collapsed_others
             ]
-
             fsm.graph.remove_edges_from(list(fsm.graph.edges))
             for t in fsm.transitions:
                 if t.source in fsm.graph and t.target in fsm.graph:
@@ -611,19 +629,101 @@ class FsmBuilder:
                     )
 
             logger.debug(
-                f"Template {template_id}: collapsed {len(click_targets)} transitions "
-                f"from {state_id} (kept {representative_target_id})"
+                f"Template {template_id}: collapsed {len(click_targets)} "
+                f"transitions from {state_id} (kept {representative_target_id})"
             )
+
+        if templates_created == 0 and dynamic_state_ids:
+            # Diagnostic: show per-container click-target structural_fp
+            # distribution so the operator can tell coverage gap from a
+            # matching bug.
+            logger.info(
+                f"No sub-FSM templates created despite "
+                f"{len(dynamic_state_ids)} DYNAMIC container(s). "
+                "Per-container click-target structural fingerprint counts:"
+            )
+            for sid in dynamic_state_ids:
+                counts: dict[str, int] = defaultdict(int)
+                for t in fsm.transitions:
+                    if t.source != sid or t.action.get("type") != "click":
+                        continue
+                    tgt = fsm.states.get(t.target)
+                    if tgt is None:
+                        continue
+                    sfp = tgt.structural_fingerprint or "<none>"
+                    counts[sfp] += 1
+                summary = ", ".join(f"{k[:8]}:{v}" for k, v in counts.items())
+                logger.info(f"  {sid[:6]}  {summary or '<no click targets>'}")
 
         return templates_created
 
     @staticmethod
+    def _collect_template_subgraph(
+        fsm: AppFSM,
+        *,
+        root_id: str,
+        exclude_id: str,
+        max_depth: int,
+        out: dict[str, AbstractState],
+    ) -> None:
+        """DFS from ``root_id`` up to ``max_depth`` hops, skipping any
+        transition whose target is ``exclude_id`` (the container we came
+        from — a navigate-back edge would otherwise swallow the whole FSM).
+        Populates ``out`` in place."""
+        stack: list[tuple[str, int]] = [(root_id, 0)]
+        while stack:
+            sid, depth = stack.pop()
+            if depth >= max_depth:
+                continue
+            for t in fsm.transitions:
+                if t.source != sid:
+                    continue
+                if t.target == exclude_id or t.target == sid:
+                    continue
+                child = fsm.states.get(t.target)
+                if child is None or t.target in out:
+                    continue
+                out[t.target] = child
+                stack.append((t.target, depth + 1))
+
+    @staticmethod
+    def _infer_parameter_schema(
+        fsm: AppFSM,
+        source_state_id: str,
+        collapsed_target_ids: set[str],
+    ) -> dict[str, str]:
+        """If the collapsed source-transitions click different
+        ``target_text`` values, emit ``{"item_name": "string"}``. Otherwise
+        return ``{}`` — an empty schema means the template carries a single
+        shape with no varying parameter."""
+        texts: set[str] = set()
+        for t in fsm.transitions:
+            if t.source != source_state_id:
+                continue
+            if t.action.get("type") != "click":
+                continue
+            if t.target not in collapsed_target_ids:
+                continue
+            txt = (t.action.get("target_text") or "").strip()
+            if txt:
+                texts.add(txt)
+        return {"item_name": "string"} if len(texts) >= 2 else {}
+
+    @staticmethod
     def _find_same_fingerprint_targets(fsm: AppFSM, source_id: str) -> list[tuple[str, str]]:
-        """Find click transitions from source whose targets share a fingerprint.
+        """Find click transitions from ``source_id`` whose targets share a
+        ``structural_fingerprint`` (the text-agnostic structural skeleton).
+
+        Grouping on ``structural_fingerprint`` rather than the text-anchored
+        ``fingerprint`` is the correct use-case for list-like containers:
+        every row clicks into a structurally-identical detail page but with
+        distinct row text, so text-anchored identities diverge while the
+        structural one collapses them.
 
         Returns:
-            List of (target_state_id, fingerprint) for the largest group of
-            same-fingerprint targets. Empty if no group has >= 2 members.
+            List of (target_state_id, structural_fingerprint) for the
+            largest group of same-structural-fingerprint targets. Empty if
+            no group has >= 2 members.
         """
         fp_groups: dict[str, list[str]] = defaultdict(list)
         for t in fsm.transitions:
@@ -632,8 +732,12 @@ class FsmBuilder:
             if t.action.get("type") != "click":
                 continue
             target = fsm.states.get(t.target)
-            if target:
-                fp_groups[target.fingerprint].append(t.target)
+            if target is None:
+                continue
+            sfp = target.structural_fingerprint
+            if not sfp:
+                continue
+            fp_groups[sfp].append(t.target)
 
         best_group: list[str] = []
         best_fp = ""

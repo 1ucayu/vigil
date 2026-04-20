@@ -1,20 +1,27 @@
-"""Stage 0: App Prior Extraction from AndroidManifest.xml.
+"""Stage 0: App Prior Extraction.
 
-Parses AndroidManifest.xml to extract structural prior knowledge:
-- Activity names, labels, parent relationships → hierarchy skeleton
-- Launcher activity → FSM initial state candidate
-- Permissions → feature capability hints
+Primary path: Androguard on a device-pulled APK. Loads manifest, resolves
+string resources, and decodes all ``res/layout/*.xml`` files in a single
+pass — no external ``aapt2`` dependency.
 
-Three extraction paths:
-1. extract_from_manifest(path) — direct XML file
-2. extract_from_apk(path) — via aapt2 dump
-3. extract_from_device(device, package) — via adb dumpsys (fallback)
+Fallback paths, kept for system apps whose APK isn't pullable or for
+offline users:
+
+- ``extract_from_manifest(path)`` — legacy text-XML parse for
+  pre-decompiled AOSP manifests passed via ``--manifest``.
+- ``_parse_dumpsys`` — regex scrape of ``adb shell dumpsys package`` when
+  ``adb pull`` is denied (e.g., privileged system apps on non-root
+  builds).
+
+``extract_from_device_serial`` tries Androguard first and transparently
+falls back to ``_parse_dumpsys`` on any documented failure.
 """
 
 from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -61,12 +68,208 @@ class AppPrior(BaseModel):
     string_arrays: dict[str, list[str]] = Field(default_factory=dict)
     widget_declarations: list[WidgetDecl] = Field(default_factory=list)
 
+    # Transient (excluded from the persisted JSON) — the extractor sets
+    # these when available so ``save(static_dir)`` can write the raw
+    # decoded sources alongside ``app_prior.json``.
+    raw_manifest_xml: str | None = Field(default=None, exclude=True)
+    raw_strings_xml: str | None = Field(default=None, exclude=True)
+    layout_xmls: dict[str, str] = Field(default_factory=dict, exclude=True)
+
+    def save(self, static_dir: Path) -> None:
+        """Persist the prior JSON + any attached raw decoded XMLs to the
+        ``static/`` directory of an app data dir.
+
+        Layout::
+
+            static_dir/app_prior.json
+            static_dir/AndroidManifest.xml   (if raw_manifest_xml is set)
+            static_dir/strings.xml           (if raw_strings_xml is set)
+            static_dir/layouts/<name>.xml    (one per layout_xmls entry)
+
+        Each write is individually guarded against ``OSError`` — a
+        non-writable dir or a single corrupt layout does not abort the
+        whole save.
+        """
+        static_dir = Path(static_dir)
+        static_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            (static_dir / "app_prior.json").write_text(
+                self.model_dump_json(indent=2), encoding="utf-8"
+            )
+        except OSError as exc:
+            logger.warning(f"Failed to write app_prior.json: {exc}")
+
+        if self.raw_manifest_xml:
+            try:
+                (static_dir / "AndroidManifest.xml").write_text(
+                    self.raw_manifest_xml, encoding="utf-8"
+                )
+            except OSError as exc:
+                logger.warning(f"Failed to write AndroidManifest.xml: {exc}")
+
+        if self.raw_strings_xml:
+            try:
+                (static_dir / "strings.xml").write_text(self.raw_strings_xml, encoding="utf-8")
+            except OSError as exc:
+                logger.warning(f"Failed to write strings.xml: {exc}")
+
+        if self.layout_xmls:
+            layouts_dir = static_dir / "layouts"
+            try:
+                layouts_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logger.warning(f"Failed to create layouts/: {exc}")
+                return
+            for name, content in self.layout_xmls.items():
+                safe = name.replace("/", "_")
+                try:
+                    (layouts_dir / safe).write_text(content, encoding="utf-8")
+                except OSError as exc:
+                    logger.warning(f"Failed to write layouts/{safe}: {exc}")
+
+    @classmethod
+    def load(cls, static_dir: Path) -> AppPrior:
+        """Load an ``AppPrior`` previously saved via :meth:`save`. Reads
+        ``app_prior.json`` only — raw XMLs stay on disk for downstream
+        stages that want them."""
+        path = Path(static_dir) / "app_prior.json"
+        return cls.load_file(path)
+
+    @classmethod
+    def load_file(cls, path: Path) -> AppPrior:
+        """Load from an explicit JSON path. Back-compat shim for legacy
+        ``static/prior.json`` / ``prior.json`` layouts."""
+        return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
 
 class AppPriorExtractor:
     """Extract structural prior knowledge from Android app metadata."""
 
+    def extract_from_apk_file(self, apk_path: Path) -> AppPrior:
+        """Load an APK via Androguard and populate an :class:`AppPrior`.
+
+        Exercises Androguard's high-level APK object (activities, main
+        activity, permissions), walks the decoded AndroidManifest XML to
+        recover per-activity ``parentActivityName`` / ``launchMode`` /
+        ``label`` attributes (which the high-level accessors drop), and
+        iterates ``res/layout*/`` AXML files for widget declarations.
+        Raw decoded XMLs are stashed on the transient fields so
+        :meth:`AppPrior.save` can mirror them to ``static/``.
+        """
+        from androguard.core.apk import APK  # type: ignore[import-untyped]
+        from androguard.core.axml import AXMLPrinter  # type: ignore[import-untyped]
+
+        apk = APK(str(apk_path))
+        package = apk.get_package() or ""
+        manifest_axml = apk.get_android_manifest_axml()
+        raw_manifest = manifest_axml.get_xml().decode("utf-8", errors="replace")
+
+        # Parse the decoded manifest XML for full activity attributes —
+        # Androguard's get_activities() returns bare names, and we need
+        # parentActivityName / launchMode / label / intent filters.
+        prior = self.extract_from_manifest_string(raw_manifest)
+        prior.raw_manifest_xml = raw_manifest
+        if not prior.package_name:
+            prior.package_name = package
+
+        # Supplement permissions from Androguard in case the XML parse
+        # missed any (e.g. merged from platform manifests).
+        for perm in apk.get_permissions() or []:
+            if perm and perm not in prior.permissions:
+                prior.permissions.append(perm)
+
+        # Strings: iterate each package in the ARSC, collect
+        # (name -> resolved) pairs into string_constants.
+        arsc = apk.get_android_resources()
+        strings_entries: list[tuple[str, str]] = []
+        if arsc is not None:
+            try:
+                for pkg_name in arsc.get_packages_names() or []:
+                    # Prefer per-name lookup via get_string(pkg, name) when a
+                    # list of names is available via the ARSC internals;
+                    # fall back silently if Androguard's API shape differs
+                    # across versions.
+                    try:
+                        pub = list(arsc.get_items(pkg_name) or [])
+                    except Exception:
+                        pub = []
+                    for entry in pub:
+                        # entry is typically (id, type, name). Only keep strings.
+                        try:
+                            _rid, rtype, rname = entry[:3]
+                        except Exception:
+                            continue
+                        if rtype != "string":
+                            continue
+                        try:
+                            resolved = arsc.get_string(pkg_name, rname)
+                        except Exception:
+                            resolved = None
+                        if resolved and isinstance(resolved, list | tuple) and len(resolved) >= 2:
+                            strings_entries.append((rname, str(resolved[1])))
+                        elif isinstance(resolved, str) and resolved:
+                            strings_entries.append((rname, resolved))
+                # If the per-items walk yielded nothing, try the
+                # whole-pool API as a last resort (older Androguard).
+                if not strings_entries:
+                    try:
+                        pool = arsc.get_resolved_strings()
+                    except Exception:
+                        pool = None
+                    if isinstance(pool, dict):
+                        for pkg_strings in pool.values():
+                            if isinstance(pkg_strings, dict):
+                                for k, v in pkg_strings.items():
+                                    if isinstance(v, str):
+                                        strings_entries.append((str(k), v))
+            except Exception as exc:
+                logger.debug(f"ARSC string enumeration failed: {exc}", exc_info=True)
+
+        for name, text in strings_entries:
+            if name and text and name not in prior.string_constants:
+                prior.string_constants[name] = text
+
+        # Best-effort strings.xml serialization for ``static/strings.xml``.
+        if prior.string_constants:
+            lines = ['<?xml version="1.0" encoding="utf-8"?>', "<resources>"]
+            for name, text in prior.string_constants.items():
+                escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                lines.append(f'    <string name="{name}">{escaped}</string>')
+            lines.append("</resources>")
+            prior.raw_strings_xml = "\n".join(lines)
+
+        # Layouts: decode every res/layout*/*.xml file via AXMLPrinter.
+        for fn in apk.get_files():
+            if not (fn.startswith("res/layout") and fn.endswith(".xml")):
+                continue
+            try:
+                payload = apk.get_file(fn)
+                if not payload:
+                    continue
+                axml = AXMLPrinter(payload)
+                decoded = axml.get_xml().decode("utf-8", errors="replace")
+            except Exception as exc:
+                logger.debug(f"Failed to decode {fn}: {exc}", exc_info=True)
+                continue
+            short = Path(fn).name
+            prior.layout_xmls[short] = decoded
+            self._parse_layout_xml_string(decoded, Path(fn).stem, prior)
+
+        logger.info(
+            f"Androguard extraction: {len(prior.activities)} activities, "
+            f"{len(prior.permissions)} permissions, "
+            f"{len(prior.string_constants)} strings, "
+            f"{len(prior.widget_declarations)} widgets from "
+            f"{len(prior.layout_xmls)} layouts"
+        )
+        return prior
+
     def extract_from_manifest(self, manifest_path: Path) -> AppPrior:
-        """Parse an AndroidManifest.xml file."""
+        """Legacy: parse a pre-decompiled AndroidManifest.xml text file.
+
+        Kept for users who pass ``--manifest foo.xml`` directly. Prefer
+        :meth:`extract_from_apk_file` when an APK is available.
+        """
         tree = ET.parse(manifest_path)  # noqa: S314
         return self._parse_manifest_tree(tree)
 
@@ -76,27 +279,110 @@ class AppPriorExtractor:
         tree = ET.ElementTree(root)
         return self._parse_manifest_tree(tree)
 
-    def extract_from_apk(self, apk_path: Path) -> AppPrior:
-        """Extract manifest from APK via aapt2 and parse it."""
-        result = subprocess.run(
-            ["aapt2", "dump", "xmltree", str(apk_path), "--file", "AndroidManifest.xml"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return self.extract_from_manifest_string(result.stdout)
-
     def extract_from_device(self, device, package: str) -> AppPrior:
         """Extract app info from a connected device via adb dumpsys."""
         output = device.shell(f"dumpsys package {package}")
         return self._parse_dumpsys(package, output)
 
     def extract_from_device_serial(self, serial: str, package: str) -> AppPrior:
-        """Extract app info from a connected device via adb shell.
+        """Preferred device extraction path: pull the APK, parse with Androguard.
 
-        Doesn't require uiautomator2 — uses subprocess + adb directly.
-        This is the fallback for system apps that don't have a standalone APK/manifest.
+        Falls back to ``_parse_dumpsys`` when any of the following occurs,
+        with the exact failure logged so the operator can diagnose:
+          - ``adb shell pm path`` returns no APK path.
+          - ``adb pull`` fails (permission denied, device offline, etc.).
+          - Androguard raises while parsing the pulled APK.
+
+        Never raises at the outer level.
         """
+        prior, _raw = self.extract_from_device_serial_with_dump(serial, package)
+        return prior
+
+    def extract_from_device_serial_with_dump(
+        self, serial: str, package: str
+    ) -> tuple[AppPrior, str]:
+        """Device extraction that also returns raw ``dumpsys`` output when the
+        fallback path is taken. Androguard path returns an empty dump
+        string (``""``) — callers looking to cache the raw device info
+        should also write the APK separately.
+        """
+        try:
+            path_result = subprocess.run(
+                ["adb", "-s", serial, "shell", "pm", "path", package],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logger.warning(f"adb pm path failed ({exc}); falling back to dumpsys")
+            return self._dumpsys_fallback(serial, package)
+        if path_result.returncode != 0:
+            logger.warning(
+                f"pm path returned rc={path_result.returncode}: "
+                f"{path_result.stderr.strip()!r}; falling back to dumpsys"
+            )
+            return self._dumpsys_fallback(serial, package)
+
+        apk_paths = [
+            ln.removeprefix("package:").strip()
+            for ln in path_result.stdout.splitlines()
+            if ln.startswith("package:")
+        ]
+        if not apk_paths:
+            logger.warning(
+                f"pm path returned no APK entries for {package}: "
+                f"{path_result.stdout!r}; falling back to dumpsys"
+            )
+            return self._dumpsys_fallback(serial, package)
+
+        # Prefer a ``base.apk`` entry if present (common for user-installed
+        # apps); otherwise pick the first APK path (system apps on Pixel /
+        # AOSP use names like ``SettingsGoogle.apk``). Split APKs without a
+        # base entry aren't handled — fall through to dumpsys.
+        remote_apk = next(
+            (p for p in apk_paths if p.endswith("/base.apk")),
+            apk_paths[0] if len(apk_paths) == 1 else None,
+        )
+        if remote_apk is None:
+            logger.warning(
+                f"Split APK layout without base.apk detected for {package}: "
+                f"{apk_paths}; falling back to dumpsys"
+            )
+            return self._dumpsys_fallback(serial, package)
+
+        with tempfile.TemporaryDirectory() as td:
+            local = Path(td) / "app.apk"
+            try:
+                pull_result = subprocess.run(
+                    ["adb", "-s", serial, "pull", remote_apk, str(local)],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+                logger.warning(f"adb pull failed ({exc}); falling back to dumpsys")
+                return self._dumpsys_fallback(serial, package)
+            if pull_result.returncode != 0 or not local.exists():
+                logger.warning(
+                    f"adb pull {remote_apk} failed rc={pull_result.returncode}: "
+                    f"{pull_result.stderr.strip()!r}; falling back to dumpsys"
+                )
+                return self._dumpsys_fallback(serial, package)
+
+            try:
+                prior = self.extract_from_apk_file(local)
+            except Exception as exc:
+                logger.warning(
+                    f"Androguard failed to parse {remote_apk}: {exc}; falling back to dumpsys"
+                )
+                return self._dumpsys_fallback(serial, package)
+
+            return prior, ""
+
+    def _dumpsys_fallback(self, serial: str, package: str) -> tuple[AppPrior, str]:
+        """Regex-scrape ``adb shell dumpsys package`` when APK extraction isn't possible."""
         try:
             result = subprocess.run(
                 ["adb", "-s", serial, "shell", "dumpsys", "package", package],
@@ -107,11 +393,11 @@ class AppPriorExtractor:
             )
         except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
             logger.warning(f"adb dumpsys failed: {exc}")
-            return AppPrior(package_name=package)
+            return AppPrior(package_name=package), ""
         if result.returncode != 0:
             logger.warning(f"dumpsys failed: {result.stderr}")
-            return AppPrior(package_name=package)
-        return self._parse_dumpsys(package, result.stdout)
+            return AppPrior(package_name=package), result.stdout or ""
+        return self._parse_dumpsys(package, result.stdout), result.stdout
 
     def extract_resources(self, apk_dir: Path, prior: AppPrior) -> None:
         """Extract resources from an apktool-decompiled APK directory.
@@ -168,6 +454,29 @@ class AppPriorExtractor:
         layout_name = path.stem
 
         for elem in tree.iter():
+            widget_id = elem.get(f"{{{android_ns}}}id", "")
+            if not widget_id:
+                continue
+            widget_id = widget_id.replace("@+id/", "").replace("@id/", "")
+            widget_class = elem.tag.rsplit(".", 1)[-1] if "." in elem.tag else elem.tag
+            prior.widget_declarations.append(
+                WidgetDecl(
+                    widget_id=widget_id,
+                    widget_class=widget_class,
+                    layout_file=layout_name,
+                )
+            )
+
+    @staticmethod
+    def _parse_layout_xml_string(xml_string: str, layout_name: str, prior: AppPrior) -> None:
+        """In-memory sibling of :meth:`_parse_layout_xml` for Androguard-decoded
+        layouts. Same widget-extraction rules, no file I/O."""
+        try:
+            root = ET.fromstring(xml_string)  # noqa: S314
+        except ET.ParseError:
+            return
+        android_ns = "http://schemas.android.com/apk/res/android"
+        for elem in root.iter():
             widget_id = elem.get(f"{{{android_ns}}}id", "")
             if not widget_id:
                 continue

@@ -131,14 +131,38 @@ def main() -> None:
             f"({len(prior.activities)} activities)"
         )
     else:
-        prior_path = trace_path.parent.parent / "prior.json"
-        if prior_path.exists():
-            from vigil.neuro.app_prior import AppPrior
+        # Auto-discover the cached prior written by ``vigil-explore``. The
+        # new canonical layout is ``<app_dir>/static/app_prior.json`` (read
+        # via ``AppPrior.load(static_dir)``); older runs wrote the JSON in
+        # legacy locations, so fall back to those via ``load_file``.
+        from vigil.neuro.app_prior import AppPrior
 
-            prior = AppPrior(**json.loads(prior_path.read_text(encoding="utf-8")))
+        app_dir = trace_path.parent.parent
+        static_dir = app_dir / "static"
+
+        prior_candidates: list[tuple[Path, str]] = [
+            (static_dir, "dir"),
+            (static_dir / "prior.json", "file"),
+            (app_dir / "prior.json", "file"),
+        ]
+        for candidate, mode in prior_candidates:
+            try:
+                if mode == "dir":
+                    if not (candidate / "app_prior.json").exists():
+                        continue
+                    prior = AppPrior.load(candidate)
+                else:
+                    if not candidate.exists():
+                        continue
+                    prior = AppPrior.load_file(candidate)
+            except Exception as exc:
+                logger.warning(f"Failed to load cached prior at {candidate}: {exc}")
+                continue
             logger.info(
-                f"Stage 0: loaded prior from {prior_path} ({len(prior.activities)} activities)"
+                f"Stage 0: loaded cached app prior from {candidate} "
+                f"({len(prior.activities)} activities)"
             )
+            break
 
     # Extract APK resources if apk-dir provided
     if args.apk_dir:

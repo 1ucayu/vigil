@@ -777,12 +777,21 @@ class TestToggleSelfLoops:
 class TestBuildSubFsmTemplates:
     @staticmethod
     def _make_dynamic_fsm() -> AppFSM:
-        """FSM: list_state (DYNAMIC) -click-> detail_1, detail_2, detail_3 (same fp)."""
+        """FSM: list_state (DYNAMIC) -click-> detail_1, detail_2, detail_3.
+
+        Details share ``structural_fingerprint`` ``sfp_detail`` (so the
+        template builder collapses them) but carry different functional
+        ``fingerprint`` values (each detail is semantically distinct —
+        the real-world case is "list of Wi-Fi networks", each with its
+        own SSID). Click transitions carry varying ``target_text`` so
+        parameter_schema extraction emits ``item_name``.
+        """
         fsm = AppFSM(app_package="com.test.app")
         list_state = AbstractState(
             state_id="s_list",
             name="ItemList",
             fingerprint="fp_list",
+            structural_fingerprint="sfp_list",
             hierarchy_level=HierarchyLevel.ACTIVITY,
             container_type=ContainerType.DYNAMIC,
         )
@@ -792,7 +801,8 @@ class TestBuildSubFsmTemplates:
                 AbstractState(
                     state_id=f"s_detail_{i}",
                     name=f"Detail {i}",
-                    fingerprint="fp_detail_shared",
+                    fingerprint=f"fp_detail_{i}",
+                    structural_fingerprint="sfp_detail",
                     hierarchy_level=HierarchyLevel.FRAGMENT,
                 )
             )
@@ -800,7 +810,7 @@ class TestBuildSubFsmTemplates:
                 Transition(
                     source="s_list",
                     target=f"s_detail_{i}",
-                    action={"type": "click"},
+                    action={"type": "click", "target_text": f"Item {i}"},
                     observed_count=1,
                 )
             )
@@ -810,6 +820,7 @@ class TestBuildSubFsmTemplates:
                 state_id="s_home",
                 name="Home",
                 fingerprint="fp_home",
+                structural_fingerprint="sfp_home",
                 hierarchy_level=HierarchyLevel.ACTIVITY,
             )
         )
@@ -838,9 +849,12 @@ class TestBuildSubFsmTemplates:
 
         tmpl = fsm.sub_fsm_templates["tmpl_s_list"]
         assert tmpl.source_state_id == "s_list"
-        assert tmpl.entry_fingerprint == "fp_detail_shared"
-        assert tmpl.parameter_schema["item_text"] == "string"
-        assert tmpl.parameter_schema["item_index"] == "int"
+        # New: entry_fingerprint is the structural_fingerprint shared across
+        # the detail targets. parameter_schema names the varying action
+        # property; item_skeleton echoes the shared structural fp.
+        assert tmpl.entry_fingerprint == "sfp_detail"
+        assert tmpl.parameter_schema == {"item_name": "string"}
+        assert tmpl.item_skeleton == "sfp_detail"
 
     def test_state_gets_template_id(self) -> None:
         fsm = self._make_dynamic_fsm()
@@ -918,7 +932,7 @@ class TestBuildSubFsmTemplates:
         assert "tmpl_s_list" in restored.sub_fsm_templates
         tmpl = restored.sub_fsm_templates["tmpl_s_list"]
         assert tmpl.source_state_id == "s_list"
-        assert tmpl.entry_fingerprint == "fp_detail_shared"
+        assert tmpl.entry_fingerprint == "sfp_detail"
         assert restored.states["s_list"].sub_fsm_template_id == "tmpl_s_list"
 
 
@@ -989,6 +1003,7 @@ class TestClassifyContainersStructural:
                 state_id="s_list",
                 name="ItemList",
                 fingerprint="fp_list",
+                structural_fingerprint="sfp_list",
                 hierarchy_level=HierarchyLevel.ACTIVITY,
                 raw_screens=["rs_list"],
             )
@@ -998,7 +1013,8 @@ class TestClassifyContainersStructural:
                 AbstractState(
                     state_id=f"s_detail_{i}",
                     name=f"Detail {i}",
-                    fingerprint="fp_detail_shared",
+                    fingerprint=f"fp_detail_{i}",
+                    structural_fingerprint="sfp_detail",
                     hierarchy_level=HierarchyLevel.FRAGMENT,
                 )
             )
@@ -1071,8 +1087,6 @@ class TestClassifyContainersStructural:
         templates = builder._build_sub_fsm_templates(fsm)
         assert templates == 1
         tmpl = fsm.sub_fsm_templates["tmpl_s_list"]
-        # parameter_schema should include observed target_text samples
-        assert "item_text_samples" in tmpl.parameter_schema
-        samples = tmpl.parameter_schema["item_text_samples"]
-        # At least one of the three observed labels should appear
-        assert any(f"Item {i}" in samples for i in (1, 2, 3))
+        # Varying target_text across rows → item_name parameter.
+        assert tmpl.parameter_schema == {"item_name": "string"}
+        assert tmpl.item_skeleton == "sfp_detail"

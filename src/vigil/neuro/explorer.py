@@ -288,7 +288,7 @@ class AppExplorer:
     """Plain BFS explorer. See module docstring for rationale."""
 
     POST_ACTION_WAIT: float = 1.0
-    POST_LAUNCH_WAIT: float = 2.5
+    POST_LAUNCH_WAIT: float = 5.0
     WAIT_FOR_FOREGROUND: float = 10.0
     COLD_START_HOME_WAIT: float = 0.5
     COLD_START_STOP_WAIT: float = 1.0
@@ -338,6 +338,20 @@ class AppExplorer:
         # observation verifies this via pre-capture before executing.
         self._current_state_id: str | None = None
         self._consecutive_cold_start_failures: int = 0
+        # Track the last observation's intended source so the health-guard
+        # counter can distinguish "this one state is cursed" (keep counting)
+        # from "different state, transient emulator sluggishness" (reset).
+        # A state change resets the counter before any increment, so abort
+        # only fires on 5 consecutive fails AT THE SAME source.
+        self._last_intended_source_id: str | None = None
+        # States permanently skipped because they hit the cold-start-fail
+        # threshold. The scheduler filters them out of both locality and
+        # global argmax. A second round of ``MAX_CONSECUTIVE_COLD_START_FAILURES``
+        # consecutive fails (tracked via ``_state_retirements``) triggers a
+        # hard abort — one bad state is recoverable, two is an emulator
+        # problem.
+        self._retired_states: set[str] = set()
+        self._state_retirements: int = 0
 
     # ------------------------------------------------------------------ public
 
@@ -354,7 +368,7 @@ class AppExplorer:
         entry = self._capture_screen()
         if entry is None:
             raise RuntimeError("Initial capture failed after cold-start")
-        entry_sid = entry.get_state_id(self._app_package)
+        entry_sid = entry.get_hybrid_state_id(self._app_package)
         self._current_state_id = entry_sid
         self._nav_paths[entry_sid] = []
         screens: dict[str, RawScreen] = {entry.screen_id: entry}
@@ -409,28 +423,60 @@ class AppExplorer:
 
             if trace.target_state_id == SENTINEL_COLD_START_FAILED:
                 counts["cold_start_failures"] += 1
+                # If the cold-start-failed streak was accumulated against a
+                # different source state, restart counting here: the current
+                # source hasn't actually failed repeatedly — the prior one
+                # did. This keeps transient emulator-wide sluggishness from
+                # cascading across unrelated states and tripping retire.
+                if state_id != self._last_intended_source_id:
+                    self._consecutive_cold_start_failures = 0
                 self._consecutive_cold_start_failures += 1
+                self._last_intended_source_id = state_id
                 if (
                     self._consecutive_cold_start_failures
                     >= self.MAX_CONSECUTIVE_COLD_START_FAILURES
                 ):
-                    logger.error(
-                        f"Aborting exploration: "
+                    # First cascade → retire the state and continue. Second
+                    # cascade → hard abort (something deeper is wrong with
+                    # the emulator, not just one cursed source).
+                    self._state_retirements += 1
+                    if self._state_retirements >= 2:
+                        logger.error(
+                            f"Aborting exploration: second cascade of "
+                            f"{self._consecutive_cold_start_failures} "
+                            f"consecutive COLD_START_FAILED (this one at "
+                            f"source {state_id[:6]}). Device is "
+                            f"persistently unresponsive. Unused budget: "
+                            f"{budget - done} observations."
+                        )
+                        counts["aborted_on_cold_start_failures"] = 1
+                        break
+                    logger.warning(
+                        f"Retiring source state {state_id[:6]} after "
                         f"{self._consecutive_cold_start_failures} consecutive "
-                        f"COLD_START_FAILED observations. Device or app is "
-                        f"unresponsive. Unused budget: {budget - done} observations."
+                        "COLD_START_FAILED observations. Continuing with "
+                        "remaining frontier states."
                     )
-                    counts["aborted_on_cold_start_failures"] = 1
-                    break
+                    self._retired_states.add(state_id)
+                    self._consecutive_cold_start_failures = 0
+                    self._last_intended_source_id = None
+                    # If no non-retired frontier states have unexplored
+                    # actions left, the explore loop will exit naturally
+                    # on the next _pick_next_action → None.
             elif trace.target_state_id == SENTINEL_LEFT_APP:
                 counts["left_app"] += 1
                 self._blacklisted_per_state[state_id].add(key)
                 self._consecutive_cold_start_failures = 0
+                self._last_intended_source_id = state_id
             elif trace.target_state_id == SENTINEL_ACTION_FAILED:
                 counts["action_failures"] += 1
                 self._consecutive_cold_start_failures = 0
+                self._last_intended_source_id = state_id
             else:
+                # Any successful observation resets the consecutive counter.
+                # Keep this explicit so the invariant is obvious on inspection.
                 self._consecutive_cold_start_failures = 0
+                self._last_intended_source_id = state_id
                 # Scroll-no-yield check: identical anchors pre/post → blacklist
                 # at ACTUAL source so we don't try the dead scroll again if the
                 # replay lands on a truly stable page.
@@ -479,7 +525,11 @@ class AppExplorer:
         argmax across all enumerated states.
         """
         sid = self._current_state_id
-        if sid is not None and sid in self._all_actions_per_state:
+        if (
+            sid is not None
+            and sid in self._all_actions_per_state
+            and sid not in self._retired_states
+        ):
             local = self._pick_best_in_state(sid)
             if local is not None:
                 return (sid, local)
@@ -487,7 +537,9 @@ class AppExplorer:
 
     def _pick_best_in_state(self, state_id: str) -> Action | None:
         """Argmax of _priority_score within a single state's unexplored,
-        non-blacklisted outgoing actions. Returns None if empty."""
+        non-blacklisted outgoing actions. Returns None if empty or retired."""
+        if state_id in self._retired_states:
+            return None
         actions = self._all_actions_per_state.get(state_id, {})
         if not actions:
             return None
@@ -506,10 +558,12 @@ class AppExplorer:
 
     def _global_argmax(self) -> tuple[str, Action] | None:
         """Argmax across all enumerated states' unexplored non-blacklisted
-        outgoing actions. Ties break on insertion order (dicts are ordered)."""
+        outgoing actions. Retired states are skipped entirely."""
         best: tuple[str, Action] | None = None
         best_score = 0.0
         for state_id, actions in self._all_actions_per_state.items():
+            if state_id in self._retired_states:
+                continue
             explored = self._explored_per_state[state_id]
             blacklisted = self._blacklisted_per_state[state_id]
             for key, action in actions.items():
@@ -532,6 +586,12 @@ class AppExplorer:
             for sid, keys in top:
                 if keys:
                     logger.info(f"  {sid[:6]}: {len(keys)} blacklisted")
+        if self._retired_states:
+            logger.info(
+                f"Summary: {len(self._retired_states)} state(s) retired after "
+                f"cold-start cascades: "
+                f"{', '.join(sid[:6] for sid in self._retired_states)}"
+            )
 
     # ---------------------------------------------------------- core phases
 
@@ -633,7 +693,7 @@ class AppExplorer:
         if pre is None:
             self._current_state_id = None
             return _trace(src=intended_source_state_id, target=SENTINEL_LEFT_APP), None, None
-        actual_src = pre.get_state_id(self._app_package)
+        actual_src = pre.get_hybrid_state_id(self._app_package)
 
         # Locality drift fallback: we thought we were at intended but the
         # live capture says otherwise (e.g., a system dialog surfaced).
@@ -662,7 +722,7 @@ class AppExplorer:
                     None,
                     None,
                 )
-            actual_src = pre.get_state_id(self._app_package)
+            actual_src = pre.get_hybrid_state_id(self._app_package)
 
         # Feature A: count attempts per action_type (not successes), so the
         # frequency decay can't be gamed by a misbehaving type that always
@@ -670,8 +730,16 @@ class AppExplorer:
         self._global_action_type_count[action.action_type] += 1
 
         if not self._execute_action(action):
-            # Device still at pre's state; keep current tracker pinned there.
-            self._current_state_id = actual_src
+            # For CLICK/LONG_PRESS/INPUT_TEXT, _resolve_action_target may
+            # have scrolled up to MAX_SCROLL_TO_FIND times while searching.
+            # Even if we started at ``actual_src`` pre-capture, the device
+            # is now at an unknown scroll offset — don't pin
+            # _current_state_id to the stale pre-capture id, or the next
+            # observation will take the locality branch, see drift, and
+            # cold-start unnecessarily. Non-scrolling fail cases (e.g.,
+            # NAVIGATE_BACK raised) land on the same None and force a
+            # clean cold-start next iteration, which is the safe default.
+            self._current_state_id = None
             return (
                 _trace(src=actual_src, src_screen_id=pre.screen_id, target=SENTINEL_ACTION_FAILED),
                 pre,
@@ -694,7 +762,7 @@ class AppExplorer:
                 pre,
                 None,
             )
-        self._current_state_id = post.get_state_id(self._app_package)
+        self._current_state_id = post.get_hybrid_state_id(self._app_package)
         return (
             _trace(
                 src=actual_src,
@@ -732,7 +800,46 @@ class AppExplorer:
         )
 
     def _cold_start_app(self) -> bool:
-        """``app_stop`` → home → ``app_start(stop=True)`` → wait for foreground."""
+        """``app_stop`` → home → ``app_start(stop=True)`` → wait for foreground.
+
+        If the initial attempt doesn't land the target app in the foreground
+        within ``WAIT_FOR_FOREGROUND`` seconds, run one recovery pass: if a
+        foreign app is sitting in the foreground (emulator sluggishness
+        from Files / Gallery / etc. launched in a prior step), force-stop
+        it, sleep 3 s, then retry the stop→home→start sequence once more.
+        This absorbs transient emulator contention that otherwise triggers
+        premature COLD_START_FAILED cascades.
+        """
+        assert self._device is not None
+        if self._cold_start_attempt():
+            return True
+
+        foreground_pkg = ""
+        try:
+            current = self._device.app_current()
+            foreground_pkg = (current.get("package", "") or "").strip()
+        except Exception:
+            logger.debug("cold_start recovery: app_current() raised", exc_info=True)
+
+        if foreground_pkg and foreground_pkg != self._app_package:
+            logger.warning(
+                f"cold_start recovery: foreground is {foreground_pkg!r}, "
+                "force-stopping and retrying"
+            )
+            try:
+                self._device.app_stop(foreground_pkg)
+            except Exception:
+                logger.debug(f"force-stop {foreground_pkg} raised", exc_info=True)
+        else:
+            logger.warning(
+                "cold_start recovery: no foreign foreground detected, "
+                "waiting 3s for emulator to settle and retrying"
+            )
+        time.sleep(3.0)
+        return self._cold_start_attempt()
+
+    def _cold_start_attempt(self) -> bool:
+        """One ``app_stop`` → home → ``app_start(stop=True)`` cycle."""
         assert self._device is not None
         dev, pkg = self._device, self._app_package
         steps: tuple[tuple[str, Any, float], ...] = (
@@ -775,7 +882,7 @@ class AppExplorer:
         elements = parse_hierarchy_xml(xml_string, app_package=self._app_package)
         if not elements:
             return None
-        return RawScreen(
+        scr = RawScreen(
             screen_id=screen_id,
             activity_name=activity_name or None,
             package_name=package_name or None,
@@ -785,6 +892,10 @@ class AppExplorer:
             timestamp=_now_iso(),
             metadata={"device_serial": self._serial},
         )
+        # Stash the extracted toolbar title in metadata so FSM builder and
+        # other downstream passes can read it without re-walking the tree.
+        scr.metadata["page_title"] = scr.extract_page_title()
+        return scr
 
     def _execute_action(self, action: Action) -> bool:
         """Dispatch. Coordinates are resolved live — stored bounds are a hint.
@@ -871,10 +982,24 @@ class AppExplorer:
 
         by_id = {e.element_id: e for e in screen.elements}
 
-        def child_title_matches(e: UIElement) -> bool:
+        def title_in_subtree(e: UIElement) -> bool:
+            """Deep DFS for an ``android:id/title`` descendant whose normalized
+            text equals the target. Mirrors ``_descendant_title_text`` used at
+            enumeration time — direct-child-only matching would miss
+            Preference-row patterns where the title TextView lives two or
+            three layouts down from the clickable parent.
+            """
             if not text:
                 return False
-            for cid in e.children:
+            stack = list(e.children)
+            seen: set[str] = set()
+            guard = 0
+            while stack and guard < 200:
+                guard += 1
+                cid = stack.pop()
+                if cid in seen:
+                    continue
+                seen.add(cid)
                 child = by_id.get(cid)
                 if child is None:
                     continue
@@ -882,6 +1007,7 @@ class AppExplorer:
                     _normalize_dynamic(child.text or "") == text
                 ):
                     return True
+                stack.extend(child.children)
             return False
 
         for e in screen.elements:
@@ -899,7 +1025,7 @@ class AppExplorer:
             if text:
                 if e_text == text:
                     return e
-                if not e_text and child_title_matches(e):
+                if not e_text and title_in_subtree(e):
                     return e
                 continue
             if cd:
@@ -1021,9 +1147,13 @@ class AppExplorer:
             scr = screens.get(t.source_screen_id)
             if scr is not None and scr.activity_name:
                 covered.add(scr.activity_name)
-        declared: list[str] = (
-            list(getattr(self._app_prior, "activities", [])) if self._app_prior is not None else []
-        )
+        declared: list[str] = []
+        if self._app_prior is not None:
+            for a in getattr(self._app_prior, "activities", []):
+                # AppPrior.activities is list[ActivityInfo]; extract names.
+                name = getattr(a, "name", None) if not isinstance(a, str) else a
+                if name:
+                    declared.append(name)
         nav_stats = {
             "observations_total": total_steps,
             "states_discovered": len(nav_paths),
@@ -1060,8 +1190,21 @@ class AppExplorer:
                 "package_name": s.package_name,
                 "screenshot_path": s.screenshot_path,
                 "xml_tree_path": s.xml_tree_path,
+                # ``state_id`` is the canonical identity for downstream
+                # consumers (fsm_builder dedups on this). Uses the hybrid
+                # key — structural fingerprint + activity + page title —
+                # so pages with the same widget tree but different toolbar
+                # titles (Settings' Internet / Battery / Apps SubSettings)
+                # stay distinct, while list-content variations (3 Wi-Fi
+                # networks vs 5) collapse to one state.
+                # ``fingerprint`` / ``structural_fingerprint`` / ``text_state_id``
+                # are preserved as secondary labels for post-processing /
+                # naming / debugging.
                 "fingerprint": s.get_structural_fingerprint(),
-                "state_id": s.get_state_id(self._app_package),
+                "structural_fingerprint": s.get_structural_fingerprint(),
+                "state_id": s.get_hybrid_state_id(self._app_package),
+                "text_state_id": s.get_state_id(self._app_package),
+                "page_title": s.extract_page_title(),
                 "state_key_anchor_container": container,
                 "state_key_anchors": sorted([list(t) for t in anchors]),
                 "total_elements": len(s.elements),
@@ -1069,7 +1212,7 @@ class AppExplorer:
                     e.model_dump(mode="json") for e in s.get_interactable_elements()
                 ],
                 "timestamp": s.timestamp,
-                "metadata": {},
+                "metadata": {"page_title": s.extract_page_title()},
             }
         data: dict[str, Any] = {
             "app_package": result.app_package,

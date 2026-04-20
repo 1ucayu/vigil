@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from vigil.neuro.app_prior import AppPriorExtractor
+from vigil.neuro.app_prior import ActivityInfo, AppPrior, AppPriorExtractor
 
 _BASIC_MANIFEST = """\
 <?xml version="1.0" encoding="utf-8"?>
@@ -230,3 +231,53 @@ class TestExtractFromDeviceSerial:
             prior = extractor.extract_from_device_serial("slow", "com.pkg")
         assert prior.package_name == "com.pkg"
         assert prior.activities == []
+
+
+# ============================================================
+# Directory-form save / load + transient raw-XML persistence
+# ============================================================
+
+
+class TestSaveLoadRoundTrip:
+    def test_app_prior_json_round_trip(self, tmp_path: Path) -> None:
+        prior = AppPrior(
+            package_name="com.example",
+            entry_activity="com.example.Main",
+            activities=[ActivityInfo(name="com.example.Main", is_launcher=True)],
+            permissions=["android.permission.INTERNET"],
+        )
+        prior.save(tmp_path / "static")
+        assert (tmp_path / "static" / "app_prior.json").exists()
+        loaded = AppPrior.load(tmp_path / "static")
+        assert loaded == prior
+
+    def test_transient_fields_not_in_json(self, tmp_path: Path) -> None:
+        prior = AppPrior(
+            package_name="com.example",
+            raw_manifest_xml="<manifest />",
+            raw_strings_xml='<?xml version="1.0"?><resources/>',
+            layout_xmls={"a.xml": "<LinearLayout/>", "b.xml": "<FrameLayout/>"},
+        )
+        prior.save(tmp_path / "static")
+        # Raw XMLs written to their named files.
+        assert (tmp_path / "static" / "AndroidManifest.xml").read_text() == "<manifest />"
+        assert "resources" in (tmp_path / "static" / "strings.xml").read_text()
+        assert (tmp_path / "static" / "layouts" / "a.xml").read_text() == "<LinearLayout/>"
+        assert (tmp_path / "static" / "layouts" / "b.xml").read_text() == "<FrameLayout/>"
+        # app_prior.json excludes the transient fields.
+        import json
+
+        data = json.loads((tmp_path / "static" / "app_prior.json").read_text())
+        assert "raw_manifest_xml" not in data
+        assert "raw_strings_xml" not in data
+        assert "layout_xmls" not in data
+
+    def test_load_file_back_compat(self, tmp_path: Path) -> None:
+        prior = AppPrior(package_name="com.example")
+        legacy = tmp_path / "prior.json"
+        legacy.write_text(prior.model_dump_json(indent=2), encoding="utf-8")
+        assert AppPrior.load_file(legacy) == prior
+
+    def test_load_missing_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            AppPrior.load(tmp_path / "static")

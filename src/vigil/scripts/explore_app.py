@@ -162,22 +162,52 @@ def main() -> None:
     else:
         output_dir = None
 
-    # Extract Activity prior (optional)
+    # Extract Activity prior (optional). Source-of-truth artifacts (the prior
+    # JSON + raw decoded AndroidManifest / strings / layouts) are persisted
+    # to ``static/`` under the app's data dir BEFORE exploration starts so
+    # downstream stages can auto-discover them and a crashed exploration
+    # still leaves the prior on disk.
     app_prior = None
-    if args.manifest:
+    if args.manifest or args.prior_from_device:
         from vigil.neuro.app_prior import AppPriorExtractor
 
-        manifest_path = Path(args.manifest)
-        if manifest_path.exists():
-            app_prior = AppPriorExtractor().extract_from_manifest(manifest_path)
-            logger.info(f"Prior loaded from manifest: {len(app_prior.activities)} Activities")
+        app_name = args.app.replace(".", "_")
+        if args.output_dir is not None:
+            app_dir = Path(args.output_dir)
+        elif config.device.profile_name != "default":
+            app_dir = Path(f"data/apps/{app_name}__{config.device.profile_name}")
         else:
-            logger.warning(f"Manifest not found: {manifest_path}")
-    elif args.prior_from_device:
-        from vigil.neuro.app_prior import AppPriorExtractor
+            app_dir = Path(f"data/apps/{app_name}")
+        static_dir = app_dir / "static"
 
-        app_prior = AppPriorExtractor().extract_from_device_serial(serial, args.app)
-        logger.info(f"Prior loaded from device: {len(app_prior.activities)} Activities")
+        if args.manifest:
+            manifest_path = Path(args.manifest)
+            if manifest_path.exists():
+                # Legacy path: pre-decompiled text manifest. Read the file's
+                # raw contents into the transient field so save() mirrors it
+                # into static/AndroidManifest.xml in the uniform layout.
+                app_prior = AppPriorExtractor().extract_from_manifest(manifest_path)
+                try:
+                    app_prior.raw_manifest_xml = manifest_path.read_text(encoding="utf-8")
+                except OSError as exc:
+                    logger.warning(f"Failed to read manifest for caching: {exc}")
+                logger.info(f"Prior loaded from manifest: {len(app_prior.activities)} Activities")
+            else:
+                logger.warning(f"Manifest not found: {manifest_path}")
+        else:  # args.prior_from_device — Androguard path (APK pull + parse)
+            app_prior = AppPriorExtractor().extract_from_device_serial(serial, args.app)
+            logger.info(
+                f"Prior loaded from device: {len(app_prior.activities)} activities, "
+                f"{len(app_prior.string_constants)} strings, "
+                f"{len(app_prior.widget_declarations)} widgets"
+            )
+
+        if app_prior is not None:
+            try:
+                app_prior.save(static_dir)
+                logger.info(f"Cached app prior + resources under {static_dir}")
+            except OSError as exc:
+                logger.warning(f"Failed to cache app prior: {exc}")
 
     if backend == "ape":
         from vigil.neuro.ape_explorer import ApeExplorer

@@ -198,3 +198,40 @@ def test_heterogeneous_menu_preserved_under_threshold() -> None:
     _, anchors = scr.get_functional_state_key(APP_PKG)
     titles = {t for rid, t in anchors if rid == "title"}
     assert len(titles) == 10
+
+
+# ============================================================
+# Hybrid state id (structural fingerprint + activity + page title)
+# ============================================================
+
+
+def test_hybrid_id_distinguishes_three_settings_pages() -> None:
+    s49 = _load("scr_0049.xml")
+    s66 = _load("scr_0066.xml")
+    s259 = _load("scr_0259.xml")
+    ids = {
+        s49.get_hybrid_state_id(APP_PKG),
+        s66.get_hybrid_state_id(APP_PKG),
+        s259.get_hybrid_state_id(APP_PKG),
+    }
+    assert len(ids) == 3, f"expected 3 distinct hybrid ids, got {ids}"
+
+
+def test_hybrid_id_collapses_list_content_variations() -> None:
+    # 30-row and 50-row homogeneous lists have the same structural
+    # skeleton (Feature D collapses descendants), no action_bar_title /
+    # collapsing_toolbar in the synthetic fixture → title is "". Hybrid
+    # reduces to structural fp + activity → same id.
+    scr30 = _make_list_screen(30)
+    scr50 = _make_list_screen(50)
+    assert scr30.get_hybrid_state_id(APP_PKG) == scr50.get_hybrid_state_id(APP_PKG)
+
+
+def test_hybrid_id_empty_screen_sentinel() -> None:
+    assert RawScreen(screen_id="x", elements=[]).get_hybrid_state_id(APP_PKG) == EMPTY_SCREEN_ID
+
+
+def test_extract_page_title_from_collapsing_toolbar() -> None:
+    # scr_0049 has a collapsing_toolbar with content-desc="People".
+    s49 = _load("scr_0049.xml")
+    assert s49.extract_page_title() == "People"
