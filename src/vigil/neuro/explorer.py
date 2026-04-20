@@ -61,6 +61,43 @@ ACTION_TYPE_WEIGHT: dict[ActionType, float] = {
     ActionType.SCROLL_UP: 0.5,
 }
 
+# Safety blacklist: substrings (case-insensitive) that indicate dangerous or
+# dead-end UI paths the explorer must never click. These lead into system
+# setup wizards in other packages (face/fingerprint enrollment, factory
+# reset) or destructive confirmations; reachable from Settings but not part
+# of com.android.settings, so they trigger LEFT_APP cascades that waste
+# budget on retries.
+DANGEROUS_TEXT_PATTERNS: frozenset[str] = frozenset(
+    {
+        "face unlock",
+        "fingerprint",
+        "factory reset",
+        "erase all data",
+        "set up face",
+        "face & fingerprint",
+        "enroll face",
+        "screen lock",
+        "confirm your pin",
+        "confirm your pattern",
+        "encrypt",
+        "wipe",
+        "reset phone",
+    }
+)
+
+
+def _is_dangerous_element(text: str | None, content_desc: str | None) -> str | None:
+    """Return the matching blacklist pattern if element text/content-desc
+    hits it, else None."""
+    for raw in (text, content_desc):
+        if not raw:
+            continue
+        lowered = raw.lower()
+        for pattern in DANGEROUS_TEXT_PATTERNS:
+            if pattern in lowered:
+                return pattern
+    return None
+
 
 def action_key(action: Action) -> str:
     """Stable descriptor-based identity.
@@ -508,7 +545,7 @@ class AppExplorer:
     # ---------------------------------------------------------- scheduling
 
     def _priority_score(self, state_id: str, action: Action) -> float:
-        """Higher is better. Feature A: depth × type weight × log-frequency decay."""
+        """Higher is better. Depth × type weight × log-frequency decay."""
         nav_depth = len(self._nav_paths.get(state_id, []))
         type_weight = ACTION_TYPE_WEIGHT.get(action.action_type, 1.0)
         global_freq = self._global_action_type_count[action.action_type]
@@ -619,6 +656,12 @@ class AppExplorer:
                     continue
                 pkg = (e.package or "").strip()
                 if pkg and pkg != self._app_package and pkg != "android":
+                    continue
+                hit = _is_dangerous_element(e.text, e.content_description)
+                if hit is not None:
+                    logger.debug(
+                        f"Skipping dangerous element {e.element_id} (matched pattern {hit!r})"
+                    )
                     continue
                 action = _build_interact_action(e, screen.elements)
                 if not is_action_identifiable(action):
@@ -854,6 +897,8 @@ class AppExplorer:
                 logger.debug(f"cold_start.{label} raised", exc_info=True)
             time.sleep(wait)
         return self._wait_for_app_foreground()
+
+    # ------------------------- prior-guided intent launch ------------------
 
     def _capture_screen(self) -> RawScreen | None:
         assert self._device is not None

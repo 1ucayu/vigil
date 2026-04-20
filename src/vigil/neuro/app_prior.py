@@ -178,56 +178,45 @@ class AppPriorExtractor:
             if perm and perm not in prior.permissions:
                 prior.permissions.append(perm)
 
-        # Strings: iterate each package in the ARSC, collect
-        # (name -> resolved) pairs into string_constants.
+        # Strings: walk the ARSC package table directly. Androguard exposes
+        # resolved entries at ``arsc.values[pkg][locale]['string']`` as a list
+        # of ``[name, text]`` pairs. The default locale key is the null-byte
+        # string ``'\x00\x00'`` — NOT ``'DEFAULT'`` (that label only appears
+        # in ``get_resolved_strings()``'s alternate view, which keys by
+        # integer resource id, not by symbolic name).
         arsc = apk.get_android_resources()
-        strings_entries: list[tuple[str, str]] = []
         if arsc is not None:
+            # ``arsc.values`` is lazy-populated; calling get_resolved_strings()
+            # triggers the full package/locale/type walk that fills it.
             try:
-                for pkg_name in arsc.get_packages_names() or []:
-                    # Prefer per-name lookup via get_string(pkg, name) when a
-                    # list of names is available via the ARSC internals;
-                    # fall back silently if Androguard's API shape differs
-                    # across versions.
-                    try:
-                        pub = list(arsc.get_items(pkg_name) or [])
-                    except Exception:
-                        pub = []
-                    for entry in pub:
-                        # entry is typically (id, type, name). Only keep strings.
-                        try:
-                            _rid, rtype, rname = entry[:3]
-                        except Exception:
-                            continue
-                        if rtype != "string":
-                            continue
-                        try:
-                            resolved = arsc.get_string(pkg_name, rname)
-                        except Exception:
-                            resolved = None
-                        if resolved and isinstance(resolved, list | tuple) and len(resolved) >= 2:
-                            strings_entries.append((rname, str(resolved[1])))
-                        elif isinstance(resolved, str) and resolved:
-                            strings_entries.append((rname, resolved))
-                # If the per-items walk yielded nothing, try the
-                # whole-pool API as a last resort (older Androguard).
-                if not strings_entries:
-                    try:
-                        pool = arsc.get_resolved_strings()
-                    except Exception:
-                        pool = None
-                    if isinstance(pool, dict):
-                        for pkg_strings in pool.values():
-                            if isinstance(pkg_strings, dict):
-                                for k, v in pkg_strings.items():
-                                    if isinstance(v, str):
-                                        strings_entries.append((str(k), v))
+                arsc.get_resolved_strings()
             except Exception as exc:
-                logger.debug(f"ARSC string enumeration failed: {exc}", exc_info=True)
-
-        for name, text in strings_entries:
-            if name and text and name not in prior.string_constants:
-                prior.string_constants[name] = text
+                logger.debug(f"get_resolved_strings() failed: {exc}", exc_info=True)
+            for pkg_name in arsc.get_packages_names() or []:
+                pkg_locales = getattr(arsc, "values", {}).get(pkg_name, {})
+                if not isinstance(pkg_locales, dict):
+                    continue
+                locale_data = pkg_locales.get("\x00\x00")
+                if not (isinstance(locale_data, dict) and locale_data.get("string")):
+                    locale_data = next(
+                        (
+                            d
+                            for d in pkg_locales.values()
+                            if isinstance(d, dict) and d.get("string")
+                        ),
+                        None,
+                    )
+                if not locale_data:
+                    continue
+                for entry in locale_data.get("string", []):
+                    if (
+                        isinstance(entry, list | tuple)
+                        and len(entry) >= 2
+                        and isinstance(entry[0], str)
+                        and entry[0]
+                        and isinstance(entry[1], str)
+                    ):
+                        prior.string_constants.setdefault(entry[0], entry[1])
 
         # Best-effort strings.xml serialization for ``static/strings.xml``.
         if prior.string_constants:
