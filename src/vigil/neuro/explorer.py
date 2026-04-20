@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field
 from vigil.core.config import VigilConfig
 from vigil.core.ui_parser import parse_hierarchy_xml
 from vigil.models.action import Action, ActionType
-from vigil.models.state import RawScreen, UIElement
+from vigil.models.state import RawScreen, UIElement, _normalize_dynamic
 from vigil.neuro.app_prior import AppPrior
 
 SENTINEL_COLD_START_FAILED = "COLD_START_FAILED"
@@ -63,12 +63,40 @@ ACTION_TYPE_WEIGHT: dict[ActionType, float] = {
 
 
 def action_key(action: Action) -> str:
-    """In-state dedup key. Resource-id primary; 50-px bounds bucket fallback."""
-    if action.target_resource_id:
-        return f"{action.action_type.value}|{action.target_resource_id}"
-    bounds = action.target_bounds or [0, 0, 0, 0]
-    qb = ",".join(str(round(x / 50) * 50) for x in bounds)
-    return f"{action.action_type.value}|qb:{qb}"
+    """Stable descriptor-based identity.
+
+    Identity = (action_type, resource_id, normalized_text, content_desc,
+    class_name). Bounds are explicitly excluded — the same logical element
+    at different scroll offsets has different bounds in different captures.
+    Use :func:`is_action_identifiable` to check whether an action is safe
+    to enumerate (at least one descriptor field non-empty).
+    """
+    return "|".join(
+        [
+            action.action_type.value,
+            action.target_resource_id or "",
+            action.target_text or "",
+            action.target_content_desc or "",
+            action.target_class_name or "",
+        ]
+    )
+
+
+def is_action_identifiable(action: Action) -> bool:
+    """True iff at least one descriptor field is populated.
+
+    Global actions (NAVIGATE_BACK, NAVIGATE_HOME) are always identifiable
+    by type alone — they have no target and trivially deduplicate on
+    action_type + empty descriptor.
+    """
+    if action.action_type in (ActionType.NAVIGATE_BACK, ActionType.NAVIGATE_HOME):
+        return True
+    return bool(
+        action.target_resource_id
+        or action.target_text
+        or action.target_content_desc
+        or action.target_class_name
+    )
 
 
 def _now_iso() -> str:
@@ -79,9 +107,42 @@ def _short_target(action: Action) -> str:
     if action.target_resource_id:
         rid = action.target_resource_id
         return f"rid={rid.split(':id/', 1)[1] if ':id/' in rid else rid}"
+    if action.target_text:
+        t = action.target_text
+        return f'text="{t[:30]}"'
+    if action.target_content_desc:
+        return f'cd="{action.target_content_desc[:30]}"'
+    if action.target_class_name:
+        return f"cls={action.target_class_name.rsplit('.', 1)[-1]}"
     if action.target_bounds:
         return f"bounds={action.target_bounds}"
     return "-"
+
+
+def _descendant_title_text(element: UIElement, elements: list[UIElement]) -> str | None:
+    """Return the normalized text of the first ``android:id/title`` descendant.
+
+    Used to resolve Preference-row clickables whose label lives in a child
+    TextView rather than on the clickable itself. Returns None if no such
+    descendant exists.
+    """
+    by_id = {e.element_id: e for e in elements}
+    stack = list(element.children)
+    seen: set[str] = set()
+    depth_guard = 0
+    while stack and depth_guard < 200:
+        depth_guard += 1
+        cid = stack.pop()
+        if cid in seen:
+            continue
+        seen.add(cid)
+        child = by_id.get(cid)
+        if child is None:
+            continue
+        if child.resource_id == "android:id/title" and child.text:
+            return _normalize_dynamic(child.text)
+        stack.extend(child.children)
+    return None
 
 
 def _is_edit_text(element: UIElement) -> bool:
@@ -134,18 +195,38 @@ def _generate_edit_value(element: UIElement) -> str:
     return "test123"
 
 
-def _build_interact_action(element: UIElement) -> Action:
-    """Build a single interaction action for an interactable element.
+def _build_interact_action(element: UIElement, elements: list[UIElement]) -> Action:
+    """Build an interaction action for an interactable element.
 
-    Priority: INPUT_TEXT for EditText (with generated text), LONG_PRESS
-    for long-click-only elements, otherwise CLICK.
+    Descriptor population:
+      - ``target_resource_id`` from the element.
+      - ``target_text`` from the element's own text, normalized. If the
+        element has no rid/text/content_desc, borrow the first
+        ``android:id/title`` descendant's text (Preference-row pattern).
+      - ``target_content_desc`` from the element.
+      - ``target_class_name`` from the element.
+
+    Priority: INPUT_TEXT for EditText, LONG_PRESS for long-click-only
+    elements, otherwise CLICK.
     """
+    own_text = _normalize_dynamic(element.text) if element.text else ""
+    cd = element.content_description or ""
+    rid = element.resource_id or ""
+    target_text = own_text
+    if not rid and not own_text and not cd:
+        borrowed = _descendant_title_text(element, elements)
+        if borrowed:
+            target_text = borrowed
+
     if _is_edit_text(element):
         return Action(
             action_type=ActionType.INPUT_TEXT,
             target_element_id=element.element_id,
             target_bounds=element.bounds,
             target_resource_id=element.resource_id,
+            target_text=target_text or None,
+            target_content_desc=cd or None,
+            target_class_name=element.class_name or None,
             input_text=_generate_edit_value(element),
         )
     at = ActionType.CLICK
@@ -156,11 +237,14 @@ def _build_interact_action(element: UIElement) -> Action:
         target_element_id=element.element_id,
         target_bounds=element.bounds,
         target_resource_id=element.resource_id,
+        target_text=target_text or None,
+        target_content_desc=cd or None,
+        target_class_name=element.class_name or None,
     )
 
 
 def _build_scroll_down(screen: RawScreen) -> Action | None:
-    """First scrollable element's bounds drive the gesture. None if no scrollable."""
+    """First scrollable element's descriptor drives the gesture. None if no scrollable."""
     for e in screen.elements:
         if e.is_scrollable and e.bounds and (e.bounds[3] - e.bounds[1]) > 0:
             return Action(
@@ -168,6 +252,7 @@ def _build_scroll_down(screen: RawScreen) -> Action | None:
                 target_element_id=e.element_id,
                 target_bounds=e.bounds,
                 target_resource_id=e.resource_id,
+                target_class_name=e.class_name or None,
             )
     return None
 
@@ -208,6 +293,8 @@ class AppExplorer:
     COLD_START_HOME_WAIT: float = 0.5
     COLD_START_STOP_WAIT: float = 1.0
     MAX_SCROLLS: int = 8
+    MAX_SCROLL_TO_FIND: int = 10
+    MAX_CONSECUTIVE_COLD_START_FAILURES: int = 5
 
     def __init__(
         self,
@@ -244,6 +331,13 @@ class AppExplorer:
         self._explored_per_state: dict[str, set[str]] = defaultdict(set)
         self._blacklisted_per_state: dict[str, set[str]] = defaultdict(set)
         self._global_action_type_count: dict[ActionType, int] = defaultdict(int)
+        # Change 3 / 4: current-state tracker + emulator-health counter.
+        # _current_state_id is None iff the device is in an unknown / non-app
+        # state (initial, post-LEFT_APP, post-COLD_START_FAILED). When
+        # non-None, the device is *believed* to be at that state_id — every
+        # observation verifies this via pre-capture before executing.
+        self._current_state_id: str | None = None
+        self._consecutive_cold_start_failures: int = 0
 
     # ------------------------------------------------------------------ public
 
@@ -261,6 +355,7 @@ class AppExplorer:
         if entry is None:
             raise RuntimeError("Initial capture failed after cold-start")
         entry_sid = entry.get_state_id(self._app_package)
+        self._current_state_id = entry_sid
         self._nav_paths[entry_sid] = []
         screens: dict[str, RawScreen] = {entry.screen_id: entry}
         traces: list[ExplorationTrace] = []
@@ -280,6 +375,12 @@ class AppExplorer:
                 sid = unenumerated[0]
                 enumerate_queue.remove(sid)
                 actions = self._enumerate_all_clickables(sid, self._nav_paths[sid])
+                # Enumeration leaves the device scroll-offset at an unknown
+                # position (possibly the bottom of a scroll sweep, whose
+                # state_id differs from the entry). Invalidate the current
+                # tracker so the next observation force-navigates; locality
+                # only kicks in during the observe loop proper.
+                self._current_state_id = None
                 self._all_actions_per_state[sid] = {action_key(a): a for a in actions}
                 logger.info(f"state={sid[:6]} enumerated {len(actions)} actions")
 
@@ -308,12 +409,28 @@ class AppExplorer:
 
             if trace.target_state_id == SENTINEL_COLD_START_FAILED:
                 counts["cold_start_failures"] += 1
+                self._consecutive_cold_start_failures += 1
+                if (
+                    self._consecutive_cold_start_failures
+                    >= self.MAX_CONSECUTIVE_COLD_START_FAILURES
+                ):
+                    logger.error(
+                        f"Aborting exploration: "
+                        f"{self._consecutive_cold_start_failures} consecutive "
+                        f"COLD_START_FAILED observations. Device or app is "
+                        f"unresponsive. Unused budget: {budget - done} observations."
+                    )
+                    counts["aborted_on_cold_start_failures"] = 1
+                    break
             elif trace.target_state_id == SENTINEL_LEFT_APP:
                 counts["left_app"] += 1
                 self._blacklisted_per_state[state_id].add(key)
+                self._consecutive_cold_start_failures = 0
             elif trace.target_state_id == SENTINEL_ACTION_FAILED:
                 counts["action_failures"] += 1
+                self._consecutive_cold_start_failures = 0
             else:
+                self._consecutive_cold_start_failures = 0
                 # Scroll-no-yield check: identical anchors pre/post → blacklist
                 # at ACTUAL source so we don't try the dead scroll again if the
                 # replay lands on a truly stable page.
@@ -354,9 +471,42 @@ class AppExplorer:
         return depth_factor * type_weight * freq_factor
 
     def _pick_next_action(self) -> tuple[str, Action] | None:
-        """Argmax of _priority_score across all enumerated states' outgoing
-        actions that are neither explored nor blacklisted. Ties break on
-        insertion order (dicts are ordered)."""
+        """Locality preference + global argmax fallback.
+
+        If ``self._current_state_id`` has an unexplored non-blacklisted
+        action, pick the argmax *within* that state — skips a cold-start
+        + nav-path replay next turn. Otherwise fall through to the global
+        argmax across all enumerated states.
+        """
+        sid = self._current_state_id
+        if sid is not None and sid in self._all_actions_per_state:
+            local = self._pick_best_in_state(sid)
+            if local is not None:
+                return (sid, local)
+        return self._global_argmax()
+
+    def _pick_best_in_state(self, state_id: str) -> Action | None:
+        """Argmax of _priority_score within a single state's unexplored,
+        non-blacklisted outgoing actions. Returns None if empty."""
+        actions = self._all_actions_per_state.get(state_id, {})
+        if not actions:
+            return None
+        explored = self._explored_per_state[state_id]
+        blacklisted = self._blacklisted_per_state[state_id]
+        best: Action | None = None
+        best_score = 0.0
+        for key, action in actions.items():
+            if key in explored or key in blacklisted:
+                continue
+            score = self._priority_score(state_id, action)
+            if score > best_score:
+                best_score = score
+                best = action
+        return best
+
+    def _global_argmax(self) -> tuple[str, Action] | None:
+        """Argmax across all enumerated states' unexplored non-blacklisted
+        outgoing actions. Ties break on insertion order (dicts are ordered)."""
         best: tuple[str, Action] | None = None
         best_score = 0.0
         for state_id, actions in self._all_actions_per_state.items():
@@ -410,7 +560,13 @@ class AppExplorer:
                 pkg = (e.package or "").strip()
                 if pkg and pkg != self._app_package and pkg != "android":
                     continue
-                action = _build_interact_action(e)
+                action = _build_interact_action(e, screen.elements)
+                if not is_action_identifiable(action):
+                    logger.debug(
+                        f"Dropping unidentifiable action on element "
+                        f"{e.element_id} (no rid/text/content_desc/class_name)"
+                    )
+                    continue
                 collected.setdefault(action_key(action), action)
 
             _, anchors = screen.get_functional_state_key(self._app_package)
@@ -420,7 +576,10 @@ class AppExplorer:
             scroll = _build_scroll_down(screen)
             if scroll is None:
                 break
-            self._execute_action(scroll)
+            # Bypass _execute_action's descriptor-resolve path during
+            # enumeration — we already have a live scroll container, no
+            # need to re-capture and re-match inside execute_scroll.
+            self._swipe_scroll(ActionType.SCROLL_DOWN, scroll)
             time.sleep(self.POST_ACTION_WAIT)
 
         return list(collected.values())
@@ -432,7 +591,11 @@ class AppExplorer:
         action: Action,
         step: int,
     ) -> tuple[ExplorationTrace, RawScreen | None, RawScreen | None]:
-        """One cold-start + replay + click cycle. See module docstring for sentinels."""
+        """One observation. Skips cold-start + replay when the device is
+        already at the intended source state; otherwise performs the full
+        cycle. See module docstring for sentinels and the ``_current_state_id``
+        invariant.
+        """
         ts = _now_iso()
 
         def _trace(
@@ -453,20 +616,53 @@ class AppExplorer:
                 timestamp=ts,
             )
 
-        if not self._cold_start_app():
-            return (
-                _trace(src=intended_source_state_id, target=SENTINEL_COLD_START_FAILED),
-                None,
-                None,
-            )
-        for nav_step in intended_nav_path:
-            self._execute_action(nav_step)
-            time.sleep(self.POST_ACTION_WAIT)
+        needs_nav = self._current_state_id != intended_source_state_id
+        if needs_nav:
+            if not self._cold_start_app():
+                self._current_state_id = None
+                return (
+                    _trace(src=intended_source_state_id, target=SENTINEL_COLD_START_FAILED),
+                    None,
+                    None,
+                )
+            for nav_step in intended_nav_path:
+                self._execute_action(nav_step)
+                time.sleep(self.POST_ACTION_WAIT)
 
         pre = self._capture_screen()
         if pre is None:
+            self._current_state_id = None
             return _trace(src=intended_source_state_id, target=SENTINEL_LEFT_APP), None, None
         actual_src = pre.get_state_id(self._app_package)
+
+        # Locality drift fallback: we thought we were at intended but the
+        # live capture says otherwise (e.g., a system dialog surfaced).
+        # Re-run this observation via the full cold-start path for
+        # correctness. Log as INFO, not failure.
+        if not needs_nav and actual_src != intended_source_state_id:
+            cur_tag = self._current_state_id[:6] if self._current_state_id else "-"
+            logger.info(
+                f"locality drift: current={cur_tag} actual={actual_src[:6]} "
+                f"intended={intended_source_state_id[:6]} — falling back to cold-start"
+            )
+            self._current_state_id = None
+            if not self._cold_start_app():
+                return (
+                    _trace(src=intended_source_state_id, target=SENTINEL_COLD_START_FAILED),
+                    None,
+                    None,
+                )
+            for nav_step in intended_nav_path:
+                self._execute_action(nav_step)
+                time.sleep(self.POST_ACTION_WAIT)
+            pre = self._capture_screen()
+            if pre is None:
+                return (
+                    _trace(src=intended_source_state_id, target=SENTINEL_LEFT_APP),
+                    None,
+                    None,
+                )
+            actual_src = pre.get_state_id(self._app_package)
 
         # Feature A: count attempts per action_type (not successes), so the
         # frequency decay can't be gamed by a misbehaving type that always
@@ -474,6 +670,8 @@ class AppExplorer:
         self._global_action_type_count[action.action_type] += 1
 
         if not self._execute_action(action):
+            # Device still at pre's state; keep current tracker pinned there.
+            self._current_state_id = actual_src
             return (
                 _trace(src=actual_src, src_screen_id=pre.screen_id, target=SENTINEL_ACTION_FAILED),
                 pre,
@@ -482,6 +680,7 @@ class AppExplorer:
         time.sleep(self.POST_ACTION_WAIT)
 
         if not self._is_within_app():
+            self._current_state_id = None
             return (
                 _trace(src=actual_src, src_screen_id=pre.screen_id, target=SENTINEL_LEFT_APP),
                 pre,
@@ -489,16 +688,18 @@ class AppExplorer:
             )
         post = self._capture_screen()
         if post is None:
+            self._current_state_id = None
             return (
                 _trace(src=actual_src, src_screen_id=pre.screen_id, target=SENTINEL_LEFT_APP),
                 pre,
                 None,
             )
+        self._current_state_id = post.get_state_id(self._app_package)
         return (
             _trace(
                 src=actual_src,
                 src_screen_id=pre.screen_id,
-                target=post.get_state_id(self._app_package),
+                target=self._current_state_id,
                 target_screen_id=post.screen_id,
             ),
             pre,
@@ -586,31 +787,48 @@ class AppExplorer:
         )
 
     def _execute_action(self, action: Action) -> bool:
-        """Dispatch; return False iff the device API raised."""
+        """Dispatch. Coordinates are resolved live — stored bounds are a hint.
+
+        For CLICK / LONG_PRESS / INPUT_TEXT: resolve the target by descriptor
+        on the current screen (scrolling to find if needed). Click at the
+        *live* bounds, not whatever was stored on the Action at enumeration.
+        For SCROLL: resolve the scroll container by descriptor. For
+        NAVIGATE_BACK / NAVIGATE_HOME: just fire the key.
+
+        Returns False when the resolver cannot locate the target or when
+        the device API raises.
+        """
         assert self._device is not None
         try:
             t = action.action_type
-            if t in (ActionType.CLICK, ActionType.LONG_PRESS):
-                if not action.target_bounds:
-                    return False
-                cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
-                cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
-                if t is ActionType.LONG_PRESS:
-                    self._device.long_click(cx, cy)
-                else:
-                    self._device.click(cx, cy)
+            if t == ActionType.NAVIGATE_BACK:
+                self._device.press("back")
                 return True
-            if t == ActionType.INPUT_TEXT:
-                if action.target_bounds:
-                    cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
-                    cy = (action.target_bounds[1] + action.target_bounds[3]) // 2
+            if t == ActionType.NAVIGATE_HOME:
+                self._device.press("home")
+                return True
+            if t in (ActionType.SCROLL_UP, ActionType.SCROLL_DOWN):
+                return self._execute_scroll(action)
+            if t in (ActionType.CLICK, ActionType.LONG_PRESS, ActionType.INPUT_TEXT):
+                element = self._resolve_action_target(action, scroll_to_find=True)
+                if element is None:
+                    logger.debug(f"resolve failed for {t.value} {_short_target(action)}")
+                    return False
+                if not element.bounds:
+                    return False
+                cx = (element.bounds[0] + element.bounds[2]) // 2
+                cy = (element.bounds[1] + element.bounds[3]) // 2
+                if t == ActionType.CLICK:
                     self._device.click(cx, cy)
-                    time.sleep(0.3)
+                    return True
+                if t == ActionType.LONG_PRESS:
+                    self._device.long_click(cx, cy)
+                    return True
+                # INPUT_TEXT
+                self._device.click(cx, cy)
+                time.sleep(0.3)
                 if action.input_text:
                     self._device.send_keys(action.input_text)
-                # Dismiss the soft keyboard so the post-action screen dump
-                # reflects the real UI (the IME otherwise occludes ~half the
-                # screen and corrupts state identity).
                 try:
                     if hasattr(self._device, "hide_keyboard"):
                         self._device.hide_keyboard()
@@ -620,21 +838,138 @@ class AppExplorer:
                     logger.debug("keyboard dismiss failed", exc_info=True)
                 time.sleep(0.3)
                 return True
-            if t in (ActionType.SCROLL_UP, ActionType.SCROLL_DOWN):
-                return self._swipe_scroll(t, action)
-            if t == ActionType.NAVIGATE_BACK:
-                self._device.press("back")
-                return True
-            if t == ActionType.NAVIGATE_HOME:
-                self._device.press("home")
-                return True
         except Exception:
             logger.exception(f"execute_action({action.action_type.value}) raised")
             return False
         return False
 
+    def _match_descriptor(self, screen: RawScreen, action: Action) -> UIElement | None:
+        """Find the element whose descriptor matches ``action``.
+
+        Matching rules (all specified fields must be compatible):
+          1. If ``rid`` is specified in the action, the element's rid must match.
+          2. If ``class_name`` is specified, must match.
+          3. If ``text`` is specified:
+               - match if element's own normalized text equals it, OR
+               - (Preference-row fallback) the element has a direct child
+                 with ``resource_id == "android:id/title"`` whose normalized
+                 text matches.
+          4. If ``content_desc`` is specified, the element's content_desc
+             must match.
+          5. If only ``rid`` is specified (no text / cd), any rid match wins.
+          6. If none of ``rid`` / ``text`` / ``cd`` / ``cls`` is specified,
+             no match (caller should have rejected the action upstream).
+
+        Returns the first matching element, or None.
+        """
+        rid = action.target_resource_id or ""
+        text = _normalize_dynamic(action.target_text or "") if action.target_text else ""
+        cd = action.target_content_desc or ""
+        cls = action.target_class_name or ""
+        if not (rid or text or cd or cls):
+            return None
+
+        by_id = {e.element_id: e for e in screen.elements}
+
+        def child_title_matches(e: UIElement) -> bool:
+            if not text:
+                return False
+            for cid in e.children:
+                child = by_id.get(cid)
+                if child is None:
+                    continue
+                if child.resource_id == "android:id/title" and (
+                    _normalize_dynamic(child.text or "") == text
+                ):
+                    return True
+            return False
+
+        for e in screen.elements:
+            e_rid = e.resource_id or ""
+            e_text = _normalize_dynamic(e.text or "") if e.text else ""
+            e_cd = e.content_description or ""
+            e_cls = e.class_name or ""
+
+            if rid and rid != e_rid:
+                continue
+            if cls and cls != e_cls:
+                continue
+            if cd and e_cd and cd != e_cd:
+                continue
+            if text:
+                if e_text == text:
+                    return e
+                if not e_text and child_title_matches(e):
+                    return e
+                continue
+            if cd:
+                if e_cd == cd:
+                    return e
+                continue
+            if rid:
+                # rid+class (or rid alone) with no text/cd specified.
+                return e
+            if cls and e_cls == cls and not text and not cd:
+                return e
+        return None
+
+    def _resolve_action_target(self, action: Action, *, scroll_to_find: bool) -> UIElement | None:
+        """Capture the current screen, find the descriptor target, scroll
+        to reveal it if necessary. Returns the element with live bounds,
+        or None."""
+        screen = self._capture_screen()
+        if screen is None:
+            return None
+        found = self._match_descriptor(screen, action)
+        if found is not None:
+            return found
+        if not scroll_to_find:
+            return None
+
+        last_anchors: frozenset[tuple[str, str]] | None = None
+        for _ in range(self.MAX_SCROLL_TO_FIND):
+            scroll_action = _build_scroll_down(screen)
+            if scroll_action is None:
+                return None
+            _, anchors = screen.get_functional_state_key(self._app_package)
+            if last_anchors is not None and anchors == last_anchors:
+                return None
+            last_anchors = anchors
+            if not self._swipe_scroll(ActionType.SCROLL_DOWN, scroll_action):
+                return None
+            time.sleep(self.POST_ACTION_WAIT)
+            screen = self._capture_screen()
+            if screen is None:
+                return None
+            found = self._match_descriptor(screen, action)
+            if found is not None:
+                return found
+        return None
+
+    def _execute_scroll(self, action: Action) -> bool:
+        """Descriptor-based scroll: find the matching scrollable on the
+        current screen, swipe within its live bounds. Never falls back to
+        whole-screen bounds — that would fire on unrelated containers."""
+        screen = self._capture_screen()
+        if screen is None:
+            return False
+        container = self._match_descriptor(screen, action)
+        if container is None or not container.bounds:
+            return False
+        live = Action(
+            action_type=action.action_type,
+            target_bounds=container.bounds,
+        )
+        return self._swipe_scroll(action.action_type, live)
+
     def _swipe_scroll(self, t: ActionType, action: Action) -> bool:
-        """SCROLL_DOWN: finger high→low (reveal content below). SCROLL_UP: opposite."""
+        """SCROLL_DOWN: finger high→low (reveal content below). SCROLL_UP: opposite.
+
+        ``action.target_bounds`` must be populated (caller's contract;
+        descriptor-resolver provides live bounds). Falls back to full
+        window only when called from enumeration scroll-sweep (which
+        passes the container's enumeration-time bounds).
+        """
         assert self._device is not None
         if action.target_bounds:
             cx = (action.target_bounds[0] + action.target_bounds[2]) // 2
