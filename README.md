@@ -1,16 +1,32 @@
 # Vigil
 
-Self-Evolving Neuro-Symbolic Runtime Verification for Mobile GUI Agents.
+Self-evolving neuro-symbolic runtime verification for mobile GUI agents.
 
 ## Overview
 
-Vigil is a neuro-symbolic runtime verification system for mobile GUI agents. It constructs per-app hierarchical Finite State Machines (FSMs) offline using LLMs, then performs lightweight symbolic verification at runtime, falling back to an LLM only when the symbolic layer is uncertain.
+Vigil is a safety layer for mobile GUI agents. It constructs per-app FSM+DSL verifier bundles offline, then checks every proposed GUI action online before execution and returns `ALLOW`, `DENY`, or `UNCERTAIN`.
+
+The project is organized around three mobile GUI error families:
+
+| Error Family | Vigil Mechanism |
+|--------------|-----------------|
+| GUI state and transition errors | FSM state localization, transition validity, reachability, loop detection. |
+| GUI semantic binding errors | DSL guards, frozen intent variables, task-state tracking, parameterized templates. |
+| GUI safety and side-effect errors | Safety guards, invariants, irreversible-action checks, runtime monitoring. |
+
+## Documentation
+
+- [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md): full agent context, implementation conventions, and research positioning.
+- [docs/architecture.md](docs/architecture.md): system architecture and runtime decision flow.
+- [docs/error_taxonomy.md](docs/error_taxonomy.md): three-level error taxonomy, module mapping, and benchmark alignment.
+- [docs/nsdi_paper_outline.md](docs/nsdi_paper_outline.md): compact NSDI-style paper outline.
+- [docs/dsl_grammar.lark](docs/dsl_grammar.lark): formal grammar for semantic guards.
 
 ## Quick Start
 
 ```bash
-uv venv .venv --python 3.11
-uv pip install -e ".[dev]"
+uv sync --group dev
+uv run pytest tests/
 ```
 
-See `CLAUDE.md` for full project documentation.
+Use `uv` for all package and command execution in this repository.

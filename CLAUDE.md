@@ -16,13 +16,13 @@
 | **Affiliation** | The University of Hong Kong (HKU) |
 | **Repo path** | `/Users/lucayu/Desktop/GitHub/vigil` |
 | **Git** | Already initialized |
-| **Target venue** | MobiCom 2027 (deadline ~2026.08) |
+| **Target venue** | NSDI 2026 style systems submission |
 
 ---
 
 ## 2. One-Paragraph Summary
 
-Vigil is a **neuro-symbolic runtime verification system** for mobile GUI agents. In the **offline (neuro) phase**, an LLM systematically explores a target Android app via Accessibility Service, abstracts raw screens into states, and constructs a **per-app hierarchical Finite State Machine (FSM)** annotated with **DSL semantic guards**. The FSM is then verified via test-case generation and on-device replay. In the **online (symbolic) phase**, a lightweight engine performs **dual-layer formal verification** — FSM structural checks (transition validity, reachability, invariants) and DSL semantic checks (guard condition evaluation) — with an optional **LLM fallback** invoked only when the symbolic layer cannot produce a definitive ALLOW/DENY. Crucially, Vigil is **self-evolving**: when encountering previously unseen UI states (e.g., dynamic content in food-delivery or e-commerce apps), it degrades gracefully through a **three-tier verification** strategy (structural FSM → parameterized guards → online micro-evolution) and caches evolution results back into the FSM bundle, achieving **monotonically increasing coverage over time**.
+Vigil is a **neuro-symbolic runtime verification system** for mobile GUI agents. Its paper narrative is organized around three mobile GUI error families: **GUI state and transition errors** (wrong screen, illegal action, dead end, loop), **GUI semantic binding errors** (wrong field, value, item, contact, address, or intent slot), and **GUI safety and side-effect errors** (structurally legal actions that violate user constraints or cause harmful irreversible effects). In the **offline (neuro) phase**, an LLM systematically explores a target Android app, abstracts raw screens into states, constructs a **per-app hierarchical Finite State Machine (FSM)**, and annotates transitions with **DSL semantic guards**. The FSM is verified by test-case generation and on-device replay. In the **online (symbolic) phase**, a lightweight engine checks every proposed GUI action before execution using FSM structure, DSL guards, task-state progress, invariants, and confidence thresholds, returning **ALLOW / DENY / UNCERTAIN** without a runtime LLM in the common path. Vigil is also **self-evolving**: unseen but structurally similar UI states inherit parameterized templates, while truly novel states trigger asynchronous micro-evolution and are cached back into the FSM bundle after validation.
 
 ---
 
@@ -43,9 +43,29 @@ LLM-generated DSL guards         →     Model checking (formal verification)
                                        Predicate evaluation (guard checks)
 ```
 
+### Paper Spine: Three Mobile GUI Error Families
+
+Vigil's NSDI-style narrative should present the system as a verifier that covers three increasingly strict questions:
+
+| Error Family | Core Failure | Verification Question | Vigil Mechanism |
+|--------------|--------------|-----------------------|-----------------|
+| **1. GUI State and Transition Errors** | Agent acts from the wrong screen, clicks an illegal element, reaches a dead end, or loops. | Can the agent legally move from this GUI state to the next one? | FSM state localization, transition validity, reachability, loop detection, replay confidence. |
+| **2. GUI Semantic Binding Errors** | Agent reaches the right UI structure but binds the wrong value, field, item, contact, address, or intent slot. | Is the agent doing the right thing on this screen for the frozen user intent? | DSL guards, `$intent.*` variables, Task State Machine, parameterized templates. |
+| **3. GUI Safety and Side-Effect Errors** | Agent performs a formally legal GUI action that violates constraints or causes harmful side effects. | Is this action safe to commit to the real device? | Safety guards, frozen intent, state/action invariants, irreversible-action monitor, runtime decision engine. |
+
+Keep the distinction crisp: the **three error families** define what can go wrong, while the **three-tier verification strategy** defines how Vigil degrades when runtime coverage is incomplete.
+
 ---
 
 ## 4. System Architecture
+
+### 4.0 Error-Family-to-Module Mapping
+
+| Error Family | Primary Modules | Offline Support | Online Enforcement |
+|--------------|-----------------|-----------------|--------------------|
+| GUI State and Transition Errors | `models/fsm.py`, `models/action.py`, `core/ui_parser.py`, `core/action_types.py`, `symbolic/state_locator.py`, `symbolic/fsm_checker.py`, `symbolic/trajectory_verifier.py` | `neuro/explorer.py`, `neuro/state_abstractor.py`, `neuro/fsm_builder.py`, `neuro/replay_verifier.py` build and validate the topology. | Locate current state, check legal transition, reject unreachable paths, detect loops, return UNCERTAIN on low-confidence transitions. |
+| GUI Semantic Binding Errors | `models/dsl.py`, `models/state.py`, `symbolic/dsl_evaluator.py`, `symbolic/intent_extractor.py`, `symbolic/trajectory_verifier.py`, `symbolic/decision_engine.py` | `neuro/semantic_grounder.py`, `neuro/dsl_generator.py`, `neuro/widget_templates.py`, `neuro/evolution.py` create semantic profiles, guards, and dynamic templates. | Freeze intent, bind `$intent.*` variables, evaluate guards, track multi-step task progress, inherit and bind templates for dynamic content. |
+| GUI Safety and Side-Effect Errors | `symbolic/decision_engine.py`, `symbolic/invariant_checker.py`, `symbolic/dsl_evaluator.py`, `symbolic/fsm_checker.py`, `integration/agent_runner.py`, `scripts/verify_action.py` | Replay verification and guard generation identify high-risk transitions, irreversible actions, and state invariants. | Enforce safety guards and invariants before execution; return DENY or UNCERTAIN for risky, under-specified, or low-confidence actions. |
 
 ### 4.1 Offline Pipeline (Neuro Layer — 5 Stages)
 
@@ -142,6 +162,10 @@ VERIFY(current_screen, proposed_action, user_goal):
   guard ← FSM.guard(state, proposed_action)
   IF guard ≠ null ∧ EVAL(guard, current_screen) = false → DENY
 
+  // Safety and Side-Effect Check
+  IF ∃ safety invariant S : S(state, proposed_action, frozen_intent) = false → DENY
+  IF proposed_action has irreversible side effect ∧ confidence is insufficient → UNCERTAIN
+
   → ALLOW
 ```
 
@@ -218,6 +242,31 @@ VERIFY(current_screen, proposed_action, user_goal):
 **C5: Central Agent for FSM+DSL Lifecycle Management**
 - Solves: no existing work discusses model maintenance
 - Includes: version tracking, incremental update, cross-device sharing, evolution log
+
+### 6.1 NSDI-Style Paper Outline
+
+Use a compact systems-paper structure. The taxonomy belongs in the motivation, and the runtime section should mirror the three error families.
+
+```latex
+\section{Introduction}
+\section{Motivation and Design Goals}
+\section{Vigil Overview}
+\section{Offline Model Construction}
+\section{Online Runtime Verification}
+\section{Implementation}
+\section{Evaluation}
+\section{Discussion, Related Work, and Conclusion}
+```
+
+Recommended subsection spine:
+
+| Section | Key Subsections |
+|---------|-----------------|
+| Motivation and Design Goals | Mobile GUI agent failure taxonomy; why LLM judges, neural verifiers, and hand-authored rules fall short; design requirements. |
+| Vigil Overview | Threat model and assumptions; neuro-symbolic architecture; offline construction vs online verification. |
+| Offline Model Construction | UI exploration and state abstraction; FSM construction; DSL guard generation; replay-based verification. |
+| Online Runtime Verification | State/transition verification; semantic binding verification; safety/side-effect verification; uncertainty and micro-evolution. |
+| Evaluation | Experimental setup; overall effectiveness; per-error-family analysis; latency/resource cost; ablation study. |
 
 ---
 
@@ -413,8 +462,10 @@ vigil/
 │       └── alipay/
 │
 ├── docs/
-│   ├── dsl_grammar.lark           # Formal grammar for DSL guards
-│   └── architecture.md            # Architecture diagrams & decisions
+│   ├── architecture.md            # Architecture diagrams & decisions
+│   ├── error_taxonomy.md          # Paper taxonomy + module/benchmark mapping
+│   ├── nsdi_paper_outline.md      # Compact NSDI-style paper outline
+│   └── dsl_grammar.lark           # Formal grammar for DSL guards
 │
 └── android/                        # Android Accessibility Service (Kotlin, future)
     └── VigilService/
@@ -557,12 +608,28 @@ app:
   max_exploration_steps: 500
   screenshot_format: "png"
   exploration_strategy: "bfs"       # bfs | dfs | hybrid
+  exploration_backend: "native"      # native | ape
+
+device:
+  type: auto                         # auto | emulator | physical
+  serial: null                       # null = resolve via `type` below
+  profile_name: default              # suffix for output dirs
+
+ape:
+  jar_path: "libs/ape.jar"
+  device_jar_path: "/data/local/tmp/ape.jar"
+  device_output_dir: "/sdcard/ape-output"
+  running_minutes: 10
+  ape_mode: "sata"                  # sata (CEGAR) | random
 
 llm:
-  provider: "anthropic"              # anthropic | openai
-  model: "claude-sonnet-4-20250514"
+  provider: "proxy"                 # anthropic | openai | google | proxy
+  model: "claude-sonnet-4.6"
   max_tokens: 4096
   temperature: 0.0
+  proxy_base_url: "http://localhost:4141/v1"
+  proxy_api_key: "dummy_key"
+  proxy_model: "claude-sonnet-4.6"
 
 state_abstraction:
   similarity_threshold: 0.85
@@ -718,17 +785,19 @@ Create files in this sequence:
 
 ## 19. Implementation Priority & Development Notes
 
-1. **Start with Settings app** — deterministic, no login, no network dependency, ideal for debugging
-2. **`src/` layout is mandatory** — all code under `src/vigil/`, never import from repo root
-3. **Core novelty = FSM pipeline + self-evolution** — don't over-engineer Android infrastructure early
-4. **Keep symbolic verifier in pure Python first** — graph lookups + predicate eval are fast enough; only port to Kotlin/C++ if profiling justifies it
-5. **Verifier is agent-agnostic** — wraps ANY GUI agent as safety layer, does not replace agent
-6. **Replay non-determinism is expected** — use confidence scores, don't chase 100% reliability
-7. **State explosion mitigation**: hierarchy + bounded exploration (max 500 steps per app initially)
-8. **Never commit `data/` or `models/bundles/`** — large generated artifacts
-9. **All LLM calls are offline only** — runtime symbolic layer must NEVER call an LLM (except Tier 3, which is async and infrequent)
-10. **uv is the only package manager** — no pip, no requirements.txt
-11. **Reference code to borrow**:
+1. **Start with Settings app** — deterministic, no login, no network dependency, ideal for debugging.
+2. **Build in the order of the taxonomy** — first block state/transition errors, then semantic binding errors, then safety/side-effect errors.
+3. **Keep `decision_engine.py` as the single runtime verdict point** — every check must collapse into ALLOW / DENY / UNCERTAIN.
+4. **`src/` layout is mandatory** — all code under `src/vigil/`, never import from repo root.
+5. **Core novelty = per-app FSM+DSL verifier + self-evolution** — don't over-engineer Android infrastructure early.
+6. **Keep symbolic verifier in pure Python first** — graph lookups + predicate eval are fast enough; only port to Kotlin/C++ if profiling justifies it.
+7. **Verifier is agent-agnostic** — wraps ANY GUI agent as safety layer, does not replace agent.
+8. **Replay non-determinism is expected** — use confidence scores, don't chase 100% reliability.
+9. **State explosion mitigation**: hierarchy + bounded exploration (max 500 steps per app initially).
+10. **Never commit `data/` or `models/bundles/`** — large generated artifacts.
+11. **All LLM calls are offline only** — runtime symbolic layer must NEVER call an LLM in the common path; Tier 3 is async and infrequent.
+12. **uv is the only package manager** — no pip, no requirements.txt.
+13. **Reference code to borrow**:
     - V-Droid (`html_representation.py`): UI parsing, element filtering, display_id assignment → adapt for `core/ui_parser.py`
     - V-Droid (action enumeration): element properties → candidate actions → adapt for `core/action_types.py`
     - VeriSafe (predicate patterns): per-app guard templates (payment, messaging, shopping) → inspiration for `neuro/dsl_generator.py`
@@ -747,3 +816,5 @@ Create files in this sequence:
 | State localization inaccurate | Medium-Low | Fingerprint + multi-feature similarity matching |
 | WebView/mini-program poor Accessibility support | Low-Medium | Acknowledge scope limitation, focus on native UI |
 | Google Play Accessibility policy risk | Low | Our system is deterministic rule-based, not autonomous agent |
+| Taxonomy and implementation drift apart | Medium | Keep `docs/error_taxonomy.md`, Section 4.0 module mapping, and evaluation metrics aligned |
+| Safety layer becomes a loose prompt policy | High | Express high-risk constraints as DSL guards/invariants whenever possible; use LLM fallback only after UNCERTAIN |
