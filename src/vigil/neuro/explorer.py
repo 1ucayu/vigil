@@ -23,6 +23,7 @@ outside the target package).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import time
@@ -36,7 +37,14 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from vigil.core.config import VigilConfig
+from vigil.core.ui_compressor import compact_ui_tree_text
 from vigil.core.ui_parser import parse_hierarchy_xml
+from vigil.core.ui_selectors import (
+    build_component_selector,
+    find_element_by_selector,
+    selector_has_stable_identity,
+    selector_identity,
+)
 from vigil.models.action import Action, ActionType
 from vigil.models.state import RawScreen, UIElement, _normalize_dynamic
 from vigil.neuro.app_prior import AppPrior
@@ -102,12 +110,17 @@ def _is_dangerous_element(text: str | None, content_desc: str | None) -> str | N
 def action_key(action: Action) -> str:
     """Stable descriptor-based identity.
 
-    Identity = (action_type, resource_id, normalized_text, content_desc,
-    class_name). Bounds are explicitly excluded — the same logical element
-    at different scroll offsets has different bounds in different captures.
+    When ``target_selector`` has stable identity (rid / text / content-desc /
+    nearby-text), key = ``action_type|selector_identity``. Otherwise falls
+    back to the legacy descriptor tuple (rid, text, content-desc, class) so
+    actions loaded from older traces without selectors still deduplicate
+    consistently. Bounds are always excluded — the same logical element at
+    different scroll offsets has different bounds in different captures.
     Use :func:`is_action_identifiable` to check whether an action is safe
-    to enumerate (at least one descriptor field non-empty).
+    to enumerate (at least one selector or descriptor field non-empty).
     """
+    if selector_has_stable_identity(action.target_selector):
+        return f"{action.action_type.value}|{selector_identity(action.target_selector)}"
     return "|".join(
         [
             action.action_type.value,
@@ -120,13 +133,15 @@ def action_key(action: Action) -> str:
 
 
 def is_action_identifiable(action: Action) -> bool:
-    """True iff at least one descriptor field is populated.
+    """True iff at least one descriptor or selector field is populated.
 
     Global actions (NAVIGATE_BACK, NAVIGATE_HOME) are always identifiable
     by type alone — they have no target and trivially deduplicate on
     action_type + empty descriptor.
     """
     if action.action_type in (ActionType.NAVIGATE_BACK, ActionType.NAVIGATE_HOME):
+        return True
+    if selector_has_stable_identity(action.target_selector):
         return True
     return bool(
         action.target_resource_id
@@ -264,6 +279,7 @@ def _build_interact_action(element: UIElement, elements: list[UIElement]) -> Act
             target_text=target_text or None,
             target_content_desc=cd or None,
             target_class_name=element.class_name or None,
+            target_selector=build_component_selector(element, elements),
             input_text=_generate_edit_value(element),
         )
     at = ActionType.CLICK
@@ -277,6 +293,7 @@ def _build_interact_action(element: UIElement, elements: list[UIElement]) -> Act
         target_text=target_text or None,
         target_content_desc=cd or None,
         target_class_name=element.class_name or None,
+        target_selector=build_component_selector(element, elements),
     )
 
 
@@ -290,6 +307,7 @@ def _build_scroll_down(screen: RawScreen) -> Action | None:
                 target_bounds=e.bounds,
                 target_resource_id=e.resource_id,
                 target_class_name=e.class_name or None,
+                target_selector=build_component_selector(e, screen.elements),
             )
     return None
 
@@ -306,6 +324,38 @@ class ExplorationTrace(BaseModel):
     target_state_id: str = ""
     target_screen_id: str = ""
     timestamp: str
+
+
+class ScrollObservation(BaseModel):
+    """Diagnostic record of one scroll gesture during enumeration or resolution.
+
+    Captures the anchor / structural fingerprint of the screen before and
+    after a scroll, plus any action keys newly discovered as a result. The
+    ``plateau`` flag is True when the scroll did not change the anchor set
+    — the marker the enumeration / resolution loops use to bail out.
+    """
+
+    phase: str  # "enumerate" | "resolve"
+    source_state_id: str | None = None
+    screen_id_before: str = ""
+    screen_id_after: str = ""
+    action_type: str = "scroll_down"
+    container_selector: dict[str, Any] = Field(default_factory=dict)
+    before_anchor_hash: str = ""
+    after_anchor_hash: str = ""
+    before_structural_fingerprint: str = ""
+    after_structural_fingerprint: str = ""
+    newly_discovered_action_keys: list[str] = Field(default_factory=list)
+    plateau: bool = False
+    timestamp: str = ""
+
+
+def _anchor_hash(anchors: frozenset[tuple[str, str]]) -> str:
+    """Stable short hash of an anchor set (sorted ``rid=text`` tuples)."""
+    if not anchors:
+        return ""
+    items = sorted(f"{r}={t}" for r, t in anchors)
+    return hashlib.sha256("|".join(items).encode()).hexdigest()[:12]
 
 
 class ExplorationResult(BaseModel):
@@ -389,6 +439,10 @@ class AppExplorer:
         # problem.
         self._retired_states: set[str] = set()
         self._state_retirements: int = 0
+        # Diagnostic record of every scroll gesture the explorer fires
+        # (enumeration sweep + offscreen resolution). Persisted in the v2
+        # trace under "scroll_observations" for downstream analysis.
+        self._scroll_observations: list[ScrollObservation] = []
 
     # ------------------------------------------------------------------ public
 
@@ -643,6 +697,11 @@ class AppExplorer:
 
         collected: dict[str, Action] = {}
         last_anchors: frozenset[tuple[str, str]] | None = None
+        prev_screen: RawScreen | None = None
+        prev_anchor_h: str = ""
+        prev_struct_fp: str = ""
+        prev_keys: set[str] = set()
+        prev_container_selector: dict[str, Any] = {}
 
         for _ in range(self.MAX_SCROLLS):
             screen = self._capture_screen()
@@ -673,6 +732,31 @@ class AppExplorer:
                 collected.setdefault(action_key(action), action)
 
             _, anchors = screen.get_functional_state_key(self._app_package)
+            cur_anchor_h = _anchor_hash(anchors)
+            cur_struct_fp = screen.get_structural_fingerprint()
+
+            # If this is a post-scroll capture, record the observation.
+            if prev_screen is not None:
+                new_keys = sorted(set(collected.keys()) - prev_keys)
+                plateau = (last_anchors is not None) and (anchors == last_anchors)
+                self._scroll_observations.append(
+                    ScrollObservation(
+                        phase="enumerate",
+                        source_state_id=state_id,
+                        screen_id_before=prev_screen.screen_id,
+                        screen_id_after=screen.screen_id,
+                        action_type=ActionType.SCROLL_DOWN.value,
+                        container_selector=prev_container_selector,
+                        before_anchor_hash=prev_anchor_h,
+                        after_anchor_hash=cur_anchor_h,
+                        before_structural_fingerprint=prev_struct_fp,
+                        after_structural_fingerprint=cur_struct_fp,
+                        newly_discovered_action_keys=new_keys,
+                        plateau=plateau,
+                        timestamp=_now_iso(),
+                    )
+                )
+
             if last_anchors is not None and anchors == last_anchors:
                 break
             last_anchors = anchors
@@ -682,6 +766,11 @@ class AppExplorer:
             # Bypass _execute_action's descriptor-resolve path during
             # enumeration — we already have a live scroll container, no
             # need to re-capture and re-match inside execute_scroll.
+            prev_screen = screen
+            prev_anchor_h = cur_anchor_h
+            prev_struct_fp = cur_struct_fp
+            prev_keys = set(collected.keys())
+            prev_container_selector = dict(scroll.target_selector or {})
             self._swipe_scroll(ActionType.SCROLL_DOWN, scroll)
             time.sleep(self.POST_ACTION_WAIT)
 
@@ -1002,7 +1091,14 @@ class AppExplorer:
     def _match_descriptor(self, screen: RawScreen, action: Action) -> UIElement | None:
         """Find the element whose descriptor matches ``action``.
 
-        Matching rules (all specified fields must be compatible):
+        Resolution order:
+          1. If the action carries a ``target_selector`` with stable identity,
+             try :func:`vigil.core.ui_selectors.find_element_by_selector`.
+          2. Fall back to descriptor matching on (rid, text, content-desc,
+             class) so traces saved before selectors were introduced still
+             replay correctly.
+
+        Descriptor matching rules (all specified fields must be compatible):
           1. If ``rid`` is specified in the action, the element's rid must match.
           2. If ``class_name`` is specified, must match.
           3. If ``text`` is specified:
@@ -1018,6 +1114,11 @@ class AppExplorer:
 
         Returns the first matching element, or None.
         """
+        if selector_has_stable_identity(action.target_selector):
+            found = find_element_by_selector(action.target_selector, screen.elements)
+            if found is not None:
+                return found
+
         rid = action.target_resource_id or ""
         text = _normalize_dynamic(action.target_text or "") if action.target_text else ""
         cd = action.target_content_desc or ""
@@ -1098,20 +1199,68 @@ class AppExplorer:
             return None
 
         last_anchors: frozenset[tuple[str, str]] | None = None
+        prev_screen: RawScreen | None = None
+        prev_anchor_h: str = ""
+        prev_struct_fp: str = ""
+        prev_container_selector: dict[str, Any] = {}
         for _ in range(self.MAX_SCROLL_TO_FIND):
             scroll_action = _build_scroll_down(screen)
             if scroll_action is None:
                 return None
             _, anchors = screen.get_functional_state_key(self._app_package)
+            cur_anchor_h = _anchor_hash(anchors)
+            cur_struct_fp = screen.get_structural_fingerprint()
             if last_anchors is not None and anchors == last_anchors:
+                if prev_screen is not None:
+                    self._scroll_observations.append(
+                        ScrollObservation(
+                            phase="resolve",
+                            source_state_id=None,
+                            screen_id_before=prev_screen.screen_id,
+                            screen_id_after=screen.screen_id,
+                            action_type=ActionType.SCROLL_DOWN.value,
+                            container_selector=prev_container_selector,
+                            before_anchor_hash=prev_anchor_h,
+                            after_anchor_hash=cur_anchor_h,
+                            before_structural_fingerprint=prev_struct_fp,
+                            after_structural_fingerprint=cur_struct_fp,
+                            newly_discovered_action_keys=[],
+                            plateau=True,
+                            timestamp=_now_iso(),
+                        )
+                    )
                 return None
             last_anchors = anchors
+            prev_screen = screen
+            prev_anchor_h = cur_anchor_h
+            prev_struct_fp = cur_struct_fp
+            prev_container_selector = dict(scroll_action.target_selector or {})
             if not self._swipe_scroll(ActionType.SCROLL_DOWN, scroll_action):
                 return None
             time.sleep(self.POST_ACTION_WAIT)
             screen = self._capture_screen()
             if screen is None:
                 return None
+            _, post_anchors = screen.get_functional_state_key(self._app_package)
+            post_anchor_h = _anchor_hash(post_anchors)
+            post_struct_fp = screen.get_structural_fingerprint()
+            self._scroll_observations.append(
+                ScrollObservation(
+                    phase="resolve",
+                    source_state_id=None,
+                    screen_id_before=prev_screen.screen_id,
+                    screen_id_after=screen.screen_id,
+                    action_type=ActionType.SCROLL_DOWN.value,
+                    container_selector=prev_container_selector,
+                    before_anchor_hash=prev_anchor_h,
+                    after_anchor_hash=post_anchor_h,
+                    before_structural_fingerprint=prev_struct_fp,
+                    after_structural_fingerprint=post_struct_fp,
+                    newly_discovered_action_keys=[],
+                    plateau=(post_anchors == last_anchors),
+                    timestamp=_now_iso(),
+                )
+            )
             found = self._match_descriptor(screen, action)
             if found is not None:
                 return found
@@ -1229,6 +1378,16 @@ class AppExplorer:
         compact: dict[str, Any] = {}
         for sid, s in result.screens.items():
             container, anchors = s.get_functional_state_key(self._app_package)
+            interactable = s.get_interactable_elements()
+            structural_fp = s.get_structural_fingerprint()
+            hybrid_state_id = s.get_hybrid_state_id(self._app_package)
+            text_state_id = s.get_state_id(self._app_package)
+            page_title = s.extract_page_title()
+            try:
+                compact_tree_text = compact_ui_tree_text(s.elements)
+            except Exception:
+                logger.debug(f"compact_ui_tree_text failed for {sid}", exc_info=True)
+                compact_tree_text = ""
             compact[sid] = {
                 "screen_id": s.screen_id,
                 "activity_name": s.activity_name,
@@ -1237,29 +1396,39 @@ class AppExplorer:
                 "xml_tree_path": s.xml_tree_path,
                 # ``state_id`` is the canonical identity for downstream
                 # consumers (fsm_builder dedups on this). Uses the hybrid
-                # key — structural fingerprint + activity + page title —
-                # so pages with the same widget tree but different toolbar
-                # titles (Settings' Internet / Battery / Apps SubSettings)
-                # stay distinct, while list-content variations (3 Wi-Fi
-                # networks vs 5) collapse to one state.
-                # ``fingerprint`` / ``structural_fingerprint`` / ``text_state_id``
-                # are preserved as secondary labels for post-processing /
-                # naming / debugging.
-                "fingerprint": s.get_structural_fingerprint(),
-                "structural_fingerprint": s.get_structural_fingerprint(),
-                "state_id": s.get_hybrid_state_id(self._app_package),
-                "text_state_id": s.get_state_id(self._app_package),
-                "page_title": s.extract_page_title(),
+                # key — structural fingerprint + activity + page title.
+                # ``structural_fingerprint``, ``functional_fingerprint``,
+                # ``text_state_id`` are preserved as secondary labels for
+                # post-processing / naming / debugging. ``functional_fingerprint``
+                # is the hybrid state id (alias of ``state_id``) so newer
+                # consumers can read it directly without re-computing.
+                "fingerprint": structural_fp,
+                "structural_fingerprint": structural_fp,
+                "functional_fingerprint": hybrid_state_id,
+                "state_id": hybrid_state_id,
+                "text_state_id": text_state_id,
+                "page_title": page_title,
                 "state_key_anchor_container": container,
                 "state_key_anchors": sorted([list(t) for t in anchors]),
                 "total_elements": len(s.elements),
-                "interactable_elements": [
-                    e.model_dump(mode="json") for e in s.get_interactable_elements()
-                ],
+                # Canonical: full UIElement graph for downstream replay /
+                # fingerprinting / DSL evaluation. Lossy ``compact_tree_text``
+                # is for LLM prompts only — do NOT feed it to fingerprint or
+                # replay code paths.
+                "elements": [e.model_dump(mode="json") for e in s.elements],
+                "interactable_elements": [e.model_dump(mode="json") for e in interactable],
+                "compact_tree_text": compact_tree_text,
+                "screen_quality": {
+                    "total_elements": len(s.elements),
+                    "interactable_count": len(interactable),
+                    "has_screenshot": bool(s.screenshot_path and Path(s.screenshot_path).exists()),
+                    "has_xml": bool(s.xml_tree_path and Path(s.xml_tree_path).exists()),
+                },
                 "timestamp": s.timestamp,
-                "metadata": {"page_title": s.extract_page_title()},
+                "metadata": {"page_title": page_title},
             }
         data: dict[str, Any] = {
+            "schema_version": "exploration_v2",
             "app_package": result.app_package,
             "device_serial": self._serial,
             "exploration_strategy": "bfs_restart_per_action",
@@ -1270,6 +1439,7 @@ class AppExplorer:
             "timestamp": _now_iso(),
             "screens": compact,
             "traces": [t.model_dump(mode="json") for t in result.traces],
+            "scroll_observations": [o.model_dump(mode="json") for o in self._scroll_observations],
             "nav_stats": result.nav_stats,
         }
         if result.declared_activities:

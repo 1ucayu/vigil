@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ActionType(StrEnum):
@@ -57,6 +57,7 @@ class Action(BaseModel):
         target_class_name: Android widget class name (last-resort discriminator).
         target_element_id: Capture-local id (volatile hint).
         target_bounds: Capture-local bounds (volatile hint; re-resolved at exec).
+        target_selector: Stable component selector (see vigil.core.ui_selectors).
         input_text: Text to input (only for INPUT_TEXT actions).
         metadata: Arbitrary action metadata.
     """
@@ -68,8 +69,9 @@ class Action(BaseModel):
     target_text: str | None = None
     target_content_desc: str | None = None
     target_class_name: str | None = None
+    target_selector: dict[str, Any] = Field(default_factory=dict)
     input_text: str | None = None
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     def to_fsm_dict(self) -> dict[str, Any]:
         """Convert to the dict format stored in FSM transitions."""
@@ -86,6 +88,8 @@ class Action(BaseModel):
             result["target_content_desc"] = self.target_content_desc
         if self.target_class_name:
             result["target_class_name"] = self.target_class_name
+        if self.target_selector:
+            result["target_selector"] = self.target_selector
         if self.input_text:
             result["text"] = self.input_text
         return result
@@ -101,5 +105,6 @@ class Action(BaseModel):
             target_text=data.get("target_text"),
             target_content_desc=data.get("target_content_desc"),
             target_class_name=data.get("target_class_name"),
+            target_selector=data.get("target_selector") or {},
             input_text=data.get("text"),
         )

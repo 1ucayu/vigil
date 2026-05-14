@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,7 +10,14 @@ import pytest
 
 from vigil.core.action_types import enumerate_actions, enumerate_element_actions
 from vigil.core.config import VigilConfig
+from vigil.core.ui_compressor import compact_ui_tree_text
 from vigil.core.ui_parser import parse_bounds, parse_hierarchy_xml
+from vigil.core.ui_selectors import (
+    build_component_selector,
+    find_element_by_selector,
+    selector_has_stable_identity,
+    selector_identity,
+)
 from vigil.models.action import Action, ActionType
 from vigil.models.state import RawScreen, UIElement
 from vigil.neuro.explorer import (
@@ -20,6 +28,7 @@ from vigil.neuro.explorer import (
     AppExplorer,
     ExplorationResult,
     ExplorationTrace,
+    ScrollObservation,
     _build_interact_action,
     _generate_edit_value,
     _is_edit_text,
@@ -1169,3 +1178,454 @@ class TestHealthGuard:
         if trace_left.target_state_id == SENTINEL_LEFT_APP:
             explorer._consecutive_cold_start_failures = 0
         assert explorer._consecutive_cold_start_failures == 0
+
+
+# ============================================================
+# Exploration V2 — selectors, scroll observations, schema v2
+# ============================================================
+
+
+def _preference_row() -> list[UIElement]:
+    row = UIElement(
+        element_id="e_row",
+        class_name="android.widget.LinearLayout",
+        package="com.android.settings",
+        is_clickable=True,
+        is_enabled=True,
+        bounds=[0, 100, 1080, 300],
+        children=["e_title"],
+    )
+    title = UIElement(
+        element_id="e_title",
+        class_name="android.widget.TextView",
+        package="com.android.settings",
+        resource_id="android:id/title",
+        text="Network & internet",
+        is_enabled=True,
+        bounds=[50, 150, 500, 250],
+        parent_id="e_row",
+    )
+    return [row, title]
+
+
+class TestSelectorBuilding:
+    def test_preference_row_borrows_title_as_nearby_text(self) -> None:
+        elements = _preference_row()
+        row = elements[0]
+        selector = build_component_selector(row, elements)
+        assert selector["nearby_text"] == "Network & internet"
+        assert selector["class_name"] == "android.widget.LinearLayout"
+
+    def test_selector_identity_excludes_bounds(self) -> None:
+        elements = _preference_row()
+        sel_a = build_component_selector(elements[1], elements)
+        sel_b = dict(sel_a)
+        sel_b["bounds"] = [9999, 9999, 9999, 9999]
+        sel_b["depth"] = 42
+        assert selector_identity(sel_a) == selector_identity(sel_b)
+
+    def test_stable_identity_for_rid_text_cd_or_nearby(self) -> None:
+        assert selector_has_stable_identity({"resource_id": "x:id/y"})
+        assert selector_has_stable_identity({"text": "Wi-Fi"})
+        assert selector_has_stable_identity({"content_description": "Search"})
+        assert selector_has_stable_identity({"nearby_text": "Bluetooth"})
+
+    def test_class_alone_is_not_stable(self) -> None:
+        assert not selector_has_stable_identity({"class_name": "android.widget.LinearLayout"})
+
+    def test_empty_selector_is_not_stable(self) -> None:
+        assert not selector_has_stable_identity({})
+
+
+class TestSelectorResolution:
+    def test_find_by_rid(self) -> None:
+        elements = _preference_row()
+        target = elements[1]
+        sel = build_component_selector(target, elements)
+        found = find_element_by_selector(sel, elements)
+        assert found is target
+
+    def test_find_by_nearby_text(self) -> None:
+        elements = _preference_row()
+        row = elements[0]
+        sel = build_component_selector(row, elements)
+        found = find_element_by_selector(sel, elements)
+        # Resolver matches the clickable container by its title descendant.
+        assert found is not None
+        assert found.element_id == "e_row"
+
+    def test_resolves_across_id_and_bounds_drift(self) -> None:
+        elements = _preference_row()
+        title = elements[1]
+        sel = build_component_selector(title, elements)
+
+        # Fresh capture: same logical element, different element_id and bounds.
+        fresh = [
+            UIElement(
+                element_id="e_OTHER",
+                class_name="android.widget.LinearLayout",
+                package="com.android.settings",
+                is_clickable=True,
+                is_enabled=True,
+                bounds=[20, 600, 900, 800],
+                children=["e_RENAMED"],
+            ),
+            UIElement(
+                element_id="e_RENAMED",
+                class_name="android.widget.TextView",
+                package="com.android.settings",
+                resource_id="android:id/title",
+                text="Network & internet",
+                is_enabled=True,
+                bounds=[70, 650, 480, 750],
+                parent_id="e_OTHER",
+            ),
+        ]
+        found = find_element_by_selector(sel, fresh)
+        assert found is not None
+        assert found.element_id == "e_RENAMED"
+
+    def test_duplicate_resource_id_uses_text_disambiguator(self) -> None:
+        first = UIElement(
+            element_id="e_first",
+            class_name="android.widget.TextView",
+            package="com.example",
+            resource_id="com.example:id/title",
+            text="First row",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 0, 1080, 100],
+        )
+        second = UIElement(
+            element_id="e_second",
+            class_name="android.widget.TextView",
+            package="com.example",
+            resource_id="com.example:id/title",
+            text="Second row",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 100, 1080, 200],
+        )
+        elements = [first, second]
+
+        selector = build_component_selector(second, elements)
+        found = find_element_by_selector(selector, elements)
+
+        assert found is second
+
+    def test_duplicate_text_filters_by_class_or_returns_none_when_ambiguous(self) -> None:
+        text_view = UIElement(
+            element_id="e_text",
+            class_name="android.widget.TextView",
+            package="com.example",
+            text="Duplicate",
+            is_enabled=True,
+            bounds=[0, 0, 500, 100],
+        )
+        button = UIElement(
+            element_id="e_button",
+            class_name="android.widget.Button",
+            package="com.example",
+            text="Duplicate",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 100, 500, 200],
+        )
+
+        found_button = find_element_by_selector(
+            build_component_selector(button, [text_view, button]),
+            [text_view, button],
+        )
+        assert found_button is button
+
+        first = UIElement(
+            element_id="e_first_duplicate",
+            class_name="android.widget.TextView",
+            package="com.example",
+            text="Ambiguous",
+            is_enabled=True,
+            bounds=[0, 0, 500, 100],
+        )
+        second = UIElement(
+            element_id="e_second_duplicate",
+            class_name="android.widget.TextView",
+            package="com.example",
+            text="Ambiguous",
+            is_enabled=True,
+            bounds=[0, 100, 500, 200],
+        )
+        ambiguous_selector = build_component_selector(second, [first, second])
+
+        assert find_element_by_selector(ambiguous_selector, [first, second]) is None
+
+    def test_nearby_text_prefers_clickable_row_over_ancestor(self) -> None:
+        root = UIElement(
+            element_id="e_root",
+            class_name="android.widget.LinearLayout",
+            package="com.example",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 0, 1080, 1920],
+            children=["e_list"],
+        )
+        recycler = UIElement(
+            element_id="e_list",
+            class_name="androidx.recyclerview.widget.RecyclerView",
+            package="com.example",
+            resource_id="com.example:id/recycler_view",
+            is_scrollable=True,
+            is_enabled=True,
+            bounds=[0, 0, 1080, 1920],
+            children=["e_row"],
+            parent_id="e_root",
+        )
+        row = UIElement(
+            element_id="e_row",
+            class_name="android.widget.LinearLayout",
+            package="com.example",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 300, 1080, 450],
+            children=["e_title"],
+            parent_id="e_list",
+        )
+        title = UIElement(
+            element_id="e_title",
+            class_name="android.widget.TextView",
+            package="com.example",
+            resource_id="android:id/title",
+            text="Target row",
+            is_enabled=True,
+            bounds=[48, 320, 500, 420],
+            parent_id="e_row",
+        )
+        elements = [root, recycler, row, title]
+
+        found = find_element_by_selector({"nearby_text": "Target row"}, elements)
+
+        assert found is row
+
+
+class TestActionWithSelector:
+    def test_build_interact_action_attaches_selector(self) -> None:
+        elements = _preference_row()
+        action = _build_interact_action(elements[0], elements)
+        assert action.target_selector
+        assert action.target_selector.get("nearby_text") == "Network & internet"
+
+    def test_action_key_same_selector_different_bounds(self) -> None:
+        elements = _preference_row()
+        sel = build_component_selector(elements[1], elements)
+        a = Action(
+            action_type=ActionType.CLICK,
+            target_selector=sel,
+            target_bounds=[0, 0, 100, 100],
+        )
+        b = Action(
+            action_type=ActionType.CLICK,
+            target_selector=sel,
+            target_bounds=[800, 900, 1000, 1100],
+        )
+        assert action_key(a) == action_key(b)
+
+    def test_action_round_trips_through_fsm_dict(self) -> None:
+        elements = _preference_row()
+        sel = build_component_selector(elements[1], elements)
+        a = Action(action_type=ActionType.CLICK, target_selector=sel)
+        d = a.to_fsm_dict()
+        assert "target_selector" in d
+        rebuilt = Action.from_fsm_dict(d)
+        assert rebuilt.target_selector == sel
+
+    def test_legacy_trace_without_selector_still_loads(self) -> None:
+        legacy = {
+            "type": "click",
+            "resource_id": "com.app:id/x",
+            "target_text": "Old",
+        }
+        a = Action.from_fsm_dict(legacy)
+        assert a.action_type == ActionType.CLICK
+        assert a.target_resource_id == "com.app:id/x"
+        assert a.target_selector == {}
+
+
+class TestCompactUITree:
+    def test_emits_deterministic_handles_and_selectors(self) -> None:
+        scrollable = UIElement(
+            element_id="e_list",
+            class_name="androidx.recyclerview.widget.RecyclerView",
+            package="com.android.settings",
+            resource_id="com.android.settings:id/recycler_view",
+            is_scrollable=True,
+            is_enabled=True,
+            bounds=[0, 0, 1080, 2000],
+            children=["e_row"],
+        )
+        row = UIElement(
+            element_id="e_row",
+            class_name="android.widget.LinearLayout",
+            package="com.android.settings",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 100, 1080, 300],
+            children=["e_title"],
+            parent_id="e_list",
+            depth=1,
+        )
+        title = UIElement(
+            element_id="e_title",
+            class_name="android.widget.TextView",
+            package="com.android.settings",
+            resource_id="android:id/title",
+            text="Network & internet",
+            is_enabled=True,
+            bounds=[50, 150, 500, 250],
+            parent_id="e_row",
+            depth=2,
+        )
+        out = compact_ui_tree_text([scrollable, row, title])
+        # Deterministic handles
+        assert "[c_0000]" in out
+        assert "[c_0001]" in out
+        # Action affordances
+        assert "scroll" in out
+        assert "click" in out
+        # Text label appears (either own text or via title node)
+        assert "Network & internet" in out
+        # Selector summary present
+        assert "selector=" in out
+
+    def test_respects_max_nodes(self) -> None:
+        elements: list[UIElement] = []
+        for i in range(50):
+            elements.append(
+                UIElement(
+                    element_id=f"e_{i}",
+                    class_name="android.widget.Button",
+                    package="com.android.settings",
+                    resource_id=f"com.app:id/b{i}",
+                    is_clickable=True,
+                    is_enabled=True,
+                    bounds=[0, i * 100, 1080, (i + 1) * 100],
+                )
+            )
+        out = compact_ui_tree_text(elements, max_nodes=5)
+        assert out.count("[c_") == 5
+
+
+class TestScrollObservations:
+    def test_enumerate_records_observation(self, explorer: AppExplorer) -> None:
+        scr1 = _screen_with_clickables("scr1", ["a:id/1", "a:id/2"], scrollable=True)
+        scr2 = _screen_with_clickables("scr2", ["a:id/1", "a:id/2", "a:id/3"], scrollable=True)
+        # Third capture mirrors scr2 to trigger plateau.
+        screens = iter([scr1, scr2, scr2, scr2])
+        with (
+            patch.object(explorer, "_cold_start_app", return_value=True),
+            patch.object(explorer, "_execute_action", return_value=True),
+            patch.object(explorer, "_capture_screen", side_effect=lambda: next(screens)),
+        ):
+            explorer._enumerate_all_clickables("sid_xyz", [])
+        assert len(explorer._scroll_observations) >= 1
+        first = explorer._scroll_observations[0]
+        assert first.phase == "enumerate"
+        assert first.source_state_id == "sid_xyz"
+        # Second screen introduced a:id/3 — newly_discovered must reflect that.
+        assert any(
+            "a:id/3" in key for key in first.newly_discovered_action_keys
+        ), first.newly_discovered_action_keys
+        # Eventually a plateau-marked observation should appear.
+        assert any(o.plateau for o in explorer._scroll_observations)
+
+
+class TestV2TraceSchema:
+    def test_save_result_emits_v2_schema(self, explorer: AppExplorer, tmp_path: Path) -> None:
+        scr = _screen_with_clickables("scr_v2", ["a:id/wifi", "a:id/bt"], scrollable=False)
+        scr.screenshot_path = str(tmp_path / "screens" / "scr_v2.png")
+        scr.xml_tree_path = str(tmp_path / "trees" / "scr_v2.xml")
+        result = ExplorationResult(
+            app_package="com.android.settings",
+            screens={"scr_v2": scr},
+            traces=[],
+            total_steps=0,
+            unique_screens=1,
+            output_dir=str(tmp_path),
+        )
+        # Inject one scroll observation so the list serializes non-empty.
+        explorer._scroll_observations.append(
+            ScrollObservation(
+                phase="enumerate",
+                source_state_id="sid",
+                screen_id_before="scr_v2",
+                screen_id_after="scr_v2",
+                container_selector={"resource_id": "com.app:id/list"},
+                before_anchor_hash="abc",
+                after_anchor_hash="def",
+                newly_discovered_action_keys=["click|x"],
+                plateau=False,
+                timestamp="2026-05-15T00:00:00",
+            )
+        )
+        explorer._save_result(result)
+        trace_files = sorted((tmp_path / "traces").glob("exploration_*.json"))
+        assert trace_files
+        data = json.loads(trace_files[-1].read_text(encoding="utf-8"))
+        assert data["schema_version"] == "exploration_v2"
+        assert isinstance(data["scroll_observations"], list)
+        assert len(data["scroll_observations"]) == 1
+        per_screen = data["screens"]["scr_v2"]
+        for key in (
+            "elements",
+            "interactable_elements",
+            "structural_fingerprint",
+            "functional_fingerprint",
+            "state_id",
+            "text_state_id",
+            "compact_tree_text",
+            "screen_quality",
+            "page_title",
+        ):
+            assert key in per_screen, key
+        sq = per_screen["screen_quality"]
+        assert sq["total_elements"] == len(scr.elements)
+        assert sq["interactable_count"] == 2
+        assert isinstance(per_screen["elements"], list)
+        assert len(per_screen["elements"]) == len(scr.elements)
+
+
+class TestFsmBuilderBackwardCompat:
+    def test_builder_builds_from_v2_trace(self, explorer: AppExplorer, tmp_path: Path) -> None:
+        from vigil.neuro.fsm_builder import FsmBuilder
+
+        scr_src = _screen_with_clickables("scr_src", ["a:id/wifi"], scrollable=False)
+        scr_tgt = _screen_with_clickables("scr_tgt", ["a:id/saved"], scrollable=False)
+        # Force distinct activity names so the two screens hash to different state_ids.
+        scr_src.activity_name = "Settings"
+        scr_tgt.activity_name = "WifiSettings"
+
+        action = _build_interact_action(scr_src.elements[0], scr_src.elements)
+        trace = ExplorationTrace(
+            step_number=1,
+            source_state_id=scr_src.get_hybrid_state_id("com.android.settings"),
+            intended_source_state_id=scr_src.get_hybrid_state_id("com.android.settings"),
+            source_screen_id="scr_src",
+            action=action,
+            target_state_id=scr_tgt.get_hybrid_state_id("com.android.settings"),
+            target_screen_id="scr_tgt",
+            timestamp="2026-05-15T00:00:00",
+        )
+        result = ExplorationResult(
+            app_package="com.android.settings",
+            screens={"scr_src": scr_src, "scr_tgt": scr_tgt},
+            traces=[trace],
+            total_steps=1,
+            unique_screens=2,
+            output_dir=str(tmp_path),
+        )
+        explorer._save_result(result)
+        trace_files = sorted((tmp_path / "traces").glob("exploration_*.json"))
+        assert trace_files
+        builder = FsmBuilder(app_package="com.android.settings")
+        fsm = builder.build_from_trace(trace_files[-1])
+        assert len(fsm.states) >= 1
+        # The recorded trace should produce at least one transition.
+        assert len(fsm.transitions) >= 1
