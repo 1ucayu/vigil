@@ -16,7 +16,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from vigil.core.config import VerificationConfig
-from vigil.models.fsm import AppFSM
+from vigil.models.fsm import AppFSM, TransitionLookupStatus
 from vigil.models.state import RawScreen
 from vigil.symbolic.state_locator import LocateResult, StateLocator
 
@@ -34,11 +34,15 @@ class VerifyReason(StrEnum):
 
     TRANSITION_VALID = "transition_valid"
     TRANSITION_INVALID = "transition_not_in_fsm"
+    ACTION_AMBIGUOUS = "action_ambiguous"
     STATE_UNKNOWN = "state_unknown"
     GOAL_UNREACHABLE = "goal_unreachable"
     LOW_CONFIDENCE = "low_confidence"
     STATE_SIMILAR = "state_similar_fuzzy_match"
     GUARD_FAILED = "guard_failed"
+    GUARD_INCONCLUSIVE = "guard_inconclusive"
+    INVARIANT_FAILED = "invariant_failed"
+    INVARIANT_INCONCLUSIVE = "invariant_inconclusive"
     LLM_FALLBACK = "llm_fallback"
 
 
@@ -139,8 +143,16 @@ class FsmChecker:
         Returns:
             VerificationOutput with decision and reasoning.
         """
-        # 1. Transition validity
-        if not self._fsm.is_valid_transition(current_state_id, proposed_action):
+        # 1. Transition validity and action identity resolution
+        lookup = self._fsm.resolve_transition(current_state_id, proposed_action)
+        if lookup.status is TransitionLookupStatus.UNCERTAIN:
+            return VerificationOutput(
+                result=VerifyResult.UNCERTAIN,
+                reason=VerifyReason.ACTION_AMBIGUOUS,
+                current_state_id=current_state_id,
+                details=lookup.details,
+            )
+        if lookup.status is not TransitionLookupStatus.MATCH:
             return VerificationOutput(
                 result=VerifyResult.DENY,
                 reason=VerifyReason.TRANSITION_INVALID,
@@ -152,7 +164,7 @@ class FsmChecker:
             )
 
         # 2. Get target state
-        target_id = self._fsm.get_transition_target(current_state_id, proposed_action)
+        target_id = lookup.target_state_id
 
         # 3. Goal reachability
         if (
@@ -169,7 +181,7 @@ class FsmChecker:
             )
 
         # 4. Confidence check
-        transition = self._fsm.get_transition(current_state_id, proposed_action)
+        transition = lookup.transition
         confidence = transition.confidence if transition else 0.0
         if confidence < self._confidence_threshold:
             return VerificationOutput(

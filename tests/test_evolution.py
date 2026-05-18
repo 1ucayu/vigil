@@ -392,3 +392,67 @@ class TestComputeSimilarity:
         screen = _screen("scr_new", "com.test.app.Main", "fp_wifi_new", _wifi_elements())
         result = evolver.try_evolution(screen)
         assert result.evolved is False
+
+
+# ── Low-trust inherited transitions ──────────────────────────────
+
+
+from vigil.neuro.evolution import INHERITED_TRANSITION_CONFIDENCE  # noqa: E402
+
+
+class TestInheritedConfidenceCap:
+    def test_inherited_transition_confidence_is_capped(self) -> None:
+        """Inherited edges must stay below the default 0.7 ALLOW threshold."""
+        from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
+        from vigil.models.state import RawScreen, UIElement
+        from vigil.neuro.evolution import FsmEvolver
+
+        fsm = AppFSM(app_package="com.test.app")
+        src = AbstractState(
+            state_id="s1",
+            name="Src",
+            fingerprint="fp1",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            raw_screens=["rs1"],
+        )
+        dst = AbstractState(
+            state_id="s2",
+            name="Dst",
+            fingerprint="fp2",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+        fsm.add_state(src)
+        fsm.add_state(dst)
+        # Original transition has confidence=1.0 (fully replay-validated).
+        fsm.add_transition(
+            Transition(source="s1", target="s2", action={"type": "click"}, confidence=1.0)
+        )
+
+        # Build a raw screen whose components match s1 exactly (similarity = 1.0).
+        elements = [
+            UIElement(
+                element_id="e0",
+                class_name="android.widget.TextView",
+                resource_id="rid_a",
+                depth=1,
+            ),
+            UIElement(
+                element_id="e1",
+                class_name="android.widget.Button",
+                resource_id="rid_b",
+                depth=2,
+            ),
+        ]
+        rs_known = RawScreen(screen_id="rs1", elements=elements)
+        rs_unseen = RawScreen(screen_id="rs_new", elements=elements)
+        # Force the unseen screen to a different fingerprint so inherit path runs.
+        rs_unseen.activity_name = "different"
+
+        evolver = FsmEvolver(fsm, raw_screens={"rs1": rs_known}, similarity_threshold=0.5)
+        result = evolver.try_evolution(rs_unseen)
+        assert result.evolved is True
+
+        evolved_transitions = [t for t in fsm.transitions if t.source == result.state_id]
+        assert evolved_transitions
+        for t in evolved_transitions:
+            assert t.confidence <= INHERITED_TRANSITION_CONFIDENCE

@@ -8,6 +8,7 @@ from vigil.models.fsm import (
     StateSemanticProfile,
     SubFsmTemplate,
     Transition,
+    canonical_action_key,
 )
 from vigil.models.state import UIElement
 
@@ -136,6 +137,106 @@ class TestAppFsmSerialization:
         assert len(restored.transitions) == 1
         assert restored.initial_state == "s_001"
         assert restored.states["s_001"].name == "Home"
+
+
+class TestActionIdentityMatching:
+    def _identity_fsm(self) -> AppFSM:
+        fsm = AppFSM("com.test.app")
+        fsm.add_state(_make_state("s1"))
+        fsm.add_state(_make_state("s2"))
+        fsm.add_state(_make_state("s3"))
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s2",
+                action={
+                    "type": "click",
+                    "resource_id": "com.app:id/a",
+                    "target_resource_id": "com.app:id/a",
+                    "target_text": "Alpha",
+                    "target_content_desc": "Open Alpha",
+                    "target_class": "android.widget.Button",
+                    "target_class_name": "android.widget.Button",
+                    "target_selector": {
+                        "resource_id": "com.app:id/a",
+                        "text": "Alpha",
+                        "content_description": "Open Alpha",
+                        "class_name": "android.widget.Button",
+                        "bounds": [0, 0, 10, 10],
+                    },
+                    "target": "e_a",
+                },
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s3",
+                action={
+                    "type": "click",
+                    "resource_id": "com.app:id/b",
+                    "target_resource_id": "com.app:id/b",
+                    "target_text": "Beta",
+                    "target_content_desc": "Open Beta",
+                    "target_class": "android.widget.Button",
+                    "target_class_name": "android.widget.Button",
+                    "target_selector": {
+                        "resource_id": "com.app:id/b",
+                        "text": "Beta",
+                        "content_description": "Open Beta",
+                        "class_name": "android.widget.Button",
+                        "bounds": [20, 0, 30, 10],
+                    },
+                    "target": "e_b",
+                },
+            )
+        )
+        return fsm
+
+    def test_canonical_action_key_normalizes_aliases_and_selector(self) -> None:
+        a = {
+            "type": "click",
+            "resource_id": "com.app:id/a",
+            "target_class_name": "android.widget.Button",
+            "target_selector": {
+                "resource_id": "com.app:id/a",
+                "class_name": "android.widget.Button",
+                "bounds": [0, 0, 10, 10],
+                "depth": 2,
+            },
+        }
+        b = {
+            "type": "click",
+            "target_resource_id": "com.app:id/a",
+            "target_class": "android.widget.Button",
+            "target_selector": {
+                "resource_id": "com.app:id/a",
+                "class_name": "android.widget.Button",
+                "bounds": [100, 100, 200, 200],
+                "depth": 5,
+            },
+        }
+        assert canonical_action_key(a) == canonical_action_key(b)
+
+    def test_keyed_match_uses_resource_id_not_type_only(self) -> None:
+        fsm = self._identity_fsm()
+        assert (
+            fsm.get_transition_target("s1", {"type": "click", "resource_id": "com.app:id/a"})
+            == "s2"
+        )
+        assert (
+            fsm.get_transition_target("s1", {"type": "click", "resource_id": "com.app:id/b"})
+            == "s3"
+        )
+        assert (
+            fsm.get_transition_target("s1", {"type": "click", "resource_id": "com.app:id/c"})
+            is None
+        )
+
+    def test_type_only_non_global_action_is_uncertain_when_identity_is_required(self) -> None:
+        fsm = self._identity_fsm()
+        assert fsm.is_valid_transition("s1", {"type": "click"}) is None
+        assert fsm.get_transition("s1", {"type": "click"}) is None
 
 
 # --- ContainerType ---

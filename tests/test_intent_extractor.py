@@ -345,7 +345,7 @@ class TestDecisionEngineIntegration:
 
     def test_no_extractor_falls_through(self, intent_guarded_fsm: AppFSM) -> None:
         """DecisionEngine without intent_extractor → guard with $intent
-        evaluates against empty strings → DENY (safe default)."""
+        cannot bind → UNCERTAIN (three-valued semantics)."""
         engine = DecisionEngine(intent_guarded_fsm)
         action_ctx = {"action_type": "click", "target_text": "HKU"}
         out = engine.verify_by_state(
@@ -354,10 +354,10 @@ class TestDecisionEngineIntegration:
             action_ctx=action_ctx,
             raw_instruction="Connect to HKU",
         )
-        # No extractor → intent_ctx is None → $intent.wifi_name resolves to ""
-        # action(target_text) == "" → "HKU" == "" → DENY
-        assert out.result == VerifyResult.DENY
-        assert out.reason == VerifyReason.GUARD_FAILED
+        # No extractor → intent_ctx is None → $intent.wifi_name unbound → UNKNOWN
+        # → UNCERTAIN with GUARD_INCONCLUSIVE (was previously DENY).
+        assert out.result == VerifyResult.UNCERTAIN
+        assert out.reason == VerifyReason.GUARD_INCONCLUSIVE
 
     def test_get_required_variables(self, intent_guarded_fsm: AppFSM) -> None:
         """DecisionEngine.get_required_variables delegates correctly."""

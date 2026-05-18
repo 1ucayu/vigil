@@ -97,3 +97,43 @@ class TestInvariantChecker:
             }
         )
         assert checker.check_arrival("s1", ctx) is False
+
+
+# ── Three-valued invariants ─────────────────────────────────────
+
+
+from vigil.symbolic.dsl_evaluator import DSLEvaluator  # noqa: E402
+
+
+class TestInvariantThreeValued:
+    def _fsm(self, invariants: list[str]) -> AppFSM:
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s1",
+                name="X",
+                fingerprint="fp",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                state_invariants=invariants,
+            )
+        )
+        return fsm
+
+    def test_unknown_invariant_does_not_count_as_failure(self) -> None:
+        fsm = self._fsm(["count(missing) == 4"])
+        checker = InvariantChecker(fsm, evaluator=DSLEvaluator())
+        result = checker.check_state("s1", ScreenContext())
+        # No FALSE -> all_passed stays True; UNKNOWN is reported separately.
+        assert result.all_passed is True
+        assert result.has_unknown is True
+        assert result.unknown == 1
+        assert result.failed == 0
+
+    def test_false_invariant_dominates_unknown(self) -> None:
+        fsm = self._fsm(["count(missing) == 4", "count(present) == 4"])
+        checker = InvariantChecker(fsm, evaluator=DSLEvaluator())
+        ctx = ScreenContext(elements={"present": {"children_count": 3}})
+        result = checker.check_state("s1", ctx)
+        assert result.failed == 1
+        assert result.unknown == 1
+        assert result.all_passed is False

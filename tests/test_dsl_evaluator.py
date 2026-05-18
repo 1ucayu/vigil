@@ -379,3 +379,58 @@ class TestCombinedNewPredicates:
             action_ctx=action,
         )
         assert r.passed is True
+
+
+# ── Three-valued evaluation (TRUE / FALSE / UNKNOWN) ─────────────
+
+
+from vigil.symbolic.dsl_evaluator import GuardStatus  # noqa: E402
+
+
+class TestThreeValuedEvaluation:
+    def setup_method(self) -> None:
+        self.ev = DSLEvaluator()
+
+    def test_proven_true(self) -> None:
+        ctx = ScreenContext(elements={"item": {"text": "hi"}})
+        r = self.ev.evaluate('read(item, text) == "hi"', screen_ctx=ctx)
+        assert r.status is GuardStatus.TRUE
+        assert r.passed is True
+
+    def test_proven_false(self) -> None:
+        ctx = ScreenContext(elements={"item": {"text": "hi"}})
+        r = self.ev.evaluate('read(item, text) == "bye"', screen_ctx=ctx)
+        assert r.status is GuardStatus.FALSE
+        assert r.passed is False
+
+    def test_missing_element_unknown(self) -> None:
+        r = self.ev.evaluate('read(missing, text) == "x"', screen_ctx=ScreenContext())
+        assert r.status is GuardStatus.UNKNOWN
+        assert r.passed is False
+        assert "Inconclusive" in r.failure_reason
+
+    def test_missing_intent_var_unknown(self) -> None:
+        ctx = ScreenContext(elements={"item": {"text": "x"}})
+        intent = IntentContext(variables={})  # var not bound
+        r = self.ev.evaluate("read(item, text) == $intent.name", intent_ctx=intent, screen_ctx=ctx)
+        assert r.status is GuardStatus.UNKNOWN
+
+    def test_parse_error_unknown(self) -> None:
+        r = self.ev.evaluate("!!@@ not valid")
+        assert r.status is GuardStatus.UNKNOWN
+
+    def test_and_unknown_false_is_false(self) -> None:
+        ctx = ScreenContext(elements={"x": {"text": "hi"}})
+        # left is FALSE (proven), right is UNKNOWN (missing element)
+        r = self.ev.evaluate('read(x, text) == "no" && read(missing, text) == "y"', screen_ctx=ctx)
+        assert r.status is GuardStatus.FALSE
+
+    def test_or_true_unknown_is_true(self) -> None:
+        ctx = ScreenContext(elements={"x": {"text": "hi"}})
+        r = self.ev.evaluate('read(x, text) == "hi" || read(missing, text) == "y"', screen_ctx=ctx)
+        assert r.status is GuardStatus.TRUE
+
+    def test_and_true_unknown_is_unknown(self) -> None:
+        ctx = ScreenContext(elements={"x": {"text": "hi"}})
+        r = self.ev.evaluate('read(x, text) == "hi" && read(missing, text) == "y"', screen_ctx=ctx)
+        assert r.status is GuardStatus.UNKNOWN

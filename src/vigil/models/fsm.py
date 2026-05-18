@@ -7,6 +7,8 @@ methods for state/transition management, structural verification, and serializat
 from __future__ import annotations
 
 import json
+from collections.abc import Hashable
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -44,6 +46,144 @@ class ContainerType(StrEnum):
     STATIC = "static"
     DYNAMIC = "dynamic"
     NONE = "none"
+
+
+class TransitionLookupStatus(StrEnum):
+    """Result of resolving an action against a state's outgoing transitions."""
+
+    MATCH = "match"
+    NO_MATCH = "no_match"
+    UNCERTAIN = "uncertain"
+
+
+_GLOBAL_ACTION_TYPES = frozenset({"navigate_back", "navigate_home"})
+_ACTION_KEY_FIELDS = (
+    "type",
+    "target",
+    "resource_id",
+    "target_resource_id",
+    "target_text",
+    "target_content_desc",
+    "target_class",
+    "target_class_name",
+    "target_selector",
+    "text",
+    "value",
+)
+_ACTION_IDENTITY_FIELDS = tuple(k for k in _ACTION_KEY_FIELDS if k != "type")
+_SELECTOR_IDENTITY_FIELDS = (
+    "resource_id",
+    "text",
+    "content_description",
+    "nearby_text",
+    "class_name",
+    "ancestor_chain",
+)
+
+
+def _normalize_action_value(value: Any) -> Hashable | None:
+    """Normalize action identity values; empty strings/containers mean absent."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value if value else None
+    if isinstance(value, list | tuple):
+        normalized = tuple(_normalize_action_value(v) for v in value)
+        return normalized if any(v is not None for v in normalized) else None
+    if isinstance(value, dict):
+        normalized_items = tuple(
+            sorted((str(k), _normalize_action_value(v)) for k, v in value.items())
+        )
+        return normalized_items if any(v is not None for _, v in normalized_items) else None
+    if isinstance(value, bool | int | float):
+        return value
+    return str(value)
+
+
+def _selector_signature(selector: Any) -> Hashable | None:
+    """Stable selector identity; debug-only bounds/depth are intentionally excluded."""
+    if not isinstance(selector, dict) or not selector:
+        return None
+    parts = tuple(
+        (field, _normalize_action_value(selector.get(field))) for field in _SELECTOR_IDENTITY_FIELDS
+    )
+    return parts if any(value is not None for _, value in parts) else None
+
+
+def _first_present(*values: Any) -> Hashable | None:
+    for value in values:
+        normalized = _normalize_action_value(value)
+        if normalized is not None:
+            return normalized
+    return None
+
+
+def _canonical_action_mapping(action: dict[str, Any]) -> dict[str, Hashable | None]:
+    """Normalize every stable serialized action identity field into one mapping."""
+    selector = action.get("target_selector") or {}
+    selector_map = selector if isinstance(selector, dict) else {}
+
+    resource_id = _first_present(
+        action.get("resource_id"),
+        action.get("target_resource_id"),
+        selector_map.get("resource_id"),
+    )
+    target_resource_id = _first_present(
+        action.get("target_resource_id"),
+        action.get("resource_id"),
+        selector_map.get("resource_id"),
+    )
+    target_class = _first_present(
+        action.get("target_class"),
+        action.get("target_class_name"),
+        action.get("class_name"),
+        selector_map.get("class_name"),
+    )
+    target_class_name = _first_present(
+        action.get("target_class_name"),
+        action.get("target_class"),
+        action.get("class_name"),
+        selector_map.get("class_name"),
+    )
+    text = _first_present(action.get("text"), action.get("value"))
+    value = _first_present(action.get("value"), action.get("text"))
+
+    return {
+        "type": _first_present(action.get("type"), action.get("action_type")),
+        "target": _first_present(action.get("target")),
+        "resource_id": resource_id,
+        "target_resource_id": target_resource_id,
+        "target_text": _first_present(
+            action.get("target_text"),
+            selector_map.get("text"),
+            selector_map.get("nearby_text"),
+        ),
+        "target_content_desc": _first_present(
+            action.get("target_content_desc"),
+            selector_map.get("content_description"),
+        ),
+        "target_class": target_class,
+        "target_class_name": target_class_name,
+        "target_selector": _selector_signature(selector),
+        "text": text,
+        "value": value,
+    }
+
+
+def canonical_action_key(action: dict[str, Any]) -> tuple[tuple[str, Hashable | None], ...]:
+    """Canonical signature for serialized FSM action identity.
+
+    Bounds are excluded because ``Action`` marks them as volatile capture-local
+    hints. Resource-id/text/class aliases are filled in both directions so
+    actions serialized by different pipeline stages still compare by the same
+    logical identity.
+    """
+    mapping = _canonical_action_mapping(action)
+    return tuple((field, mapping[field]) for field in _ACTION_KEY_FIELDS)
+
+
+def _identity_fields(action_key: dict[str, Hashable | None]) -> set[str]:
+    return {field for field in _ACTION_IDENTITY_FIELDS if action_key.get(field) is not None}
 
 
 class StateSemanticProfile(BaseModel):
@@ -119,6 +259,16 @@ class Transition(BaseModel):
     observed_count: int = 0
 
 
+@dataclass(frozen=True)
+class TransitionLookup:
+    """Resolved transition plus ambiguity status for action identity matching."""
+
+    status: TransitionLookupStatus
+    transition: Transition | None = None
+    target_state_id: str | None = None
+    details: str = ""
+
+
 class SubFsmTemplate(BaseModel):
     """Parameterized sub-FSM for dynamic container item detail pages.
 
@@ -173,32 +323,124 @@ class AppFSM:
             observed_count=transition.observed_count,
         )
 
-    def is_valid_transition(self, from_state: str, action: dict[str, Any]) -> bool:
-        """Check if an action is a valid transition from the given state (Tier 1).
+    @staticmethod
+    def _compatible_with_proposed_identity(
+        stored_key: dict[str, Hashable | None],
+        proposed_key: dict[str, Hashable | None],
+        proposed_fields: set[str],
+    ) -> bool:
+        """True when all identity fields supplied by the proposal agree."""
+        return all(stored_key.get(field) == proposed_key.get(field) for field in proposed_fields)
 
-        For DYNAMIC container states with a sub_fsm_template, click actions are
-        validated against the template's entry transition pattern (any click is
-        valid since items are parameterized), not just exact graph edges.
-        """
+    def resolve_transition(self, from_state: str, action: dict[str, Any]) -> TransitionLookup:
+        """Resolve an action to a transition, preserving ambiguity as UNCERTAIN."""
         if from_state not in self.graph:
-            return False
-        action_type = action.get("type")
+            return TransitionLookup(
+                status=TransitionLookupStatus.NO_MATCH,
+                details=f"State {from_state} is not in the FSM",
+            )
 
-        for _, _, edge_data in self.graph.out_edges(from_state, data=True):
-            if edge_data.get("action", {}).get("type") == action_type:
-                return True
+        proposed_key = _canonical_action_mapping(action)
+        proposed_type = proposed_key.get("type")
+        same_type = [
+            t
+            for t in self.transitions
+            if t.source == from_state
+            and _canonical_action_mapping(t.action).get("type") == proposed_type
+        ]
+        proposed_fields = _identity_fields(proposed_key)
+        is_global = proposed_type in _GLOBAL_ACTION_TYPES
+        if not proposed_fields and len(same_type) > 1 and not is_global:
+            return TransitionLookup(
+                status=TransitionLookupStatus.UNCERTAIN,
+                details=(
+                    f"Action type {proposed_type!r} lacks target identity; "
+                    f"{len(same_type)} outgoing transitions share that type"
+                ),
+            )
+
+        exact_matches = [
+            t for t in same_type if canonical_action_key(t.action) == canonical_action_key(action)
+        ]
+        if len(exact_matches) == 1:
+            t = exact_matches[0]
+            return TransitionLookup(
+                status=TransitionLookupStatus.MATCH,
+                transition=t,
+                target_state_id=t.target,
+            )
+        if len(exact_matches) > 1:
+            return TransitionLookup(
+                status=TransitionLookupStatus.UNCERTAIN,
+                details="Multiple transitions share the same canonical action key",
+            )
+
+        if not proposed_fields and same_type and not is_global:
+            return TransitionLookup(
+                status=TransitionLookupStatus.UNCERTAIN,
+                details=(
+                    f"Action type {proposed_type!r} lacks target identity; "
+                    "cannot bind it to a non-global transition"
+                ),
+            )
+
+        if proposed_fields:
+            compatible = [
+                t
+                for t in same_type
+                if self._compatible_with_proposed_identity(
+                    _canonical_action_mapping(t.action), proposed_key, proposed_fields
+                )
+            ]
+            if len(compatible) == 1:
+                t = compatible[0]
+                return TransitionLookup(
+                    status=TransitionLookupStatus.MATCH,
+                    transition=t,
+                    target_state_id=t.target,
+                )
+            if len(compatible) > 1:
+                return TransitionLookup(
+                    status=TransitionLookupStatus.UNCERTAIN,
+                    details=(
+                        f"Action identity for type {proposed_type!r} matches "
+                        f"{len(compatible)} outgoing transitions"
+                    ),
+                )
 
         state = self.states.get(from_state)
         if (
             state
             and state.sub_fsm_template_id
             and state.container_type == ContainerType.DYNAMIC
-            and action_type == "click"
+            and proposed_type == "click"
+            and self.sub_fsm_templates.get(state.sub_fsm_template_id)
         ):
-            tmpl = self.sub_fsm_templates.get(state.sub_fsm_template_id)
-            if tmpl:
-                return True
+            return TransitionLookup(
+                status=TransitionLookupStatus.MATCH,
+                details="Matched dynamic container sub-FSM template",
+            )
 
+        return TransitionLookup(
+            status=TransitionLookupStatus.NO_MATCH,
+            details=f"No transition from {from_state} matches action {action}",
+        )
+
+    def is_valid_transition(self, from_state: str, action: dict[str, Any]) -> bool | None:
+        """Check if an action is a valid transition from the given state (Tier 1).
+
+        For DYNAMIC container states with a sub_fsm_template, click actions are
+        validated against the template's entry transition pattern (any click is
+        valid since items are parameterized), not just exact graph edges.
+
+        Returns True for a resolved transition, False for a proven miss, and
+        None when the action identity is insufficient to choose one transition.
+        """
+        lookup = self.resolve_transition(from_state, action)
+        if lookup.status is TransitionLookupStatus.MATCH:
+            return True
+        if lookup.status is TransitionLookupStatus.UNCERTAIN:
+            return None
         return False
 
     def is_reachable(self, from_state: str, goal_state: str) -> bool:
@@ -217,21 +459,13 @@ class AppFSM:
 
     def get_transition_target(self, from_state: str, action: dict[str, Any]) -> str | None:
         """Get the target state for a given action from a state."""
-        if from_state not in self.graph:
-            return None
-        action_type = action.get("type")
-        for _, target, edge_data in self.graph.out_edges(from_state, data=True):
-            if edge_data.get("action", {}).get("type") == action_type:
-                return target
-        return None
+        lookup = self.resolve_transition(from_state, action)
+        return lookup.target_state_id if lookup.status is TransitionLookupStatus.MATCH else None
 
     def get_transition(self, from_state: str, action: dict[str, Any]) -> Transition | None:
         """Get the Transition object for a given action from a state."""
-        action_type = action.get("type")
-        for t in self.transitions:
-            if t.source == from_state and t.action.get("type") == action_type:
-                return t
-        return None
+        lookup = self.resolve_transition(from_state, action)
+        return lookup.transition if lookup.status is TransitionLookupStatus.MATCH else None
 
     def find_similar_state(self, fingerprint: str, threshold: float = 0.85) -> str | None:
         """Find the most similar existing state by fingerprint (for Tier 3 evolution).

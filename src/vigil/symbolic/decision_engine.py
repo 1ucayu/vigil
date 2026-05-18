@@ -20,7 +20,12 @@ from loguru import logger
 from vigil.core.config import VerificationConfig
 from vigil.models.fsm import AppFSM
 from vigil.models.state import RawScreen
-from vigil.symbolic.dsl_evaluator import DSLEvaluator, IntentContext, ScreenContext
+from vigil.symbolic.dsl_evaluator import (
+    DSLEvaluator,
+    GuardStatus,
+    IntentContext,
+    ScreenContext,
+)
 from vigil.symbolic.fsm_checker import (
     FsmChecker,
     VerificationOutput,
@@ -28,6 +33,7 @@ from vigil.symbolic.fsm_checker import (
     VerifyResult,
 )
 from vigil.symbolic.intent_extractor import IntentExtractor
+from vigil.symbolic.invariant_checker import InvariantChecker
 from vigil.symbolic.llm_fallback import LlmFallback
 
 
@@ -63,10 +69,12 @@ class DecisionEngine:
         self._fsm = fsm
         self._checker = FsmChecker(fsm, config)
         self._evaluator: DSLEvaluator | None = None
+        self._invariant_checker: InvariantChecker | None = None
         self._intent_extractor = intent_extractor
         self._llm_fallback = llm_fallback
         try:
             self._evaluator = DSLEvaluator(grammar_path)
+            self._invariant_checker = InvariantChecker(fsm, evaluator=self._evaluator)
         except Exception:
             logger.warning("DSLEvaluator init failed — Tier 2 disabled")
 
@@ -105,36 +113,28 @@ class DecisionEngine:
         if self._evaluator is None or tier1_result.current_state_id is None:
             return tier1_result
 
-        transition = self._fsm.get_transition(tier1_result.current_state_id, proposed_action)
-        if transition is None or transition.guard is None:
-            return tier1_result
+        screen_ctx = self._build_screen_context(current_screen)
+        action_ctx = self._build_action_context(proposed_action, current_screen)
 
-        # Auto-extract intent if needed
+        transition = self._fsm.get_transition(tier1_result.current_state_id, proposed_action)
         intent_ctx = self._resolve_intent(
             intent_ctx, raw_instruction, tier1_result.current_state_id
         )
 
-        screen_ctx = self._build_screen_context(current_screen)
-        action_ctx = self._build_action_context(proposed_action, current_screen)
-
-        guard_result = self._evaluator.evaluate(
-            transition.guard,
-            intent_ctx=intent_ctx,
-            screen_ctx=screen_ctx,
-            action_ctx=action_ctx,
-        )
-
-        if not guard_result.passed:
-            return VerificationOutput(
-                result=VerifyResult.DENY,
-                reason=VerifyReason.GUARD_FAILED,
-                current_state_id=tier1_result.current_state_id,
-                target_state_id=tier1_result.target_state_id,
-                confidence=tier1_result.confidence,
-                details=(
-                    f"Guard failed: {guard_result.guard_expression} → {guard_result.failure_reason}"
-                ),
+        if transition is not None and transition.guard is not None:
+            guard_result = self._evaluator.evaluate(
+                transition.guard,
+                intent_ctx=intent_ctx,
+                screen_ctx=screen_ctx,
+                action_ctx=action_ctx,
             )
+            routed = self._route_guard_result(guard_result, tier1_result)
+            if routed is not None:
+                if routed.result == VerifyResult.UNCERTAIN:
+                    return self._apply_llm_fallback(
+                        routed, current_screen, proposed_action, raw_instruction
+                    )
+                return routed
 
         return tier1_result
 
@@ -176,35 +176,60 @@ class DecisionEngine:
             return tier1_result
 
         transition = self._fsm.get_transition(current_state_id, proposed_action)
-        if transition is None or transition.guard is None:
-            return tier1_result
-
-        # Auto-extract intent if needed
         intent_ctx = self._resolve_intent(intent_ctx, raw_instruction, current_state_id)
 
         if screen_ctx is None:
             screen_ctx = ScreenContext()
 
-        guard_result = self._evaluator.evaluate(
-            transition.guard,
-            intent_ctx=intent_ctx,
-            screen_ctx=screen_ctx,
-            action_ctx=action_ctx,
-        )
-
-        if not guard_result.passed:
-            return VerificationOutput(
-                result=VerifyResult.DENY,
-                reason=VerifyReason.GUARD_FAILED,
-                current_state_id=tier1_result.current_state_id,
-                target_state_id=tier1_result.target_state_id,
-                confidence=tier1_result.confidence,
-                details=(
-                    f"Guard failed: {guard_result.guard_expression} → {guard_result.failure_reason}"
-                ),
+        if transition is not None and transition.guard is not None:
+            guard_result = self._evaluator.evaluate(
+                transition.guard,
+                intent_ctx=intent_ctx,
+                screen_ctx=screen_ctx,
+                action_ctx=action_ctx,
             )
+            routed = self._route_guard_result(guard_result, tier1_result)
+            if routed is not None:
+                if routed.result == VerifyResult.UNCERTAIN:
+                    return self._apply_llm_fallback(routed, None, proposed_action, raw_instruction)
+                return routed
 
         return tier1_result
+
+    def post_arrival_check(
+        self,
+        target_state_id: str,
+        observed_target_screen: RawScreen,
+        intent: IntentContext | None = None,
+    ) -> VerificationOutput:
+        """Check target-state invariants after the target screen is observed.
+
+        Pre-action verification cannot read successor-only UI elements. This
+        method is the public post-arrival hook for enforcing state invariants
+        once the caller supplies the observed target screen.
+        """
+        del intent  # State invariants currently read screen state only.
+        if target_state_id not in self._fsm.states:
+            return VerificationOutput(
+                result=VerifyResult.UNCERTAIN,
+                reason=VerifyReason.STATE_UNKNOWN,
+                target_state_id=target_state_id,
+                details=f"Target state {target_state_id} is not in the FSM",
+            )
+
+        screen_ctx = self._build_screen_context(observed_target_screen)
+        invariant_result = self._check_invariants(
+            target_state_id=target_state_id,
+            screen_ctx=screen_ctx,
+        )
+        if invariant_result is not None:
+            return invariant_result
+        return VerificationOutput(
+            result=VerifyResult.ALLOW,
+            reason=VerifyReason.TRANSITION_VALID,
+            target_state_id=target_state_id,
+            details=f"All invariants passed for {target_state_id}",
+        )
 
     def get_required_variables(self, state_id: str) -> set[str]:
         """Get $intent.* variable names needed by a state's outgoing guards.
@@ -218,6 +243,78 @@ class DecisionEngine:
             Set of variable names (without $intent. prefix).
         """
         return IntentExtractor.collect_required_variables(self._fsm, state_id)
+
+    def _route_guard_result(
+        self,
+        guard_result: Any,
+        tier1_result: VerificationOutput,
+    ) -> VerificationOutput | None:
+        """Map a three-valued GuardResult to a VerificationOutput.
+
+        Returns None when the guard is TRUE (ALLOW preserved upstream),
+        DENY when FALSE, UNCERTAIN when UNKNOWN.
+        """
+        if guard_result.status is GuardStatus.TRUE:
+            return None
+        if guard_result.status is GuardStatus.UNKNOWN:
+            return VerificationOutput(
+                result=VerifyResult.UNCERTAIN,
+                reason=VerifyReason.GUARD_INCONCLUSIVE,
+                current_state_id=tier1_result.current_state_id,
+                target_state_id=tier1_result.target_state_id,
+                confidence=tier1_result.confidence,
+                details=(
+                    f"Guard inconclusive: {guard_result.guard_expression}"
+                    f" — {guard_result.failure_reason}"
+                ),
+            )
+        return VerificationOutput(
+            result=VerifyResult.DENY,
+            reason=VerifyReason.GUARD_FAILED,
+            current_state_id=tier1_result.current_state_id,
+            target_state_id=tier1_result.target_state_id,
+            confidence=tier1_result.confidence,
+            details=(
+                f"Guard failed: {guard_result.guard_expression} → {guard_result.failure_reason}"
+            ),
+        )
+
+    def _check_invariants(
+        self,
+        target_state_id: str,
+        screen_ctx: ScreenContext,
+    ) -> VerificationOutput | None:
+        """Enforce invariant map I on an observed state.
+
+        Skipped when no invariant checker is configured. Returns None when all
+        invariants hold (TRUE) or none exist, DENY on any FALSE,
+        UNCERTAIN on any UNKNOWN (with no FALSE).
+        """
+        if self._invariant_checker is None:
+            return None
+        target_state = self._fsm.states.get(target_state_id)
+        if target_state is None or not target_state.state_invariants:
+            return None
+
+        inv = self._invariant_checker.check_state(target_state_id, screen_ctx)
+        if inv.failed > 0:
+            first_expr, first_reason = inv.failed_invariants[0]
+            return VerificationOutput(
+                result=VerifyResult.DENY,
+                reason=VerifyReason.INVARIANT_FAILED,
+                target_state_id=target_state_id,
+                details=f"Invariant failed on {target_state_id}: {first_expr} — {first_reason}",
+            )
+        if inv.unknown > 0:
+            first_expr, first_reason = inv.unknown_invariants[0]
+            return VerificationOutput(
+                result=VerifyResult.UNCERTAIN,
+                reason=VerifyReason.INVARIANT_INCONCLUSIVE,
+                target_state_id=target_state_id,
+                details=f"Invariant inconclusive on {target_state_id}:"
+                f" {first_expr} — {first_reason}",
+            )
+        return None
 
     def _apply_llm_fallback(
         self,

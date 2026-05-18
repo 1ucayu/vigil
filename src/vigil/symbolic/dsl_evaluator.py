@@ -3,12 +3,18 @@
 Evaluates DSL guard expressions against the current screen state using the Lark
 parser (docs/dsl_grammar.lark). Guard templates are cached offline; parameters
 are bound at runtime from user intent.
+
+Evaluation is three-valued (TRUE / FALSE / UNKNOWN) to match the paper model:
+proven-false predicates are distinguishable from those the verifier cannot
+read (missing element, unbound $intent variable, parse failure, type-coercion
+failure, etc.). UNKNOWN routes to UNCERTAIN at the DecisionEngine layer rather
+than collapsing to FALSE.
 """
 
 from __future__ import annotations
 
 import operator
-import re
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -46,17 +52,27 @@ class ScreenContext(BaseModel):
     current_state: str | None = None
 
 
+class GuardStatus(StrEnum):
+    """Three-valued evaluation result for a DSL guard or invariant."""
+
+    TRUE = "true"
+    FALSE = "false"
+    UNKNOWN = "unknown"
+
+
 class GuardResult(BaseModel):
     """Result of evaluating a DSL guard.
 
     Attributes:
-        passed: Whether the guard evaluated to True.
+        status: TRUE, FALSE, or UNKNOWN.
+        passed: Backward-compat boolean (True iff status is TRUE).
         guard_expression: The original guard expression.
         bound_expression: The expression after $intent.* substitution.
-        failure_reason: Why the guard failed (empty if passed).
+        failure_reason: Why the guard failed or is unknown (empty if passed).
     """
 
-    passed: bool
+    status: GuardStatus = GuardStatus.FALSE
+    passed: bool = False
     guard_expression: str
     bound_expression: str
     failure_reason: str = ""
@@ -72,8 +88,24 @@ _OPS: dict[str, Any] = {
     "<=": operator.le,
 }
 
-# Pattern for $intent.variable_name placeholders (used by bind_intent for display)
-_INTENT_PATTERN = re.compile(r"\$intent\.([a-zA-Z_][a-zA-Z0-9_]*)")
+
+class _Unknown:
+    """Sentinel value representing an inconclusive predicate result."""
+
+    __slots__ = ("reason",)
+
+    def __init__(self, reason: str = "") -> None:
+        self.reason = reason
+
+    def __bool__(self) -> bool:  # pragma: no cover — guarded by callers
+        return False
+
+    def __repr__(self) -> str:
+        return f"<UNKNOWN: {self.reason}>"
+
+
+def _is_unknown(v: Any) -> bool:
+    return isinstance(v, _Unknown)
 
 
 _STRUCTURAL_TOKENS = frozenset(
@@ -103,9 +135,11 @@ def _filter_named(args: list[Any]) -> list[Any]:
 class _GuardEvaluator(Transformer):
     """Lark Transformer that evaluates a parsed guard tree against screen context.
 
-    Uses keep_all_tokens=True so we can distinguish && from ||.
-    Structural tokens (parentheses, commas) are filtered in each handler.
-    $intent.* tokens (INTENT_VAR) are resolved from intent_ctx during evaluation.
+    Each predicate handler returns either True, False, or `_Unknown(reason)`.
+    Combiner rules (`guard`) implement three-valued logic:
+      UNKNOWN && False -> False;  UNKNOWN && True -> UNKNOWN
+      UNKNOWN || True  -> True;   UNKNOWN || False -> UNKNOWN
+      !UNKNOWN -> UNKNOWN
     """
 
     def __init__(
@@ -119,146 +153,172 @@ class _GuardEvaluator(Transformer):
         self._intent = intent_ctx
         self._action = action_ctx
 
-    def start(self, args: list[Any]) -> bool:
+    def start(self, args: list[Any]) -> Any:
         return args[0]
 
-    def guard(self, args: list[Any]) -> bool:
-        # Check for && / || / ! among the raw tokens
+    def guard(self, args: list[Any]) -> Any:
         token_strs = [str(a) for a in args if isinstance(a, Token)]
+        filtered = _filter_named(args)
 
         if "!" in token_strs:
-            # "!" predicate — negate the predicate result
-            filtered = _filter_named(args)
-            return not bool(filtered[0]) if filtered else False
+            if not filtered:
+                return _Unknown("empty negation")
+            v = filtered[0]
+            if _is_unknown(v):
+                return v
+            return not bool(v)
 
         if "&&" in token_strs:
-            filtered = _filter_named(args)
-            return bool(filtered[0]) and bool(filtered[1])
+            if len(filtered) < 2:
+                return _Unknown("malformed conjunction")
+            a, b = filtered[0], filtered[1]
+            # Three-valued AND
+            if a is False or b is False:
+                return False
+            if _is_unknown(a) or _is_unknown(b):
+                return _Unknown("conjunction has UNKNOWN operand")
+            return bool(a) and bool(b)
 
         if "||" in token_strs:
-            filtered = _filter_named(args)
-            return bool(filtered[0]) or bool(filtered[1])
+            if len(filtered) < 2:
+                return _Unknown("malformed disjunction")
+            a, b = filtered[0], filtered[1]
+            if a is True or b is True:
+                return True
+            if _is_unknown(a) or _is_unknown(b):
+                return _Unknown("disjunction has UNKNOWN operand")
+            return bool(a) or bool(b)
 
         # Single predicate or parenthesized guard
-        filtered = _filter_named(args)
-        return bool(filtered[0]) if filtered else False
+        return filtered[0] if filtered else _Unknown("empty guard")
 
-    def predicate(self, args: list[Any]) -> bool:
+    def predicate(self, args: list[Any]) -> Any:
         return args[0]
 
-    def read_pred(self, args: list[Any]) -> bool:
+    def read_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
-        # named = [ELEMENT, PROPERTY, OP, VALUE]
         if len(named) < 4:
-            return False
+            return _Unknown("malformed read predicate")
         element_name = str(named[0])
         prop_name = str(named[1])
         op_str = str(named[2])
         expected = self._parse_value(named[3])
+        if _is_unknown(expected):
+            return expected
 
-        actual = self._read_element(element_name, prop_name)
-        if actual is None:
-            return False
+        el = self._ctx.elements.get(element_name)
+        if el is None:
+            return _Unknown(f"element '{element_name}' not present on screen")
+        if prop_name not in el:
+            return _Unknown(f"property '{prop_name}' not readable on '{element_name}'")
+        actual = el.get(prop_name)
         return self._compare(actual, op_str, expected)
 
-    def value_pred(self, args: list[Any]) -> bool:
+    def value_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
-        # named = [ELEMENT, OP, VALUE]
         if len(named) < 3:
-            return False
+            return _Unknown("malformed value predicate")
         element_name = str(named[0])
         op_str = str(named[1])
         expected = self._parse_value(named[2])
+        if _is_unknown(expected):
+            return expected
 
-        actual = self._read_element(element_name, "value")
-        if actual is None:
-            return False
+        el = self._ctx.elements.get(element_name)
+        if el is None:
+            return _Unknown(f"element '{element_name}' not present on screen")
+        if "value" not in el and "text" not in el:
+            return _Unknown(f"no value on '{element_name}'")
+        actual = el.get("value", el.get("text"))
         return self._compare(actual, op_str, expected)
 
-    def time_pred(self, args: list[Any]) -> bool:
+    def time_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
         if len(named) < 2:
-            return False
+            return _Unknown("malformed time_in predicate")
         start_time = str(named[0])
         end_time = str(named[1])
         current = self._ctx.current_time
         if current is None:
-            return False
+            return _Unknown("current_time not provided")
         return start_time <= current <= end_time
 
-    def state_pred(self, args: list[Any]) -> bool:
+    def state_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
         if not named:
-            return False
+            return _Unknown("malformed in_state predicate")
         expected_state = str(named[0])
+        if self._ctx.current_state is None:
+            return _Unknown("current_state not provided")
         return self._ctx.current_state == expected_state
 
-    def contains_pred(self, args: list[Any]) -> bool:
+    def contains_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
-        # named = [ELEMENT, VALUE]
         if len(named) < 2:
-            return False
+            return _Unknown("malformed contains predicate")
         element_name = str(named[0])
         search_value = self._parse_value(named[1])
+        if _is_unknown(search_value):
+            return search_value
 
         el = self._ctx.elements.get(element_name)
         if el is None:
-            return False
-        # Check children list first (for list containers)
+            return _Unknown(f"element '{element_name}' not present on screen")
         children = el.get("children", [])
         if children:
             return any(child.get("text") == search_value for child in children)
-        # Fallback: check element's own text content
-        text = el.get("text", "")
+        text = el.get("text")
+        if text is None:
+            return _Unknown(f"no text on '{element_name}'")
         return str(search_value) in text
 
-    def count_pred(self, args: list[Any]) -> bool:
+    def count_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
-        # named = [ELEMENT, OP, VALUE]
         if len(named) < 3:
-            return False
+            return _Unknown("malformed count predicate")
         element_name = str(named[0])
         op_str = str(named[1])
         expected = self._parse_value(named[2])
+        if _is_unknown(expected):
+            return expected
 
         el = self._ctx.elements.get(element_name)
         if el is None:
-            return False
+            return _Unknown(f"element '{element_name}' not present on screen")
+        if "children_count" not in el and "item_count" not in el:
+            return _Unknown(f"no count on '{element_name}'")
         count = el.get("children_count", el.get("item_count", 0))
         return self._compare(count, op_str, expected)
 
-    def action_pred(self, args: list[Any]) -> bool:
+    def action_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
-        # named = [PROPERTY, OP, VALUE]
         if len(named) < 3:
-            return False
+            return _Unknown("malformed action predicate")
         prop_name = str(named[0])
         op_str = str(named[1])
         expected = self._parse_value(named[2])
+        if _is_unknown(expected):
+            return expected
 
         if self._action is None:
-            return False
+            return _Unknown("action_ctx not provided")
+        if prop_name not in self._action:
+            return _Unknown(f"action property '{prop_name}' missing")
         actual = self._action.get(prop_name)
-        if actual is None:
-            return False
         return self._compare(actual, op_str, expected)
 
-    def _read_element(self, element_name: str, prop_name: str) -> Any:
-        """Look up an element property from screen context."""
-        el = self._ctx.elements.get(element_name)
-        if el is None:
-            return None
-        return el.get(prop_name)
-
     def _parse_value(self, token: Token | str) -> Any:
-        """Parse a VALUE token into a Python value, resolving $intent.* from context."""
+        """Parse a VALUE token into a Python value, resolving $intent.* from context.
+
+        Returns `_Unknown(reason)` if an $intent variable is referenced but
+        absent from the IntentContext (or no IntentContext was supplied).
+        """
         s = str(token)
-        # Resolve $intent.* variables from intent context
         if s.startswith("$intent."):
             var_name = s[len("$intent.") :]
-            if self._intent:
-                return self._intent.variables.get(var_name, "")
-            return ""
+            if self._intent is None or var_name not in self._intent.variables:
+                return _Unknown(f"$intent.{var_name} not bound")
+            return self._intent.variables[var_name]
         if s == "true":
             return True
         if s == "false":
@@ -275,20 +335,22 @@ class _GuardEvaluator(Transformer):
             return s
 
     @staticmethod
-    def _compare(actual: Any, op_str: str, expected: Any) -> bool:
-        """Compare with type coercion for numeric comparisons."""
+    def _compare(actual: Any, op_str: str, expected: Any) -> Any:
+        """Three-valued comparison with type coercion for numeric comparisons."""
         op_func = _OPS.get(op_str)
         if op_func is None:
-            return False
+            return _Unknown(f"unsupported operator '{op_str}'")
+        if actual is None:
+            return _Unknown("actual value is None")
         if isinstance(expected, int | float) and isinstance(actual, str):
             try:
                 actual = float(actual)
             except (ValueError, TypeError):
-                return False
+                return _Unknown("numeric coercion failed")
         try:
             return op_func(actual, expected)
         except TypeError:
-            return False
+            return _Unknown("type mismatch in comparison")
 
 
 class DSLEvaluator:
@@ -314,74 +376,71 @@ class DSLEvaluator:
         screen_ctx: ScreenContext | None = None,
         action_ctx: dict[str, Any] | None = None,
     ) -> GuardResult:
-        """Parse guard, resolve $intent.* variables, evaluate predicates.
-
-        Args:
-            guard_expr: The DSL guard expression string.
-            intent_ctx: User intent variables for $intent.* resolution.
-            screen_ctx: Runtime screen state for predicate evaluation.
-            action_ctx: Proposed action metadata for action_pred evaluation.
-
-        Returns:
-            GuardResult with evaluation outcome.
-        """
+        """Parse guard, resolve $intent.* variables, evaluate predicates."""
         if screen_ctx is None:
             screen_ctx = ScreenContext()
 
-        # Compute bound expression for display (string substitution)
         bound_expr = self.bind_intent(guard_expr, intent_ctx) if intent_ctx else guard_expr
 
-        # Parse the original expression (INTENT_VAR resolved during evaluation)
         try:
             tree = self._parser.parse(guard_expr)
         except Exception as e:
             logger.debug(f"Guard parse error: {e}")
             return GuardResult(
+                status=GuardStatus.UNKNOWN,
                 passed=False,
                 guard_expression=guard_expr,
                 bound_expression=bound_expr,
                 failure_reason=f"Parse error: {e}",
             )
 
-        # Evaluate with all contexts
         try:
             evaluator = _GuardEvaluator(screen_ctx, intent_ctx=intent_ctx, action_ctx=action_ctx)
             result = evaluator.transform(tree)
-            passed = bool(result)
         except Exception as e:
             logger.debug(f"Guard evaluation error: {e}")
             return GuardResult(
+                status=GuardStatus.UNKNOWN,
                 passed=False,
                 guard_expression=guard_expr,
                 bound_expression=bound_expr,
                 failure_reason=f"Evaluation error: {e}",
             )
 
+        if _is_unknown(result):
+            return GuardResult(
+                status=GuardStatus.UNKNOWN,
+                passed=False,
+                guard_expression=guard_expr,
+                bound_expression=bound_expr,
+                failure_reason=f"Inconclusive: {result.reason}",
+            )
+        if result is True:
+            return GuardResult(
+                status=GuardStatus.TRUE,
+                passed=True,
+                guard_expression=guard_expr,
+                bound_expression=bound_expr,
+                failure_reason="",
+            )
         return GuardResult(
-            passed=passed,
+            status=GuardStatus.FALSE,
+            passed=False,
             guard_expression=guard_expr,
             bound_expression=bound_expr,
-            failure_reason="" if passed else "Guard condition not satisfied",
+            failure_reason="Guard condition not satisfied",
         )
 
     @staticmethod
     def bind_intent(guard_expr: str, intent_ctx: IntentContext) -> str:
-        """Replace $intent.* placeholders with quoted values from intent context.
+        """Replace $intent.* placeholders with quoted values from intent context."""
+        import re
 
-        Used for computing the bound_expression display string. The actual
-        evaluation resolves INTENT_VAR tokens directly from the parse tree.
-
-        Args:
-            guard_expr: Guard expression with $intent.* placeholders.
-            intent_ctx: Context containing variable values.
-
-        Returns:
-            Expression with placeholders replaced by quoted string literals.
-        """
+        pattern = re.compile(r"\$intent\.([a-zA-Z_][a-zA-Z0-9_]*)")
 
         def _replace(match: re.Match[str]) -> str:
             var_name = match.group(1)
             value = intent_ctx.variables.get(var_name, "")
             return f'"{value}"'
 
-        return _INTENT_PATTERN.sub(_replace, guard_expr)
+        return pattern.sub(_replace, guard_expr)

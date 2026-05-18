@@ -24,6 +24,7 @@ from vigil.models.fsm import (
     HierarchyLevel,
     SubFsmTemplate,
     Transition,
+    canonical_action_key,
 )
 from vigil.neuro.app_prior import AppPrior
 
@@ -185,7 +186,7 @@ class FsmBuilder:
             # Redirect transitions
             redirect_map = {dup_id: canonical_id for dup_id in duplicates}
             new_transitions: list[Transition] = []
-            seen_keys: set[tuple[str, str, str]] = set()
+            seen_keys: set[tuple[str, str, tuple[tuple[str, object], ...]]] = set()
 
             for t in fsm.transitions:
                 source = redirect_map.get(t.source, t.source)
@@ -193,15 +194,14 @@ class FsmBuilder:
                 # Skip self-loops created by merging
                 if source == target:
                     continue
-                action_type = t.action.get("type", "")
-                key = (source, target, action_type)
+                key = (source, target, canonical_action_key(t.action))
                 if key in seen_keys:
                     # Find existing and increment count
                     for existing in new_transitions:
                         e_src = existing.source
                         e_tgt = existing.target
-                        e_act = existing.action.get("type", "")
-                        if (e_src, e_tgt, e_act) == key:
+                        e_key = canonical_action_key(existing.action)
+                        if (e_src, e_tgt, e_key) == key:
                             existing.observed_count += t.observed_count
                             break
                 else:
@@ -1030,15 +1030,14 @@ class FsmBuilder:
         return False
 
     def _merge_transitions(self, transitions: list[Transition]) -> list[Transition]:
-        """Merge duplicate transitions by (source, target, action_type).
+        """Merge duplicate transitions by (source, target, canonical action key).
 
         Sums observed_count for duplicates.
         """
-        key_to_trans: dict[tuple[str, str, str], Transition] = {}
+        key_to_trans: dict[tuple[str, str, tuple[tuple[str, object], ...]], Transition] = {}
 
         for t in transitions:
-            action_type = t.action.get("type", "")
-            key = (t.source, t.target, action_type)
+            key = (t.source, t.target, canonical_action_key(t.action))
 
             if key in key_to_trans:
                 key_to_trans[key].observed_count += t.observed_count

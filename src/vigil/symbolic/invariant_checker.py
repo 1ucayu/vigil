@@ -4,15 +4,19 @@ Verifies that state-level invariants hold for the current screen.
 Called as post-arrival check after an agent reaches a new state.
 Invariants are mined during offline FSM construction (Stage 2.5)
 and stored in AbstractState.state_invariants.
+
+Three-valued (TRUE / FALSE / UNKNOWN). DecisionEngine routes:
+  any FALSE -> DENY (invariant violation proven);
+  any UNKNOWN with no FALSE -> UNCERTAIN (cannot prove safety).
 """
 
 from __future__ import annotations
 
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from vigil.models.fsm import AppFSM
-from vigil.symbolic.dsl_evaluator import DSLEvaluator, ScreenContext
+from vigil.symbolic.dsl_evaluator import DSLEvaluator, GuardStatus, ScreenContext
 
 
 class InvariantCheckResult(BaseModel):
@@ -20,10 +24,13 @@ class InvariantCheckResult(BaseModel):
 
     state_id: str
     all_passed: bool
+    has_unknown: bool = False
     total: int
     passed: int
     failed: int
-    failed_invariants: list[tuple[str, str]] = []
+    unknown: int = 0
+    failed_invariants: list[tuple[str, str]] = Field(default_factory=list)
+    unknown_invariants: list[tuple[str, str]] = Field(default_factory=list)
 
 
 class InvariantChecker:
@@ -58,11 +65,16 @@ class InvariantChecker:
 
         passed_count = 0
         failed_list: list[tuple[str, str]] = []
+        unknown_list: list[tuple[str, str]] = []
 
         for inv_expr in invariants:
             result = self._evaluator.evaluate(inv_expr, screen_ctx=screen_ctx)
-            if result.passed:
+            if result.status is GuardStatus.TRUE:
                 passed_count += 1
+            elif result.status is GuardStatus.UNKNOWN:
+                reason = result.failure_reason or f"Invariant inconclusive: {inv_expr}"
+                unknown_list.append((inv_expr, reason))
+                logger.debug(f"Invariant unknown for {state_id}: {inv_expr} — {reason}")
             else:
                 reason = result.failure_reason or f"Invariant evaluated to False: {inv_expr}"
                 failed_list.append((inv_expr, reason))
@@ -71,10 +83,13 @@ class InvariantChecker:
         return InvariantCheckResult(
             state_id=state_id,
             all_passed=len(failed_list) == 0,
+            has_unknown=len(unknown_list) > 0,
             total=len(invariants),
             passed=passed_count,
             failed=len(failed_list),
+            unknown=len(unknown_list),
             failed_invariants=failed_list,
+            unknown_invariants=unknown_list,
         )
 
     def check_arrival(

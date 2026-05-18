@@ -5,6 +5,10 @@ to inherit guards from similar known states (inherit_and_bind). Results are cach
 back into the FSM bundle for monotonically increasing coverage.
 
 No LLM calls — inherit_and_bind is purely structural.
+
+Inherited transitions are intentionally low-trust: their replay confidence is
+capped at ``INHERITED_TRANSITION_CONFIDENCE`` (< default verification threshold
+0.7), so they route to UNCERTAIN until replay validation promotes them.
 """
 
 from __future__ import annotations
@@ -17,6 +21,12 @@ from pydantic import BaseModel
 
 from vigil.models.fsm import AbstractState, AppFSM, Transition
 from vigil.models.state import RawScreen
+
+# Cap on confidence for inherited/evolved transitions. Kept below
+# VerificationConfig.confidence_threshold (default 0.7) so that, until replay
+# verification updates the value upward, every inherited edge routes to
+# UNCERTAIN via FsmChecker's confidence check.
+INHERITED_TRANSITION_CONFIDENCE: float = 0.5
 
 
 class EvolutionResult(BaseModel):
@@ -64,10 +74,16 @@ class FsmEvolver:
         fsm: AppFSM,
         raw_screens: dict[str, RawScreen] | None = None,
         similarity_threshold: float = 0.80,
+        inherited_confidence: float | None = None,
     ) -> None:
         self._fsm = fsm
         self._raw_screens = raw_screens or {}
         self._threshold = similarity_threshold
+        self._inherited_confidence = (
+            inherited_confidence
+            if inherited_confidence is not None
+            else INHERITED_TRANSITION_CONFIDENCE
+        )
         self._evolution_count = 0
         # Precompute per-state component sets from raw_screens. States whose
         # raw_screens are not available score 0.0 at match time (logged+skipped).
@@ -140,7 +156,7 @@ class FsmEvolver:
                     target=t.target,
                     action=t.action.copy(),
                     guard=t.guard,
-                    confidence=t.confidence,
+                    confidence=min(t.confidence, self._inherited_confidence),
                     observed_count=0,
                 )
                 self._fsm.add_transition(new_t)
@@ -153,7 +169,7 @@ class FsmEvolver:
                     target=new_state_id,
                     action=t.action.copy(),
                     guard=t.guard,
-                    confidence=t.confidence,
+                    confidence=min(t.confidence, self._inherited_confidence),
                     observed_count=0,
                 )
                 self._fsm.add_transition(new_t)
@@ -166,6 +182,7 @@ class FsmEvolver:
             "similarity_score": round(best_score, 4),
             "screen_fingerprint": screen_fp,
             "method": "inherit_and_bind",
+            "inherited_confidence_cap": self._inherited_confidence,
         }
         self._fsm.evolution_log.append(log_entry)
         logger.info(f"Evolved: {new_state_id} from {best_state_id} (similarity={best_score:.2f})")

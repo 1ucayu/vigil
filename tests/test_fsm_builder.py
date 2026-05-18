@@ -1090,3 +1090,64 @@ class TestClassifyContainersStructural:
         # Varying target_text across rows → item_name parameter.
         assert tmpl.parameter_schema == {"item_name": "string"}
         assert tmpl.item_skeleton == "sfp_detail"
+
+
+# ── Canonical action identity (Sigma = <tau, q, v>) ──────────────
+
+
+class TestCanonicalActionIdentity:
+    @pytest.fixture
+    def two_click_fsm(self) -> AppFSM:
+        """One source state with two distinct click transitions to different targets."""
+        fsm = AppFSM(app_package="com.test.app")
+        for sid in ("s1", "s2", "s3"):
+            fsm.add_state(
+                AbstractState(
+                    state_id=sid,
+                    name=sid,
+                    fingerprint=f"fp_{sid}",
+                    hierarchy_level=HierarchyLevel.ACTIVITY,
+                )
+            )
+        fsm.add_transition(
+            Transition(source="s1", target="s2", action={"type": "click", "target": "e_a"})
+        )
+        fsm.add_transition(
+            Transition(source="s1", target="s3", action={"type": "click", "target": "e_b"})
+        )
+        fsm.initial_state = "s1"
+        return fsm
+
+    def test_target_disambiguates_two_click_transitions(self, two_click_fsm: AppFSM) -> None:
+        assert two_click_fsm.get_transition_target("s1", {"type": "click", "target": "e_a"}) == "s2"
+        assert two_click_fsm.get_transition_target("s1", {"type": "click", "target": "e_b"}) == "s3"
+
+    def test_mismatched_target_rejected(self, two_click_fsm: AppFSM) -> None:
+        # Proposed widget id matches no transition — should not collapse to type only.
+        assert two_click_fsm.get_transition_target("s1", {"type": "click", "target": "e_c"}) is None
+
+    def test_type_only_proposal_is_uncertain_for_multiple_clicks(
+        self, two_click_fsm: AppFSM
+    ) -> None:
+        assert two_click_fsm.is_valid_transition("s1", {"type": "click"}) is None
+
+    def test_value_disambiguates_transitions(self) -> None:
+        fsm = AppFSM(app_package="com.test.app")
+        for sid in ("s1", "s2", "s3"):
+            fsm.add_state(
+                AbstractState(
+                    state_id=sid,
+                    name=sid,
+                    fingerprint=f"fp_{sid}",
+                    hierarchy_level=HierarchyLevel.ACTIVITY,
+                )
+            )
+        fsm.add_transition(
+            Transition(source="s1", target="s2", action={"type": "set_text", "value": "alice"})
+        )
+        fsm.add_transition(
+            Transition(source="s1", target="s3", action={"type": "set_text", "value": "bob"})
+        )
+        assert fsm.get_transition_target("s1", {"type": "set_text", "value": "alice"}) == "s2"
+        assert fsm.get_transition_target("s1", {"type": "set_text", "value": "bob"}) == "s3"
+        assert fsm.get_transition_target("s1", {"type": "set_text", "value": "charlie"}) is None

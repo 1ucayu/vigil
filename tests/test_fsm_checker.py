@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from vigil.core.config import VerificationConfig
-from vigil.models.fsm import AppFSM
+from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
 from vigil.symbolic.fsm_checker import FsmChecker, VerifyReason, VerifyResult
 from vigil.symbolic.state_locator import LocateResult, StateLocator
 
@@ -49,7 +49,7 @@ class TestFsmChecker:
         return FsmChecker(sample_fsm)
 
     def test_verify_allow(self, checker: FsmChecker) -> None:
-        out = checker.verify_by_state("s1", {"type": "click"})
+        out = checker.verify_by_state("s1", {"type": "click", "target": "wifi_entry"})
         assert out.result == VerifyResult.ALLOW
         assert out.reason == VerifyReason.TRANSITION_VALID
         assert out.current_state_id == "s1"
@@ -74,14 +74,18 @@ class TestFsmChecker:
 
     def test_verify_deny_goal_unreachable(self, checker: FsmChecker) -> None:
         # s2 → click → s3, goal=s1. s3 has no outgoing edges → can't reach s1
-        out = checker.verify_by_state("s2", {"type": "click"}, goal_state="s1")
+        out = checker.verify_by_state(
+            "s2", {"type": "click", "target": "wifi_network"}, goal_state="s1"
+        )
         assert out.result == VerifyResult.DENY
         assert out.reason == VerifyReason.GOAL_UNREACHABLE
         assert out.target_state_id == "s3"
 
     def test_verify_allow_goal_reachable(self, checker: FsmChecker) -> None:
         # s1 → click → s2, goal=s3. s2 can reach s3 → ALLOW
-        out = checker.verify_by_state("s1", {"type": "click"}, goal_state="s3")
+        out = checker.verify_by_state(
+            "s1", {"type": "click", "target": "wifi_entry"}, goal_state="s3"
+        )
         assert out.result == VerifyResult.ALLOW
         assert out.target_state_id == "s2"
 
@@ -89,18 +93,51 @@ class TestFsmChecker:
         config = VerificationConfig(confidence_threshold=0.99)
         checker = FsmChecker(sample_fsm, config=config)
         # s1 → s2 confidence is 0.95, below 0.99 threshold
-        out = checker.verify_by_state("s1", {"type": "click"})
+        out = checker.verify_by_state("s1", {"type": "click", "target": "wifi_entry"})
         assert out.result == VerifyResult.UNCERTAIN
         assert out.reason == VerifyReason.LOW_CONFIDENCE
         assert out.confidence == 0.95
 
     def test_verify_no_goal_skips_reachability(self, checker: FsmChecker) -> None:
         # s2 → click → s3, goal=None. Should skip reachability → ALLOW
-        out = checker.verify_by_state("s2", {"type": "click"})
+        out = checker.verify_by_state("s2", {"type": "click", "target": "wifi_network"})
         assert out.result == VerifyResult.ALLOW
         assert out.target_state_id == "s3"
 
     def test_verify_by_state_direct(self, checker: FsmChecker) -> None:
-        out = checker.verify_by_state("s1", {"type": "click"})
+        out = checker.verify_by_state("s1", {"type": "click", "target": "wifi_entry"})
         assert out.result == VerifyResult.ALLOW
         assert out.reason == VerifyReason.TRANSITION_VALID
+
+    def test_verify_uncertain_ambiguous_type_only_click(self) -> None:
+        fsm = AppFSM(app_package="com.test.app")
+        for sid in ("s1", "s2", "s3"):
+            fsm.add_state(
+                AbstractState(
+                    state_id=sid,
+                    name=sid,
+                    fingerprint=f"fp_{sid}",
+                    hierarchy_level=HierarchyLevel.ACTIVITY,
+                )
+            )
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s2",
+                action={"type": "click", "target_resource_id": "com.app:id/a"},
+                confidence=0.95,
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s3",
+                action={"type": "click", "target_resource_id": "com.app:id/b"},
+                confidence=0.95,
+            )
+        )
+
+        out = FsmChecker(fsm).verify_by_state("s1", {"type": "click"})
+
+        assert out.result == VerifyResult.UNCERTAIN
+        assert out.reason == VerifyReason.ACTION_AMBIGUOUS

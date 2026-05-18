@@ -74,7 +74,7 @@ class TestTier1Only:
     def test_tier1_allow_no_guard(self, guarded_fsm: AppFSM) -> None:
         engine = DecisionEngine(guarded_fsm)
         # s2→s3 has no guard — Tier 2 skipped
-        out = engine.verify_by_state("s2", {"type": "click"})
+        out = engine.verify_by_state("s2", {"type": "click", "target": "e_0002"})
         assert out.result == VerifyResult.ALLOW
         assert out.reason == VerifyReason.TRANSITION_VALID
 
@@ -95,13 +95,13 @@ class TestTier1Only:
         engine = DecisionEngine(guarded_fsm, grammar_path="/nonexistent/grammar.lark")
         assert engine._evaluator is None
         # s2→s3 (no guard) — Tier 1 ALLOW, Tier 2 skipped
-        out = engine.verify_by_state("s2", {"type": "click"})
+        out = engine.verify_by_state("s2", {"type": "click", "target": "e_0002"})
         assert out.result == VerifyResult.ALLOW
 
     def test_no_evaluator_with_guard(self, guarded_fsm: AppFSM) -> None:
         engine = DecisionEngine(guarded_fsm, grammar_path="/nonexistent/grammar.lark")
         # s1→s2 has guard, but evaluator is None — Tier 2 skipped
-        out = engine.verify_by_state("s1", {"type": "click"})
+        out = engine.verify_by_state("s1", {"type": "click", "target": "e_0001"})
         assert out.result == VerifyResult.ALLOW
 
 
@@ -111,14 +111,14 @@ class TestTier2Guard:
     def test_tier2_guard_pass(self, guarded_fsm: AppFSM) -> None:
         engine = DecisionEngine(guarded_fsm)
         ctx = ScreenContext(elements={"wifi_item": {"text": "HKU_WiFi"}})
-        out = engine.verify_by_state("s1", {"type": "click"}, screen_ctx=ctx)
+        out = engine.verify_by_state("s1", {"type": "click", "target": "e_0001"}, screen_ctx=ctx)
         assert out.result == VerifyResult.ALLOW
         assert out.reason == VerifyReason.TRANSITION_VALID
 
     def test_tier2_guard_fail(self, guarded_fsm: AppFSM) -> None:
         engine = DecisionEngine(guarded_fsm)
         ctx = ScreenContext(elements={"wifi_item": {"text": ""}})
-        out = engine.verify_by_state("s1", {"type": "click"}, screen_ctx=ctx)
+        out = engine.verify_by_state("s1", {"type": "click", "target": "e_0001"}, screen_ctx=ctx)
         assert out.result == VerifyResult.DENY
         assert out.reason == VerifyReason.GUARD_FAILED
         assert "guard failed" in out.details.lower()
@@ -126,16 +126,17 @@ class TestTier2Guard:
     def test_tier2_guard_missing_element(self, guarded_fsm: AppFSM) -> None:
         engine = DecisionEngine(guarded_fsm)
         ctx = ScreenContext(elements={})
-        out = engine.verify_by_state("s1", {"type": "click"}, screen_ctx=ctx)
-        assert out.result == VerifyResult.DENY
-        assert out.reason == VerifyReason.GUARD_FAILED
+        out = engine.verify_by_state("s1", {"type": "click", "target": "e_0001"}, screen_ctx=ctx)
+        # Three-valued DSL: missing GUI element is UNKNOWN, not proven false.
+        assert out.result == VerifyResult.UNCERTAIN
+        assert out.reason == VerifyReason.GUARD_INCONCLUSIVE
 
     def test_tier2_guard_no_screen_ctx(self, guarded_fsm: AppFSM) -> None:
         engine = DecisionEngine(guarded_fsm)
-        # No screen_ctx → empty ScreenContext → guard fails (element not found)
-        out = engine.verify_by_state("s1", {"type": "click"})
-        assert out.result == VerifyResult.DENY
-        assert out.reason == VerifyReason.GUARD_FAILED
+        # No screen_ctx → empty ScreenContext → guard cannot read element → UNKNOWN.
+        out = engine.verify_by_state("s1", {"type": "click", "target": "e_0001"})
+        assert out.result == VerifyResult.UNCERTAIN
+        assert out.reason == VerifyReason.GUARD_INCONCLUSIVE
 
 
 class TestActionContext:
@@ -177,7 +178,7 @@ class TestActionContext:
         action_ctx = {"action_type": "click", "target_text": "WiFi"}
         out = engine.verify_by_state(
             "s1",
-            {"type": "click"},
+            {"type": "click", "target": "e_0001"},
             action_ctx=action_ctx,
         )
         assert out.result == VerifyResult.ALLOW
@@ -187,7 +188,7 @@ class TestActionContext:
         action_ctx = {"action_type": "click", "target_text": "Bluetooth"}
         out = engine.verify_by_state(
             "s1",
-            {"type": "click"},
+            {"type": "click", "target": "e_0001"},
             action_ctx=action_ctx,
         )
         assert out.result == VerifyResult.DENY
@@ -274,7 +275,8 @@ class TestVerifyWithScreen:
         )
         # Mock fingerprint to match s1 (patch class method for Pydantic compat)
         with patch.object(RawScreen, "get_structural_fingerprint", return_value="fp_main"):
-            out = engine.verify(screen, {"type": "click", "target": "wifi_item"})
+            # Use the canonical target id stored on the transition (Sigma identity).
+            out = engine.verify(screen, {"type": "click", "target": "e_0001"})
         # Guard: read(wifi_item, text) != "" → "HKU_WiFi" != "" → True
         assert out.result == VerifyResult.ALLOW
 
@@ -294,7 +296,7 @@ class TestVerifyWithScreen:
             ],
         )
         with patch.object(RawScreen, "get_structural_fingerprint", return_value="fp_main"):
-            out = engine.verify(screen, {"type": "click", "target": "wifi_item"})
+            out = engine.verify(screen, {"type": "click", "target": "e_0001"})
         # Guard: read(wifi_item, text) != "" → "" != "" → False
         assert out.result == VerifyResult.DENY
         assert out.reason == VerifyReason.GUARD_FAILED
@@ -472,3 +474,122 @@ class TestBuildContextHelpers:
         assert props["text"] == "WiFi"
         assert props["value"] == "WiFi"
         assert props["class_name"] == "android.widget.Switch"
+
+
+# ── Invariant integration and three-valued guard routing ─────────
+
+
+class TestInvariantIntegration:
+    def _fsm_with_invariant(self, invariant_expr: str) -> AppFSM:
+        fsm = AppFSM(app_package="com.test.app")
+        s1 = AbstractState(
+            state_id="s1",
+            name="Src",
+            fingerprint="fp_src",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+        s2 = AbstractState(
+            state_id="s2",
+            name="Dst",
+            fingerprint="fp_dst",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            state_invariants=[invariant_expr],
+        )
+        fsm.add_state(s1)
+        fsm.add_state(s2)
+        fsm.add_transition(
+            Transition(source="s1", target="s2", action={"type": "click"}, confidence=0.95)
+        )
+        fsm.initial_state = "s1"
+        return fsm
+
+    @staticmethod
+    def _toolbar_screen(child_count: int) -> RawScreen:
+        child_ids = [f"toolbar_child_{i}" for i in range(child_count)]
+        return RawScreen(
+            screen_id="target",
+            elements=[
+                UIElement(
+                    element_id="toolbar",
+                    class_name="android.view.ViewGroup",
+                    children=child_ids,
+                ),
+                *[
+                    UIElement(element_id=child_id, class_name="android.view.View")
+                    for child_id in child_ids
+                ],
+            ],
+        )
+
+    def test_verify_by_state_does_not_run_successor_invariants(self) -> None:
+        fsm = self._fsm_with_invariant("count(toolbar) == 1")
+        engine = DecisionEngine(fsm)
+        ctx = ScreenContext(elements={"toolbar": {"children_count": 0}})
+        out = engine.verify_by_state("s1", {"type": "click"}, screen_ctx=ctx)
+        assert out.result == VerifyResult.ALLOW
+        assert out.reason == VerifyReason.TRANSITION_VALID
+
+    def test_verify_does_not_run_successor_invariants_on_pre_action_screen(self) -> None:
+        fsm = self._fsm_with_invariant("count(toolbar) == 1")
+        engine = DecisionEngine(fsm)
+        pre_action_screen = self._toolbar_screen(child_count=0)
+        with patch.object(RawScreen, "get_structural_fingerprint", return_value="fp_src"):
+            out = engine.verify(pre_action_screen, {"type": "click"})
+        assert out.result == VerifyResult.ALLOW
+        assert out.reason == VerifyReason.TRANSITION_VALID
+
+    def test_post_arrival_invariant_proven_false_denies(self) -> None:
+        fsm = self._fsm_with_invariant("count(toolbar) == 1")
+        engine = DecisionEngine(fsm)
+        out = engine.post_arrival_check("s2", self._toolbar_screen(child_count=2))
+        assert out.result == VerifyResult.DENY
+        assert out.reason == VerifyReason.INVARIANT_FAILED
+
+    def test_post_arrival_invariant_unknown_routes_to_uncertain(self) -> None:
+        fsm = self._fsm_with_invariant("count(toolbar) == 1")
+        engine = DecisionEngine(fsm)
+        out = engine.post_arrival_check("s2", RawScreen(screen_id="target", elements=[]))
+        assert out.result == VerifyResult.UNCERTAIN
+        assert out.reason == VerifyReason.INVARIANT_INCONCLUSIVE
+
+    def test_post_arrival_invariant_pass_preserves_allow(self) -> None:
+        fsm = self._fsm_with_invariant("count(toolbar) == 1")
+        engine = DecisionEngine(fsm)
+        out = engine.post_arrival_check("s2", self._toolbar_screen(child_count=1))
+        assert out.result == VerifyResult.ALLOW
+
+    def test_guard_inconclusive_routes_to_uncertain(self) -> None:
+        # Guard depends on missing $intent var → UNKNOWN → UNCERTAIN, not DENY.
+        fsm = AppFSM(app_package="com.test.app")
+        s1 = AbstractState(
+            state_id="s1",
+            name="A",
+            fingerprint="fp_a",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+        s2 = AbstractState(
+            state_id="s2",
+            name="B",
+            fingerprint="fp_b",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+        fsm.add_state(s1)
+        fsm.add_state(s2)
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s2",
+                action={"type": "click"},
+                guard="action(target_text) == $intent.wifi_name",
+                confidence=0.95,
+            )
+        )
+        engine = DecisionEngine(fsm)
+        out = engine.verify_by_state(
+            "s1",
+            {"type": "click"},
+            intent_ctx=IntentContext(variables={}),  # missing wifi_name
+            action_ctx={"target_text": "X"},
+        )
+        assert out.result == VerifyResult.UNCERTAIN
+        assert out.reason == VerifyReason.GUARD_INCONCLUSIVE
