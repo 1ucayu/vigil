@@ -55,6 +55,32 @@ Vigil's NSDI-style narrative should present the system as a verifier that covers
 
 Keep the distinction crisp: the **three error families** define what can go wrong, while the **three-tier verification strategy** defines how Vigil degrades when runtime coverage is incomplete.
 
+### Formal Paper Model (Use in Writing and Code)
+
+Use the following notation consistently in the paper and implementation notes:
+
+```text
+M_A = <S, s0, Sigma, delta, Gamma, I, rho>
+```
+
+| Symbol | Meaning | Implementation Anchor |
+|--------|---------|-----------------------|
+| `S` | Finite set of abstract GUI states. Each state represents a class of screens with the same stable GUI structure. | `AppFSM.states`, `AbstractState` |
+| `s0` | Initial app state. | `AppFSM.initial_state` |
+| `Sigma` | Canonical GUI action alphabet. An action is conceptually `<tau, q, v>`, where `tau` is the action type, `q` is the target widget/container, and `v` is an optional value. | `ActionType`, action dictionaries in `Transition.action` |
+| `delta` | Action-labeled GUI transition relation, `delta subseteq S x Sigma x S`. | `AppFSM.transitions`, `networkx.DiGraph` edges |
+| `Gamma` | Guard map from state-action pairs to DSL formulas, `Gamma:S x Sigma -> Phi`. Guards check semantic binding before execution. | `Transition.guard`, `DSLEvaluator` |
+| `I` | Invariant map from state-action pairs to sets of DSL formulas, `I:S x Sigma -> 2^Phi`. Invariants encode state, action, and side-effect constraints. | `AbstractState.state_invariants`, `InvariantChecker` |
+| `rho` | Replay confidence map, `rho:delta -> [0,1]`. Low-confidence edges route to `UNCERTAIN`, not high-trust `ALLOW`. | `Transition.confidence`, `FsmChecker` |
+
+Writing rule: describe `M_A` as a **DSL-guarded, confidence-annotated EFSM** built on the transition-system view underlying Kripke structures. A full Kripke structure additionally materializes atomic propositions `AP` and a labeling function `L:S -> 2^AP`; Vigil instead evaluates DSL predicates at runtime as transition contracts. Each verified transition may be read as a Hoare-style contract:
+
+```text
+{ Gamma(s, a) } a { I(s', a) }
+```
+
+This contract interpretation is the paper bridge between FSM topology, DSL semantic binding, and safety invariants.
+
 ---
 
 ## 4. System Architecture
@@ -69,105 +95,77 @@ Keep the distinction crisp: the **three error families** define what can go wron
 
 ### 4.1 Offline Pipeline (Neuro Layer — 5 Stages)
 
-**Stage 1: UI Exploration** (`vigil.neuro.explorer`)
-- Connect to Android device via `uiautomator2`
-- BFS/DFS traversal: at each screen, enumerate interactable elements, execute each action, record resulting screen
-- For each screen: save accessibility tree XML + screenshot PNG + element list
-- Accessibility Service provides: `className`, `resourceId`, `text`, `contentDescription`, `bounds`, `isClickable`, `isScrollable`, `isEditable`, `isChecked`, `isEnabled`
-- No root or developer mode needed
-- Action templates:
-  ```python
-  ACTION_TEMPLATES = {
-      'clickable': ['click'],
-      'long_clickable': ['long_press'],
-      'editable': ['input_text'],
-      'scrollable': ['scroll_up', 'scroll_down'],
-      'checkable': ['click'],
-  }
-  # Plus global: 'navigate_back', 'navigate_home'
-  ```
-- Output: saved to `data/apps/<app_name>/` as JSON with screens, elements, transitions
+Keep the root implementation skeleton concise. The deeper literature survey, design justification, and formal definitions live in `docs/references/neuro_symbolic_architecture_survey.md`.
 
-**Stage 2: State Abstraction** (`vigil.neuro.state_abstractor`)
-- Raw screens too fine-grained (dynamic content differs each time) → need abstraction
-- Phase 1 (rule-based): structural fingerprint = hash of (class_name, resource_id, depth, interactability) — ignores text/content
-- Phase 2 (LLM-assisted): for ambiguous cases, ask LLM "are these two screens the same UI state?" + name states ("PaymentConfirm", "WiFiListPage")
-- Output: `S = {s₁, s₂, ..., sₙ}` and `T ⊆ S × Action × S`
+**Stage 1: UI Exploration** (`vigil.neuro.explorer`, `vigil.neuro.ape_explorer`, `core.ui_parser`, `core.action_types`)
+- Technical challenge: Android apps expose huge action spaces, nondeterministic transitions, scroll-dependent widgets, system dialogs, and state aliases caused by dynamic content.
+- Implementation role: enumerate candidate actions from accessibility attributes, execute bounded BFS/DFS or APE-backed exploration, capture `(screen_before, action, screen_after)` triples, and preserve screenshots/XML/action metadata for later replay.
+- Artifact: raw observation set `O`, candidate action alphabet `Sigma`, trace multiset `Tau`, and low-level transition samples saved under `data/apps/<app_name>/`.
 
-**Stage 3: Hierarchical FSM Construction** (`vigil.neuro.fsm_builder`)
-- Hierarchy: App > Activity > Fragment > Component (inspired by "Learned Cloud Emulators", HotNets'25)
-- Constrains transition scope (fragment button can't directly modify another activity's state) → mitigates state explosion
-- Uses Android Activity name from accessibility tree to group states
-- Built on `networkx.DiGraph`
+**Stage 2: State Abstraction + Semantic Grounding** (`vigil.neuro.state_abstractor`, `vigil.neuro.semantic_grounder`, `models.state`)
+- Technical challenge: exact screenshots over-split dynamic pages, while coarse fingerprints can merge semantically different states such as payment confirmation and message confirmation.
+- Implementation role: compute structural fingerprints from stable UI skeleton features, attach semantic profiles from screenshots/accessibility trees, label icon-only widgets, and mine state invariants from repeated observations.
+- Artifact: abstract states `S`, localization fingerprints, semantic aliases, state invariants, and static/dynamic container labels.
 
-**Stage 4: DSL Guard Generation** (`vigil.neuro.dsl_generator`)
-- Annotate each FSM transition with semantic guard conditions
-- Uses constrained formal grammar + constrained decoding to ensure syntactic correctness
-- Guard grammar (Lark):
-  ```
-  guard ::= predicate | predicate && guard | predicate || guard | !predicate | (guard)
-  predicate ::= read(element, property) op value | time_in(HH:MM, HH:MM) | in_state(name) | value(element) op value
-  ```
-- Examples: payment → `read(amount_field, value) > 0 && read(amount_field, value) <= 5000`; messaging → `read(recipient_field, text) != ""`
+**Stage 3: Hierarchical FSM Construction** (`vigil.neuro.fsm_builder`, `models.fsm`)
+- Technical challenge: flat GUI graphs explode because repeated fragments, list items, dialogs, and nested activities create many near-duplicate paths.
+- Implementation role: build a hierarchy `App > Activity > Fragment > Component`, deduplicate raw screens into `AbstractState` nodes, attach transitions to `networkx.DiGraph`, and represent repeated dynamic item flows with `SubFsmTemplate` instead of enumerating every item.
+- Artifact: per-app `AppFSM = (S, s0, Sigma, delta)` plus hierarchy metadata, transition provenance, and dynamic sub-FSM templates.
 
-**Stage 5: FSM Verification via Replay** (`vigil.neuro.replay_verifier`)
-- Symbolic execution enumerates bounded-length paths → converts to test cases → replays on real device
-- Each transition gets confidence score = success_count / total_trials
-- Low-confidence transitions return UNCERTAIN at runtime instead of ALLOW/DENY
+**Stage 4: DSL Guard Generation** (`vigil.neuro.dsl_generator`, `vigil.neuro.widget_templates`, `models.dsl`)
+- Technical challenge: topology alone cannot prove semantic correctness; the verifier must know which recipient, amount, field, contact, item, or constraint the action binds.
+- Implementation role: generate grammar-valid DSL predicates from semantic profiles, widget templates, platform priors, and task intent variables; parse every guard with `docs/dsl_grammar.lark` before admitting it to the bundle.
+- Artifact: transition guard map `Gamma: S x Sigma -> guard`, required `$intent.*` bindings, guard provenance, and high-risk action labels.
+
+**Stage 5: Replay Verification + Confidence Scoring** (`vigil.neuro.replay_verifier`, `symbolic.trajectory_verifier`)
+- Technical challenge: explored GUI transitions may be flaky because of timing, permissions, network state, animation, or hidden app state.
+- Implementation role: enumerate bounded FSM paths, replay them on-device, validate observed target states, mine replay-stable invariants, and estimate transition confidence rather than assuming one successful trace proves correctness.
+- Artifact: verified FSM+DSL bundle with `rho(s, a, s') = success_count / trial_count`; low-confidence transitions remain usable only through `UNCERTAIN`.
 
 ### 4.2 Online Engine (Symbolic Layer — Three-Tier Verification)
 
-This is the key architectural evolution responding to advisor feedback about dynamic apps.
+Vigil's paper model for app `A` is:
 
-**Tier 1: Structural FSM Verification (pure symbolic)**
-- State localization: accessibility tree fingerprinting → FSM state
-- Transition validity: is action legal from current state?
-- Reachability: can we still reach goal state? O(V+E)
-- Invariant check: any state invariants violated?
-- Confidence check: is this transition well-tested?
-- Coverage: Settings ~99%, dynamic apps ~60%
-
-**Tier 2: Parameterized Guard Verification (pure symbolic)**
-- DSL guard templates cached offline, parameters bound at runtime
-- Task State Machine tracks multi-step progress (solves sequential dependency)
-- Example: milk-tea ordering uses intent checklist to verify each step fulfills user goal
-- Predicate evaluation is O(R), R = number of rules
-
-**Tier 3: Online LLM Micro-Evolution (infrequent)**
-- Triggered only for truly unseen content patterns
-- Most "unseen" states are structurally similar to known states → `inherit_and_bind` (no LLM needed)
-- When LLM is needed: generate new state + guards → cache back into FSM bundle
-- Creates learning loop: system coverage monotonically increases with use
-- **This is a unique contribution** — no existing work lets a formal verification model self-evolve
-
-**Decision Logic:**
+```text
+M_A = <S, s0, Sigma, delta, Gamma, I, rho>
 ```
-VERIFY(current_screen, proposed_action, user_goal):
 
-  state ← LOCALIZE(current_screen, FSM)
-  IF state = UNKNOWN:
-    // Tier 3: attempt structural similarity matching
-    similar ← FIND_SIMILAR(current_screen, FSM)
-    IF similar exists → inherit_and_bind(similar) → state
-    ELSE → trigger LLM micro-evolution → UNCERTAIN (async cache result)
+where `S` is abstract states, `s0` the initial state, `Sigma` canonical actions, `delta` the transition relation, `Gamma` DSL guards, `I` state/action/side-effect invariants, and `rho` replay confidence. Parameterized templates for dynamic UI regions are implementation metadata stored alongside the model bundle.
 
-  // Tier 1: Structural FSM Check
-  IF proposed_action ∉ FSM.transitions[state] → DENY
-  target ← FSM.target(state, proposed_action)
-  IF ∃ invariant I : I(target) = false → DENY
-  IF goal ≠ null ∧ ¬REACHABLE(target, goal) → DENY
-  IF FSM.confidence(state, proposed_action) < θ → UNCERTAIN
+At runtime, a screen observation `o_t` is localized by:
 
-  // Tier 2: DSL Semantic Check
-  guard ← FSM.guard(state, proposed_action)
-  IF guard ≠ null ∧ EVAL(guard, current_screen) = false → DENY
-
-  // Safety and Side-Effect Check
-  IF ∃ safety invariant S : S(state, proposed_action, frozen_intent) = false → DENY
-  IF proposed_action has irreversible side effect ∧ confidence is insufficient → UNCERTAIN
-
-  → ALLOW
+```text
+alpha(o_t) -> (s_t, p_loc)
 ```
+
+The common path is pure symbolic and deterministic:
+
+**Tier 1: Structural FSM Verification** (`symbolic.state_locator`, `symbolic.fsm_checker`)
+- Localize `o_t` to `s_t`; unknown or fuzzy-only localization returns `UNCERTAIN`.
+- Check `(s_t, a_t, s') in delta`; a missing transition returns `DENY`.
+- Check reachability from `s'` to the goal and enforce replay confidence `rho(s_t, a_t, s') >= theta_conf`.
+
+**Tier 2: Parameterized Guard + Invariant Verification** (`symbolic.dsl_evaluator`, `symbolic.intent_extractor`, `symbolic.invariant_checker`)
+- Bind frozen user intent into `$intent.*` variables and evaluate transition guards in `Gamma`.
+- Evaluate state/action invariants in `I`, including irreversible-action and safety constraints.
+- Missing required bindings or inconclusive predicate reads return `UNCERTAIN`; proven guard or invariant violations return `DENY`.
+
+**Tier 3: Template Inheritance + Micro-Evolution** (`neuro.evolution`, `symbolic.llm_fallback`)
+- For structurally similar unseen states, `inherit_and_bind` creates a low-trust state from an existing template without blocking future exact localization.
+- For genuinely novel states, return `UNCERTAIN` and trigger asynchronous evolution; new states increase coverage but require replay confidence before high-trust `ALLOW` decisions.
+- Runtime LLM fallback is optional and outside the common symbolic path.
+
+**Compact Acceptance Rule:**
+
+```text
+ALLOW iff (s_t, a_t, s') in delta
+      and Reach(s', goal)
+      and rho(s_t, a_t, s') >= theta_conf
+      and eval(Gamma(s_t, a_t), o_t, intent, a_t) = true
+      and forall phi in I(s', a_t): eval(phi, o_t, intent, a_t) = true
+```
+
+`DENY` means a transition, reachability, guard, or invariant violation is proven. `UNCERTAIN` means the verifier cannot prove safety because localization, replay confidence, binding, template trust, or predicate evaluation is incomplete.
 
 ### 4.3 Central Agent: Lifecycle Management
 - Storage: each app → verified FSM + DSL bundle (JSON)
@@ -802,6 +800,25 @@ Create files in this sequence:
     - V-Droid (action enumeration): element properties → candidate actions → adapt for `core/action_types.py`
     - VeriSafe (predicate patterns): per-app guard templates (payment, messaging, shopping) → inspiration for `neuro/dsl_generator.py`
     - VeriSafe (ADB + screenshot + tree capture): simpler UI capture pipeline → reference for `neuro/explorer.py`
+
+### 19.1 Current Implementation Alignment (May 2026)
+
+The current prototype already represents most of the paper model: `S`, `s0`, `delta`, `Gamma`, and `rho` appear in `AppFSM` / `Transition`; `Sigma` is represented by `ActionType` and action dictionaries; DSL guards are generated and evaluated; transition confidence is checked in `FsmChecker`; state invariants are stored on `AbstractState` and checked by `InvariantChecker`.
+
+Highest-priority alignment patches before the implementation section freezes:
+
+1. **Canonical action identity:** `AppFSM.is_valid_transition`, `get_transition_target`, and `get_transition` currently match mostly on `action["type"]`. They should compare the canonical action signature `<tau, q, v>` so different widgets or values are not collapsed into the same transition.
+2. **Three-valued DSL evaluation:** `DSLEvaluator` currently exposes a boolean `passed` result. Missing GUI elements, missing intent variables, parse failures, or unreadable predicates should produce `UNCERTAIN` rather than being treated as ordinary semantic violations.
+3. **Invariant integration:** `InvariantChecker` exists, but `DecisionEngine` should evaluate the relevant successor/state/action invariants before returning high-trust `ALLOW`.
+4. **Replay verifier completion:** `neuro/replay_verifier.py` is still a Stage-5 skeleton. It should update `Transition.confidence` from replay trials and preserve low-confidence transitions for `UNCERTAIN` handling.
+5. **Low-trust evolution:** `FsmEvolver` currently copies template transition confidence when inheriting similar states. Inherited or micro-evolved edges should start with reduced confidence until replay validation promotes them.
+
+Latest local validation snapshot for the aligned prototype subset:
+
+```bash
+uv run pytest tests/test_models.py tests/test_fsm_checker.py tests/test_decision_engine.py tests/test_invariant_checker.py tests/test_dsl_evaluator.py tests/test_fsm_builder.py tests/test_evolution.py
+# 166 passed, 3 skipped
+```
 
 ---
 
