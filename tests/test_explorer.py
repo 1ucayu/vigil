@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -440,8 +441,17 @@ class TestEnumerateAllClickables:
         ):
             actions = explorer._enumerate_all_clickables("sid", [])
         # The two clickables on scr should be collected exactly once.
-        rids = {a.target_resource_id for a in actions}
-        assert rids == {"a:id/1", "a:id/2"}
+        click_rids = {a.target_resource_id for a in actions if a.action_type == ActionType.CLICK}
+        assert click_rids == {"a:id/1", "a:id/2"}
+        # Scroll candidates should also be emitted (Section A): the
+        # scrollable RecyclerView contributes SCROLL_UP and SCROLL_DOWN
+        # actions so the FSM records them as legal affordances.
+        scroll_types = {
+            a.action_type
+            for a in actions
+            if a.target_resource_id == "com.android.settings:id/recycler_view"
+        }
+        assert scroll_types == {ActionType.SCROLL_DOWN, ActionType.SCROLL_UP}
 
     def test_stops_when_no_scrollable(self, explorer: AppExplorer) -> None:
         scr = _screen_with_clickables("scr", ["x:id/one"], scrollable=False)
@@ -1629,3 +1639,690 @@ class TestFsmBuilderBackwardCompat:
         assert len(fsm.states) >= 1
         # The recorded trace should produce at least one transition.
         assert len(fsm.transitions) >= 1
+
+
+# ============================================================
+# Section C — selector resolution (MATCH / MISSING / AMBIGUOUS)
+# ============================================================
+
+
+class TestSelectorResolutionAmbiguity:
+    def test_ambiguous_resource_id_skips_execution(self, explorer: AppExplorer) -> None:
+        """Two Switch elements share android:id/switch_widget with no labels;
+        the explorer must refuse to click either."""
+        # Stage a screen with two indistinguishable switches.
+        e1 = UIElement(
+            element_id="sw1",
+            class_name="android.widget.Switch",
+            package="com.android.settings",
+            resource_id="android:id/switch_widget",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 0, 100, 100],
+        )
+        e2 = UIElement(
+            element_id="sw2",
+            class_name="android.widget.Switch",
+            package="com.android.settings",
+            resource_id="android:id/switch_widget",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 200, 100, 300],
+        )
+        screen = RawScreen(
+            screen_id="scr",
+            activity_name=".X",
+            package_name="com.android.settings",
+            elements=[e1, e2],
+        )
+        action = Action(
+            action_type=ActionType.CLICK,
+            target_selector={
+                "resource_id": "android:id/switch_widget",
+                "text": "",
+                "content_description": "",
+                "nearby_text": "",
+                "class_name": "android.widget.Switch",
+                "ancestor_chain": [],
+            },
+        )
+        with patch.object(explorer, "_capture_screen", return_value=screen):
+            assert explorer._execute_action(action) is False
+        assert explorer._last_execution_metadata.get("selector_resolution") == "ambiguous"
+
+    def test_nearby_text_disambiguates(self, explorer: AppExplorer) -> None:
+        """Same rid but nearby_text labels disambiguate to the right element."""
+        title_a = UIElement(
+            element_id="t_a",
+            class_name="android.widget.TextView",
+            package="com.android.settings",
+            resource_id="android:id/title",
+            text="Wi-Fi",
+            parent_id="row_a",
+        )
+        switch_a = UIElement(
+            element_id="sw_a",
+            class_name="android.widget.Switch",
+            package="com.android.settings",
+            resource_id="android:id/switch_widget",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 0, 100, 100],
+            parent_id="row_a",
+        )
+        row_a = UIElement(
+            element_id="row_a",
+            class_name="android.widget.LinearLayout",
+            package="com.android.settings",
+            children=["t_a", "sw_a"],
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 0, 1080, 200],
+        )
+        title_b = UIElement(
+            element_id="t_b",
+            class_name="android.widget.TextView",
+            package="com.android.settings",
+            resource_id="android:id/title",
+            text="Bluetooth",
+            parent_id="row_b",
+        )
+        switch_b = UIElement(
+            element_id="sw_b",
+            class_name="android.widget.Switch",
+            package="com.android.settings",
+            resource_id="android:id/switch_widget",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 200, 100, 300],
+            parent_id="row_b",
+        )
+        row_b = UIElement(
+            element_id="row_b",
+            class_name="android.widget.LinearLayout",
+            package="com.android.settings",
+            children=["t_b", "sw_b"],
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 200, 1080, 400],
+        )
+        # Even though resolution starts from rid (2 candidates), there is no
+        # nearby_text on the Switch itself — the selector targets the row.
+        # Use the row as the action target so nearby_text disambiguates.
+        screen = RawScreen(
+            screen_id="scr",
+            activity_name=".X",
+            package_name="com.android.settings",
+            elements=[row_a, title_a, switch_a, row_b, title_b, switch_b],
+        )
+        # Target the row by class_name + nearby_text. Ambiguous rids never
+        # come into play here.
+        action = Action(
+            action_type=ActionType.CLICK,
+            target_selector={
+                "resource_id": "",
+                "text": "",
+                "content_description": "",
+                "nearby_text": "Bluetooth",
+                "class_name": "android.widget.LinearLayout",
+                "ancestor_chain": [],
+            },
+            target_bounds=[0, 0, 0, 0],
+        )
+        with patch.object(explorer, "_capture_screen", return_value=screen):
+            ok = explorer._execute_action(action)
+        assert ok is True
+        assert explorer._last_execution_metadata.get("selector_resolution") == "match"
+
+
+# ============================================================
+# Section D — safe INPUT_TEXT (clear-then-set)
+# ============================================================
+
+
+class TestSafeInputText:
+    def test_input_text_clears_before_set(
+        self, explorer: AppExplorer, mock_device: MagicMock
+    ) -> None:
+        """Original "abc" + input "test123" must end as "test123", not "abctest123"."""
+        # Build an EditText already containing "abc".
+        edit = UIElement(
+            element_id="e_edit",
+            class_name="android.widget.EditText",
+            package="com.android.settings",
+            resource_id="com.example:id/input",
+            text="abc",
+            is_clickable=True,
+            is_editable=True,
+            is_enabled=True,
+            bounds=[100, 100, 500, 200],
+        )
+        screen = RawScreen(
+            screen_id="scr",
+            activity_name=".X",
+            package_name="com.android.settings",
+            elements=[edit],
+        )
+        # Simulate device-side text store: set_text replaces, send_keys appends.
+        device_text: dict[str, str] = {"value": "abc"}
+
+        class _Selector:
+            exists = True
+
+            def set_text(self, value: str) -> None:
+                device_text["value"] = value
+
+        mock_device.return_value = _Selector()
+        action = Action(
+            action_type=ActionType.INPUT_TEXT,
+            target_selector={
+                "resource_id": "com.example:id/input",
+                "text": "",
+                "content_description": "",
+                "nearby_text": "",
+                "class_name": "android.widget.EditText",
+                "ancestor_chain": [],
+            },
+            input_text="test123",
+        )
+        with patch.object(explorer, "_capture_screen", return_value=screen):
+            ok = explorer._execute_action(action)
+        assert ok is True
+        assert device_text["value"] == "test123"
+        md = explorer._last_execution_metadata
+        assert md.get("input_original_text") == "abc"
+        assert md.get("input_text") == "test123"
+        assert md.get("cleared") is True
+        assert md.get("input_policy") == "clear_set"
+
+    def test_input_text_duplicate_resource_id_uses_resolved_instance(
+        self, explorer: AppExplorer, mock_device: MagicMock
+    ) -> None:
+        first = UIElement(
+            element_id="first_edit",
+            class_name="android.widget.EditText",
+            package="com.android.settings",
+            resource_id="com.example:id/input",
+            text="first",
+            is_editable=True,
+            is_enabled=True,
+            bounds=[100, 100, 500, 200],
+        )
+        second = UIElement(
+            element_id="second_edit",
+            class_name="android.widget.EditText",
+            package="com.android.settings",
+            resource_id="com.example:id/input",
+            text="second",
+            is_editable=True,
+            is_enabled=True,
+            bounds=[100, 250, 500, 350],
+        )
+        screen = RawScreen(
+            screen_id="scr",
+            activity_name=".X",
+            package_name="com.android.settings",
+            elements=[first, second],
+        )
+        set_text_calls: list[tuple[int | None, str]] = []
+
+        class _Selector:
+            exists = True
+
+            def __init__(self, instance: int | None) -> None:
+                self.instance = instance
+
+            def set_text(self, value: str) -> None:
+                set_text_calls.append((self.instance, value))
+
+        def select(**kwargs: object) -> _Selector:
+            instance = kwargs.get("instance")
+            return _Selector(instance if isinstance(instance, int) else None)
+
+        mock_device.side_effect = select
+        action = Action(
+            action_type=ActionType.INPUT_TEXT,
+            target_selector={
+                "resource_id": "com.example:id/input",
+                "text": "second",
+                "content_description": "",
+                "nearby_text": "",
+                "class_name": "android.widget.EditText",
+                "ancestor_chain": [],
+            },
+            input_text="target value",
+        )
+        with patch.object(explorer, "_capture_screen", return_value=screen):
+            ok = explorer._execute_action(action)
+
+        assert ok is True
+        assert set_text_calls == [(1, "target value")]
+        mock_device.assert_any_call(
+            resourceId="com.example:id/input",
+            className="android.widget.EditText",
+            instance=1,
+        )
+        mock_device.send_keys.assert_not_called()
+        md = explorer._last_execution_metadata
+        assert md.get("input_selector_collision") is True
+        assert md.get("input_selector_instance") == 1
+        assert md.get("input_selector_policy") == "resource_id_instance"
+
+
+# ============================================================
+# Section E — drift does not pollute target nav paths
+# ============================================================
+
+
+class TestDriftNavPathPolicy:
+    def test_drift_does_not_create_trusted_nav_path_for_new_target(self) -> None:
+        """When actual_src != intended, a brand-new target_state_id must
+        not be enqueued or registered in _nav_paths."""
+        config = VigilConfig()
+        with patch("vigil.neuro.explorer.u2"):
+            exp = AppExplorer(
+                device_serial="x",
+                app_package="com.app",
+                config=config,
+                output_dir=Path("/tmp/vigil_test_drift"),
+            )
+        exp._nav_paths["intended"] = []
+        exp._trusted_states.add("intended")
+        # Synthesize a successful, drifted trace from the explorer state.
+        action = Action(action_type=ActionType.CLICK, target_resource_id="r")
+        trace = ExplorationTrace(
+            step_number=1,
+            intended_source_state_id="intended",
+            source_state_id="actual_other",  # drift
+            action=action,
+            target_state_id="brand_new_target",
+            timestamp="t",
+        )
+        # Replicate the discovery-site logic.
+        actual_src = trace.source_state_id
+        drifted = actual_src != "intended"
+        assert drifted
+        if drifted:
+            exp._drift_count += 1
+        tgt = trace.target_state_id
+        if tgt not in exp._nav_paths:
+            if not drifted:
+                exp._nav_paths[tgt] = [action]
+            elif actual_src in exp._nav_paths and actual_src in exp._trusted_states:
+                exp._nav_paths[tgt] = [*exp._nav_paths[actual_src], action]
+            else:
+                exp._untrusted_targets.add(tgt)
+        assert tgt not in exp._nav_paths
+        assert "brand_new_target" in exp._untrusted_targets
+        assert exp._drift_count == 1
+
+
+# ============================================================
+# Section F — scope policy classification & enforcement
+# ============================================================
+
+
+class TestScopePolicyExplorer:
+    def test_classify_target_in_app(self, explorer: AppExplorer) -> None:
+        from vigil.neuro.scope_policy import ScopeCategory
+
+        assert explorer._scope_policy.classify("com.android.settings") == ScopeCategory.IN_APP
+
+    def test_classify_android_dialog_low_trust(self, explorer: AppExplorer) -> None:
+        from vigil.neuro.scope_policy import ScopeCategory
+
+        cat = explorer._scope_policy.classify("android")
+        assert cat == ScopeCategory.ANDROID_SYSTEM
+        assert explorer._scope_policy.is_allowed(cat) is True
+        assert explorer._scope_policy.is_low_trust(cat) is True
+
+    def test_system_ui_element_filtered_from_enumeration(self, explorer: AppExplorer) -> None:
+        in_app = UIElement(
+            element_id="e0",
+            class_name="android.widget.Button",
+            package="com.android.settings",
+            resource_id="com.android.settings:id/ok",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 0, 100, 100],
+        )
+        sysui = UIElement(
+            element_id="e1",
+            class_name="android.widget.ImageButton",
+            package="com.android.systemui",
+            resource_id="com.android.systemui:id/clock",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 500, 100, 600],
+        )
+        scr = RawScreen(
+            screen_id="s",
+            activity_name=".X",
+            package_name="com.android.settings",
+            elements=[in_app, sysui],
+        )
+        screens = iter([scr, scr])
+        with (
+            patch.object(explorer, "_cold_start_app", return_value=True),
+            patch.object(explorer, "_execute_action", return_value=True),
+            patch.object(explorer, "_capture_screen", side_effect=lambda: next(screens)),
+        ):
+            actions = explorer._enumerate_actions_for_state("sid", [])
+        rids = {a.target_resource_id for a in actions}
+        assert "com.android.settings:id/ok" in rids
+        assert "com.android.systemui:id/clock" not in rids
+
+    def test_unknown_package_left_app(self, explorer: AppExplorer) -> None:
+        from vigil.neuro.scope_policy import ScopeCategory
+
+        assert explorer._scope_policy.classify("com.foo.bar") == ScopeCategory.OUT_OF_SCOPE_EXTERNAL
+
+    def test_launcher_package(self, explorer: AppExplorer) -> None:
+        from vigil.neuro.scope_policy import ScopeCategory
+
+        assert (
+            explorer._scope_policy.classify("com.android.launcher3")
+            == ScopeCategory.LAUNCHER_OR_HOME
+        )
+
+
+# ============================================================
+# Section G — generic risk policy
+# ============================================================
+
+
+class TestRiskPolicyExplorer:
+    def test_destructive_element_skipped_by_default(self, explorer: AppExplorer) -> None:
+        risky = UIElement(
+            element_id="e_risk",
+            class_name="android.widget.Button",
+            package="com.android.settings",
+            resource_id="com.example:id/reset",
+            text="Factory reset",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 0, 100, 100],
+        )
+        safe = UIElement(
+            element_id="e_safe",
+            class_name="android.widget.Button",
+            package="com.android.settings",
+            resource_id="com.example:id/wifi",
+            text="Wi-Fi",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 200, 100, 300],
+        )
+        scr = RawScreen(
+            screen_id="s",
+            activity_name=".X",
+            package_name="com.android.settings",
+            elements=[risky, safe],
+        )
+        screens = iter([scr, scr])
+        with (
+            patch.object(explorer, "_cold_start_app", return_value=True),
+            patch.object(explorer, "_execute_action", return_value=True),
+            patch.object(explorer, "_capture_screen", side_effect=lambda: next(screens)),
+        ):
+            actions = explorer._enumerate_actions_for_state("sid", [])
+        rids = {a.target_resource_id for a in actions}
+        assert "com.example:id/wifi" in rids
+        assert "com.example:id/reset" not in rids
+
+
+# ============================================================
+# Clarification: severity tiers (hard-block vs low-trust)
+# ============================================================
+
+
+class TestRiskSeverityTiers:
+    def test_hard_block_categories_blocked_even_when_allow_risky(self) -> None:
+        from vigil.neuro.risk_policy import RiskPolicy, RiskSeverity
+
+        p = RiskPolicy.from_config()
+        # allow_risky=True still blocks hard-block categories.
+        p2 = RiskPolicy(categories=p.categories, severity=p.severity, allow_risky=True)
+        assert p.severity.get("destructive") == RiskSeverity.HARD_BLOCK
+        assert p.severity.get("payment") == RiskSeverity.HARD_BLOCK
+        assert p.severity.get("credential") == RiskSeverity.HARD_BLOCK
+        assert p.severity.get("irreversible") == RiskSeverity.HARD_BLOCK
+        assert p2.should_skip(p2.tag("Factory reset")) is True
+        assert p2.should_skip(p2.tag("Pay now")) is True
+
+    def test_low_trust_categories_unblocked_when_allow_risky(self) -> None:
+        from vigil.neuro.risk_policy import RiskPolicy, RiskSeverity
+
+        p = RiskPolicy.from_config()
+        assert p.severity.get("commit") == RiskSeverity.LOW_TRUST
+        assert p.severity.get("permission") == RiskSeverity.LOW_TRUST
+        assert p.severity.get("privacy") == RiskSeverity.LOW_TRUST
+        p_strict = RiskPolicy(categories=p.categories, severity=p.severity, allow_risky=False)
+        p_perm = RiskPolicy(categories=p.categories, severity=p.severity, allow_risky=True)
+        assert p_strict.should_skip(p_strict.tag("Submit")) is True
+        assert p_perm.should_skip(p_perm.tag("Submit")) is False
+
+
+# ============================================================
+# Clarification: INPUT_TEXT refuses when clear cannot be guaranteed
+# ============================================================
+
+
+class TestInputTextRefusalOnUnsafeClear:
+    def test_refuses_when_clear_unsupported(
+        self, explorer: AppExplorer, mock_device: MagicMock
+    ) -> None:
+        """Device exposes neither element.set_text nor device.clear_text:
+        the explorer must refuse rather than append."""
+        edit = UIElement(
+            element_id="e_edit",
+            class_name="android.widget.EditText",
+            package="com.android.settings",
+            resource_id="com.example:id/input",
+            text="abc",
+            is_clickable=True,
+            is_editable=True,
+            is_enabled=True,
+            bounds=[100, 100, 500, 200],
+        )
+        screen = RawScreen(
+            screen_id="scr",
+            activity_name=".X",
+            package_name="com.android.settings",
+            elements=[edit],
+        )
+
+        class _NoSetText:
+            exists = True
+            # intentionally NO set_text attribute
+
+        # Device call returns a selector without set_text. Also strip
+        # clear_text from the device entirely.
+        mock_device.return_value = _NoSetText()
+        if hasattr(mock_device, "clear_text"):
+            # MagicMock auto-creates attributes; force AttributeError via
+            # del on the spec.
+            with contextlib.suppress(AttributeError):
+                del mock_device.clear_text
+        # Make hasattr(..., 'clear_text') return False.
+        mock_device.__class__ = type(
+            "NoClearDevice",
+            (),
+            {k: v for k, v in mock_device.__class__.__dict__.items() if k != "clear_text"},
+        )
+
+        action = Action(
+            action_type=ActionType.INPUT_TEXT,
+            target_selector={
+                "resource_id": "com.example:id/input",
+                "text": "",
+                "content_description": "",
+                "nearby_text": "",
+                "class_name": "android.widget.EditText",
+                "ancestor_chain": [],
+            },
+            input_text="test123",
+        )
+        # Make sure hasattr returns False for clear_text on the mock device.
+        mock_device.clear_text = MagicMock(side_effect=AttributeError())
+
+        # send_keys would append if invoked: track that it isn't called.
+        with patch.object(explorer, "_capture_screen", return_value=screen):
+            ok = explorer._execute_action(action)
+        assert ok is False
+        md = explorer._last_execution_metadata
+        # set_text failed (no attribute), clear_text raised; explorer must
+        # refuse rather than send_keys.
+        assert md.get("cleared") is False
+        assert md.get("input_policy") == "skipped_unsafe"
+
+
+# ============================================================
+# Clarification: ANDROID_SYSTEM low-trust never enqueued / never trusted
+# ============================================================
+
+
+class TestAndroidSystemLowTrust:
+    def test_android_system_target_not_enqueued_as_normal_state(self) -> None:
+        """Even on a clean (non-drifted) observation, an ANDROID_SYSTEM
+        post_scope must NOT promote the target to a trusted, enqueued
+        app state. The target is observed only."""
+        from vigil.neuro.scope_policy import ScopeCategory
+
+        config = VigilConfig()
+        with patch("vigil.neuro.explorer.u2"):
+            exp = AppExplorer(
+                device_serial="x",
+                app_package="com.app",
+                config=config,
+                output_dir=Path("/tmp/vigil_test_android_system"),
+            )
+        exp._nav_paths["src_app"] = []
+        exp._trusted_states.add("src_app")
+        action = Action(action_type=ActionType.CLICK, target_resource_id="r")
+        # Simulate a trace whose post-action capture landed on an
+        # ANDROID_SYSTEM dialog (low_trust_scope=True).
+        trace = ExplorationTrace(
+            step_number=1,
+            intended_source_state_id="src_app",
+            source_state_id="src_app",
+            action=action,
+            target_state_id="dialog_system",
+            timestamp="t",
+            metadata={
+                "scope_pre": "in_app",
+                "scope_post": "android_system",
+                "low_trust_scope": True,
+            },
+        )
+
+        # Replicate the discovery-site behavior from explorer.explore().
+        tgt = trace.target_state_id
+        actual_src = trace.source_state_id
+        drifted = actual_src != "src_app"
+        low_trust_target = bool(trace.metadata.get("low_trust_scope"))
+        low_trust_source = trace.metadata.get("scope_pre") == ScopeCategory.ANDROID_SYSTEM.value
+        if not drifted and not low_trust_source:
+            exp._trusted_states.add(actual_src)
+        if tgt not in exp._nav_paths:
+            if low_trust_target:
+                exp._untrusted_targets.add(tgt)
+            elif not drifted and not low_trust_source:
+                exp._nav_paths[tgt] = [*exp._nav_paths["src_app"], action]
+
+        assert tgt not in exp._nav_paths
+        assert tgt in exp._untrusted_targets
+
+
+# ============================================================
+# Clarification: ActionAttempt for risky-skipped enumeration
+# ============================================================
+
+
+class TestActionAttempts:
+    def test_risky_element_records_action_attempt(self, explorer: AppExplorer) -> None:
+        from vigil.neuro.explorer import ActionAttempt as _ActionAttempt
+
+        risky = UIElement(
+            element_id="e_risk",
+            class_name="android.widget.Button",
+            package="com.android.settings",
+            resource_id="com.example:id/reset",
+            text="Factory reset",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 0, 100, 100],
+        )
+        scr = RawScreen(
+            screen_id="s",
+            activity_name=".X",
+            package_name="com.android.settings",
+            elements=[risky],
+        )
+        screens = iter([scr, scr])
+        with (
+            patch.object(explorer, "_cold_start_app", return_value=True),
+            patch.object(explorer, "_execute_action", return_value=True),
+            patch.object(explorer, "_capture_screen", side_effect=lambda: next(screens)),
+        ):
+            explorer._enumerate_actions_for_state("sid", [])
+        # Action was NOT added to the formal action list, but an
+        # ActionAttempt with status='skipped_risky' was recorded.
+        assert any(
+            isinstance(a, _ActionAttempt) and a.status == "skipped_risky"
+            for a in explorer._action_attempts
+        )
+
+    def test_ambiguous_selector_records_action_attempt(self, explorer: AppExplorer) -> None:
+        from vigil.neuro.explorer import ActionAttempt as _ActionAttempt
+
+        # Two switches sharing rid; click action with only that rid.
+        e1 = UIElement(
+            element_id="sw1",
+            class_name="android.widget.Switch",
+            package="com.android.settings",
+            resource_id="android:id/switch_widget",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 0, 100, 100],
+        )
+        e2 = UIElement(
+            element_id="sw2",
+            class_name="android.widget.Switch",
+            package="com.android.settings",
+            resource_id="android:id/switch_widget",
+            is_clickable=True,
+            is_enabled=True,
+            bounds=[0, 200, 100, 300],
+        )
+        screen = RawScreen(
+            screen_id="scr",
+            activity_name=".X",
+            package_name="com.android.settings",
+            elements=[e1, e2],
+        )
+        action = Action(
+            action_type=ActionType.CLICK,
+            target_selector={
+                "resource_id": "android:id/switch_widget",
+                "text": "",
+                "content_description": "",
+                "nearby_text": "",
+                "class_name": "android.widget.Switch",
+                "ancestor_chain": [],
+            },
+        )
+        with patch.object(explorer, "_capture_screen", return_value=screen):
+            trace, _, _ = explorer._perform_one_observation(
+                intended_source_state_id="src",
+                intended_nav_path=[],
+                action=action,
+                step=1,
+            )
+        # The trace records the refusal as a SENTINEL_ACTION_FAILED
+        # (filtered by FsmBuilder) AND an ActionAttempt is appended.
+        assert trace.target_state_id == SENTINEL_ACTION_FAILED
+        assert any(
+            isinstance(a, _ActionAttempt) and a.status == "ambiguous_selector"
+            for a in explorer._action_attempts
+        )

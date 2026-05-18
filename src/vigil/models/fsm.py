@@ -248,6 +248,7 @@ class Transition(BaseModel):
         action: Action that triggers this transition (e.g., {"type": "click", "target": ...}).
         guard: Optional DSL guard expression that must evaluate to true.
         confidence: Replay confidence score (success_count / total_trials).
+        low_trust: Whether the edge came from a low-trust observation scope.
         observed_count: Number of times this transition was observed during exploration.
     """
 
@@ -256,6 +257,7 @@ class Transition(BaseModel):
     action: dict[str, Any]
     guard: str | None = None
     confidence: float = 0.0
+    low_trust: bool = False
     observed_count: int = 0
 
 
@@ -320,6 +322,7 @@ class AppFSM:
             action=transition.action,
             guard=transition.guard,
             confidence=transition.confidence,
+            low_trust=transition.low_trust,
             observed_count=transition.observed_count,
         )
 

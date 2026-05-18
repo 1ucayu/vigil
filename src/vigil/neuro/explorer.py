@@ -48,6 +48,12 @@ from vigil.core.ui_selectors import (
 from vigil.models.action import Action, ActionType
 from vigil.models.state import RawScreen, UIElement, _normalize_dynamic
 from vigil.neuro.app_prior import AppPrior
+from vigil.neuro.risk_policy import RiskPolicy
+from vigil.neuro.scope_policy import ScopeCategory, ScopePolicy
+from vigil.neuro.selector_resolution import (
+    ResolutionStatus,
+    resolve_selector,
+)
 
 SENTINEL_COLD_START_FAILED = "COLD_START_FAILED"
 SENTINEL_ACTION_FAILED = "ACTION_FAILED"
@@ -69,41 +75,18 @@ ACTION_TYPE_WEIGHT: dict[ActionType, float] = {
     ActionType.SCROLL_UP: 0.5,
 }
 
-# Safety blacklist: substrings (case-insensitive) that indicate dangerous or
-# dead-end UI paths the explorer must never click. These lead into system
-# setup wizards in other packages (face/fingerprint enrollment, factory
-# reset) or destructive confirmations; reachable from Settings but not part
-# of com.android.settings, so they trigger LEFT_APP cascades that waste
-# budget on retries.
-DANGEROUS_TEXT_PATTERNS: frozenset[str] = frozenset(
-    {
-        "face unlock",
-        "fingerprint",
-        "factory reset",
-        "erase all data",
-        "set up face",
-        "face & fingerprint",
-        "enroll face",
-        "screen lock",
-        "confirm your pin",
-        "confirm your pattern",
-        "encrypt",
-        "wipe",
-        "reset phone",
-    }
-)
+# Generic risk policy replaces the previous hardcoded keyword list. Risk
+# categories now live in ``configs/android_platform.yaml`` and are loaded
+# through :class:`vigil.neuro.risk_policy.RiskPolicy`. The constants below
+# remain as empty-set / no-op stubs so external imports do not break; new
+# code should use ``self._risk_policy.tag(...)`` instead.
+DANGEROUS_TEXT_PATTERNS: frozenset[str] = frozenset()
 
 
 def _is_dangerous_element(text: str | None, content_desc: str | None) -> str | None:
-    """Return the matching blacklist pattern if element text/content-desc
-    hits it, else None."""
-    for raw in (text, content_desc):
-        if not raw:
-            continue
-        lowered = raw.lower()
-        for pattern in DANGEROUS_TEXT_PATTERNS:
-            if pattern in lowered:
-                return pattern
+    """Deprecated. Returns None; risk classification is now done via
+    :class:`vigil.neuro.risk_policy.RiskPolicy`."""
+    _ = (text, content_desc)
     return None
 
 
@@ -314,7 +297,19 @@ def _build_scroll_down(screen: RawScreen) -> Action | None:
 
 class ExplorationTrace(BaseModel):
     """One observation record. Compatible with the previous trace schema;
-    adds ``intended_source_state_id`` and drops ``failure_reason``."""
+    adds ``intended_source_state_id``, drops ``failure_reason``, and carries
+    a free-form ``metadata`` dict for downstream diagnostics (drift,
+    selector resolution status, scope category, risk tags, INPUT_TEXT
+    bookkeeping, nav-path trust). Older traces without metadata
+    deserialize correctly because the field has a default factory.
+
+    Invariant: a :class:`ExplorationTrace` represents an *executed*
+    transition observation only. Actions that were refused before
+    execution (risk-blocked, ambiguous selector, out-of-scope element,
+    INPUT_TEXT that could not guarantee clear-before-set) are recorded
+    as :class:`ActionAttempt` records and MUST NOT appear in this list,
+    so the FSM builder never turns them into transitions.
+    """
 
     step_number: int
     source_state_id: str = ""
@@ -324,6 +319,28 @@ class ExplorationTrace(BaseModel):
     target_state_id: str = ""
     target_screen_id: str = ""
     timestamp: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActionAttempt(BaseModel):
+    """A refused-before-execution attempt to interact with the device.
+
+    Emitted (and persisted alongside :class:`ExplorationTrace`) when the
+    explorer chooses not to execute an action, so post-hoc analysis can
+    see *what* was refused and *why* without polluting the FSM with
+    fake transitions. Never used to build FSM edges.
+    """
+
+    step_number: int
+    source_state_id: str = ""
+    source_screen_id: str = ""
+    action: Action
+    # Status values: "skipped_risky" | "ambiguous_selector" |
+    # "skipped_unsafe_input" | "skipped_scope" | "missing_selector"
+    status: str
+    reason: str = ""
+    timestamp: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScrollObservation(BaseModel):
@@ -444,6 +461,48 @@ class AppExplorer:
         # trace under "scroll_observations" for downstream analysis.
         self._scroll_observations: list[ScrollObservation] = []
 
+        # Generic single-app scope + risk policies. Loaded from
+        # configs/android_platform.yaml. No app-specific allowlists are
+        # introduced here — defaults are Android framework packages and
+        # platform-level risk keywords.
+        self._scope_policy: ScopePolicy = self._build_scope_policy()
+        self._risk_policy: RiskPolicy = RiskPolicy.from_config()
+        # Action keys that were enumerated as formal SCROLL candidates per
+        # source state. Used to attach metadata to traces so downstream
+        # consumers can distinguish formal scroll affordances from
+        # internal sweep-only scrolls (which never reach _perform_one_observation).
+        self._scroll_candidate_keys: dict[str, set[str]] = defaultdict(set)
+        # Drift / nav-path trust diagnostics (Section E).
+        self._drift_count: int = 0
+        self._trusted_states: set[str] = {self._app_package and ""}
+        self._trusted_states.discard("")
+        self._untrusted_targets: set[str] = set()
+        # Side-channel for _execute_action diagnostics consumed by
+        # _perform_one_observation. Reset at the start of every execution.
+        self._last_execution_metadata: dict[str, Any] = {}
+        # Refused-before-execution attempts. Saved alongside traces but
+        # NEVER converted to FSM transitions.
+        self._action_attempts: list[ActionAttempt] = []
+
+    @staticmethod
+    def _build_scope_policy_from_defaults(app_package: str) -> ScopePolicy:
+        from vigil.core.platform_priors import get_scope_defaults
+
+        cfg = get_scope_defaults()
+        kwargs: dict[str, Any] = {"app_package": app_package}
+        if cfg.get("android_system_packages"):
+            kwargs["android_system_packages"] = frozenset(cfg["android_system_packages"])
+        if cfg.get("system_ui_packages"):
+            kwargs["system_ui_packages"] = frozenset(cfg["system_ui_packages"])
+        if cfg.get("launcher_patterns"):
+            kwargs["launcher_patterns"] = tuple(cfg["launcher_patterns"])
+        if "allow_android_system" in cfg:
+            kwargs["allow_android_system"] = bool(cfg["allow_android_system"])
+        return ScopePolicy(**kwargs)
+
+    def _build_scope_policy(self) -> ScopePolicy:
+        return self._build_scope_policy_from_defaults(self._app_package)
+
     # ------------------------------------------------------------------ public
 
     def explore(self) -> ExplorationResult:
@@ -462,6 +521,7 @@ class AppExplorer:
         entry_sid = entry.get_hybrid_state_id(self._app_package)
         self._current_state_id = entry_sid
         self._nav_paths[entry_sid] = []
+        self._trusted_states.add(entry_sid)
         screens: dict[str, RawScreen] = {entry.screen_id: entry}
         traces: list[ExplorationTrace] = []
         counts = {"cold_start_failures": 0, "left_app": 0, "action_failures": 0}
@@ -587,9 +647,60 @@ class AppExplorer:
                 screens[post_screen.screen_id] = post_screen
 
             tgt = trace.target_state_id
-            if tgt and tgt not in SENTINEL_TARGETS and tgt not in self._nav_paths:
-                self._nav_paths[tgt] = [*self._nav_paths[state_id], action]
-                enumerate_queue.append(tgt)
+            if tgt and tgt not in SENTINEL_TARGETS:
+                actual_src = trace.source_state_id
+                drifted = bool(actual_src) and actual_src != state_id
+                low_trust_target = bool(trace.metadata.get("low_trust_scope"))
+                low_trust_source = (
+                    trace.metadata.get("scope_pre") == ScopeCategory.ANDROID_SYSTEM.value
+                )
+                if drifted:
+                    self._drift_count += 1
+                # Mark IN_APP successful observations as trusted sources.
+                # ANDROID_SYSTEM screens are observation-only by default —
+                # neither the source nor the target is promoted to a
+                # trusted state; they are not used as a basis for new
+                # nav paths because their content is transient (dialogs,
+                # permission prompts, document pickers).
+                if actual_src and not drifted and not low_trust_source:
+                    self._trusted_states.add(actual_src)
+                if tgt not in self._nav_paths:
+                    if low_trust_target:
+                        # Allow observation/capture (already done above
+                        # via screens), but do NOT enqueue the
+                        # ANDROID_SYSTEM target as a normal app state.
+                        # Operators who need to enumerate framework
+                        # dialogs as states must enable it explicitly via
+                        # a future scope-policy flag.
+                        self._untrusted_targets.add(tgt)
+                        trace.metadata["observed_untrusted"] = True
+                        trace.metadata["trusted_nav_path"] = False
+                        trace.metadata["low_trust_skipped_enqueue"] = True
+                    elif not drifted and not low_trust_source:
+                        # Trusted: extend the intended source's nav_path.
+                        self._nav_paths[tgt] = [*self._nav_paths[state_id], action]
+                        enumerate_queue.append(tgt)
+                        trace.metadata["trusted_nav_path"] = True
+                        self._trusted_states.add(tgt)
+                    elif (
+                        not low_trust_source
+                        and actual_src in self._nav_paths
+                        and actual_src in self._trusted_states
+                    ):
+                        # Drift, but actual_src is trusted IN_APP — extend
+                        # that path. ANDROID_SYSTEM actual sources never
+                        # provide a trusted basis.
+                        self._nav_paths[tgt] = [*self._nav_paths[actual_src], action]
+                        enumerate_queue.append(tgt)
+                        trace.metadata["trusted_nav_path"] = True
+                        trace.metadata["nav_path_basis"] = "actual_src"
+                        self._trusted_states.add(tgt)
+                    else:
+                        # Observed but not enqueued — explorer cannot
+                        # reach `tgt` via a trusted replay path.
+                        self._untrusted_targets.add(tgt)
+                        trace.metadata["observed_untrusted"] = True
+                        trace.metadata["trusted_nav_path"] = False
 
         self._log_summary()
         return self._finalize(
@@ -686,8 +797,28 @@ class AppExplorer:
 
     # ---------------------------------------------------------- core phases
 
-    def _enumerate_all_clickables(self, state_id: str, nav_path: list[Action]) -> list[Action]:
-        """Restart + navigate + scroll to collect all clickables on the page."""
+    def _enumerate_actions_for_state(self, state_id: str, nav_path: list[Action]) -> list[Action]:
+        """Restart + navigate + scroll-sweep to collect all candidate actions.
+
+        Emits the formal Vigil action space for the current screen:
+          - CLICK / LONG_PRESS / INPUT_TEXT for interactable elements
+            (built by :func:`_build_interact_action`).
+          - SCROLL_DOWN / SCROLL_UP per scrollable container as *formal*
+            candidate actions (so the FSM records them as transitions /
+            affordances even when source == target).
+
+        The internal scroll *sweep* used to reveal offscreen widgets is
+        distinct from the formal SCROLL *candidates* emitted into the
+        returned action list. Sweep events are recorded as
+        ``ScrollObservation(phase="enumerate")``; candidate scroll actions
+        carry the ``scope`` tag in their action metadata so downstream
+        consumers can recognize them.
+
+        SYSTEM_UI elements are filtered out — they belong to status / nav
+        bar overlays and must not contribute to app-level identity or
+        action enumeration. Risky elements (matched by RiskPolicy) are
+        skipped when ``allow_risky`` is false.
+        """
         if not self._cold_start_app():
             logger.warning(f"cold-start failed during enumerate of {state_id[:6]}")
             return []
@@ -696,6 +827,8 @@ class AppExplorer:
             time.sleep(self.POST_ACTION_WAIT)
 
         collected: dict[str, Action] = {}
+        skipped_risky = 0
+        scroll_candidate_keys: set[str] = set()
         last_anchors: frozenset[tuple[str, str]] | None = None
         prev_screen: RawScreen | None = None
         prev_anchor_h: str = ""
@@ -708,28 +841,80 @@ class AppExplorer:
             if screen is None:
                 break
             for e in screen.elements:
+                # SYSTEM_UI elements never become app actions.
+                if self._scope_policy.should_filter_element(e.package):
+                    continue
                 interactable = (
                     e.is_clickable or e.is_long_clickable or e.is_checkable or e.is_editable
                 )
-                if not interactable:
+                scrollable_candidate = e.is_scrollable and bool(e.bounds)
+                if not (interactable or scrollable_candidate):
                     continue
                 pkg = (e.package or "").strip()
-                if pkg and pkg != self._app_package and pkg != "android":
-                    continue
-                hit = _is_dangerous_element(e.text, e.content_description)
-                if hit is not None:
+                if pkg:
+                    cat = self._scope_policy.classify(pkg)
+                    # Allow IN_APP and (low-trust) ANDROID_SYSTEM elements
+                    # to be enumerated, since framework dialogs / pickers
+                    # are part of legitimate in-app flows. SYSTEM_UI was
+                    # already filtered above.
+                    if cat not in (ScopeCategory.IN_APP, ScopeCategory.ANDROID_SYSTEM):
+                        continue
+                risk_tags = self._risk_policy.tag(e.text, e.content_description)
+                if risk_tags and self._risk_policy.should_skip(risk_tags):
+                    skipped_risky += 1
+                    severity = self._risk_policy.max_severity(risk_tags)
+                    self._action_attempts.append(
+                        ActionAttempt(
+                            step_number=0,
+                            source_state_id=state_id,
+                            source_screen_id=screen.screen_id,
+                            action=_build_interact_action(e, screen.elements)
+                            if interactable
+                            else Action(
+                                action_type=ActionType.CLICK,
+                                target_resource_id=e.resource_id,
+                                target_text=e.text,
+                            ),
+                            status="skipped_risky",
+                            reason=f"risk severity={severity}",
+                            timestamp=_now_iso(),
+                            metadata={
+                                "risk_tags": list(risk_tags),
+                                "severity": severity.value if severity else None,
+                            },
+                        )
+                    )
                     logger.debug(
-                        f"Skipping dangerous element {e.element_id} (matched pattern {hit!r})"
+                        f"Skipping risky element {e.element_id} "
+                        f"severity={severity} risk_tags={risk_tags}"
                     )
                     continue
-                action = _build_interact_action(e, screen.elements)
-                if not is_action_identifiable(action):
-                    logger.debug(
-                        f"Dropping unidentifiable action on element "
-                        f"{e.element_id} (no rid/text/content_desc/class_name)"
-                    )
-                    continue
-                collected.setdefault(action_key(action), action)
+                if interactable:
+                    action = _build_interact_action(e, screen.elements)
+                    if not is_action_identifiable(action):
+                        continue
+                    if risk_tags:
+                        action.metadata.setdefault("risk_tags", list(risk_tags))
+                    collected.setdefault(action_key(action), action)
+                if scrollable_candidate:
+                    # Emit formal SCROLL_DOWN / SCROLL_UP candidates per
+                    # scrollable container. These persist in the FSM as
+                    # transitions, including the source==target case which
+                    # is meaningful for offscreen coverage.
+                    for st in (ActionType.SCROLL_DOWN, ActionType.SCROLL_UP):
+                        scroll_action = Action(
+                            action_type=st,
+                            target_element_id=e.element_id,
+                            target_bounds=list(e.bounds),
+                            target_resource_id=e.resource_id,
+                            target_class_name=e.class_name or None,
+                            target_selector=build_component_selector(e, screen.elements),
+                            metadata={"scope": "scroll_candidate"},
+                        )
+                        if is_action_identifiable(scroll_action):
+                            key = action_key(scroll_action)
+                            collected.setdefault(key, scroll_action)
+                            scroll_candidate_keys.add(key)
 
             _, anchors = screen.get_functional_state_key(self._app_package)
             cur_anchor_h = _anchor_hash(anchors)
@@ -763,9 +948,6 @@ class AppExplorer:
             scroll = _build_scroll_down(screen)
             if scroll is None:
                 break
-            # Bypass _execute_action's descriptor-resolve path during
-            # enumeration — we already have a live scroll container, no
-            # need to re-capture and re-match inside execute_scroll.
             prev_screen = screen
             prev_anchor_h = cur_anchor_h
             prev_struct_fp = cur_struct_fp
@@ -774,7 +956,16 @@ class AppExplorer:
             self._swipe_scroll(ActionType.SCROLL_DOWN, scroll)
             time.sleep(self.POST_ACTION_WAIT)
 
+        if skipped_risky:
+            logger.info(
+                f"state={state_id[:6]} skipped {skipped_risky} risky element(s) "
+                "during enumeration"
+            )
+        self._scroll_candidate_keys[state_id] = scroll_candidate_keys
         return list(collected.values())
+
+    # Backwards-compatible alias for older call sites / tests.
+    _enumerate_all_clickables = _enumerate_actions_for_state
 
     def _perform_one_observation(
         self,
@@ -796,7 +987,25 @@ class AppExplorer:
             src_screen_id: str = "",
             target: str,
             target_screen_id: str = "",
+            extra_metadata: dict[str, Any] | None = None,
         ) -> ExplorationTrace:
+            md: dict[str, Any] = {
+                "drifted": bool(src) and src != intended_source_state_id,
+            }
+            if extra_metadata:
+                md.update(extra_metadata)
+            # Mark formal-scroll candidates so trace consumers can preserve
+            # SCROLL self-loops as meaningful affordances.
+            if action.action_type in (
+                ActionType.SCROLL_UP,
+                ActionType.SCROLL_DOWN,
+            ) and action_key(action) in self._scroll_candidate_keys.get(
+                intended_source_state_id, set()
+            ):
+                md.setdefault("scroll_candidate", True)
+            # Risk tags carried on the action object propagate to trace md.
+            if action.metadata.get("risk_tags"):
+                md.setdefault("risk_tags", list(action.metadata["risk_tags"]))
             return ExplorationTrace(
                 step_number=step,
                 intended_source_state_id=intended_source_state_id,
@@ -806,6 +1015,7 @@ class AppExplorer:
                 target_state_id=target,
                 target_screen_id=target_screen_id,
                 timestamp=ts,
+                metadata=md,
             )
 
         needs_nav = self._current_state_id != intended_source_state_id
@@ -822,9 +1032,28 @@ class AppExplorer:
                 time.sleep(self.POST_ACTION_WAIT)
 
         pre = self._capture_screen()
+        pre_scope = self._current_scope()
         if pre is None:
             self._current_state_id = None
-            return _trace(src=intended_source_state_id, target=SENTINEL_LEFT_APP), None, None
+            ext_pkg = self._current_foreground_package()
+            ext_md: dict[str, Any] = {
+                "scope_pre": pre_scope.value,
+            }
+            if pre_scope == ScopeCategory.OUT_OF_SCOPE_EXTERNAL:
+                ext_md["external_package"] = ext_pkg
+                ext_md["left_app_reason"] = "out_of_scope_external"
+            elif pre_scope == ScopeCategory.LAUNCHER_OR_HOME:
+                ext_md["left_app_reason"] = "launcher_or_home"
+                ext_md["external_package"] = ext_pkg
+            return (
+                _trace(
+                    src=intended_source_state_id,
+                    target=SENTINEL_LEFT_APP,
+                    extra_metadata=ext_md,
+                ),
+                None,
+                None,
+            )
         actual_src = pre.get_hybrid_state_id(self._app_package)
 
         # Locality drift fallback: we thought we were at intended but the
@@ -855,34 +1084,77 @@ class AppExplorer:
                     None,
                 )
             actual_src = pre.get_hybrid_state_id(self._app_package)
+            pre_scope = self._current_scope()
 
         # Feature A: count attempts per action_type (not successes), so the
         # frequency decay can't be gamed by a misbehaving type that always
         # fails.
         self._global_action_type_count[action.action_type] += 1
 
-        if not self._execute_action(action):
-            # For CLICK/LONG_PRESS/INPUT_TEXT, _resolve_action_target may
-            # have scrolled up to MAX_SCROLL_TO_FIND times while searching.
-            # Even if we started at ``actual_src`` pre-capture, the device
-            # is now at an unknown scroll offset — don't pin
-            # _current_state_id to the stale pre-capture id, or the next
-            # observation will take the locality branch, see drift, and
-            # cold-start unnecessarily. Non-scrolling fail cases (e.g.,
-            # NAVIGATE_BACK raised) land on the same None and force a
-            # clean cold-start next iteration, which is the safe default.
+        executed = self._execute_action(action)
+        exec_md = dict(self._last_execution_metadata)
+        if not executed:
             self._current_state_id = None
+            # Distinguish *refused* attempts (ambiguous selector, unsafe
+            # INPUT_TEXT) from *failed* executions. Refusals are not FSM
+            # observations; record them as ActionAttempts and emit a
+            # SENTINEL trace only as a placeholder that FsmBuilder filters.
+            refusal_reason = ""
+            input_policy = exec_md.get("input_policy")
+            if exec_md.get("selector_resolution") == "ambiguous":
+                refusal_reason = "ambiguous_selector"
+            elif input_policy == "skipped_unsafe":
+                refusal_reason = "skipped_unsafe_input"
+            if refusal_reason:
+                self._action_attempts.append(
+                    ActionAttempt(
+                        step_number=step,
+                        source_state_id=actual_src,
+                        source_screen_id=pre.screen_id,
+                        action=action,
+                        status=refusal_reason,
+                        reason=exec_md.get("selector_resolution_reason", "")
+                        if refusal_reason == "ambiguous_selector"
+                        else "INPUT_TEXT could not guarantee clear-before-set",
+                        timestamp=_now_iso(),
+                        metadata=exec_md,
+                    )
+                )
             return (
-                _trace(src=actual_src, src_screen_id=pre.screen_id, target=SENTINEL_ACTION_FAILED),
+                _trace(
+                    src=actual_src,
+                    src_screen_id=pre.screen_id,
+                    target=SENTINEL_ACTION_FAILED,
+                    extra_metadata={"scope_pre": pre_scope.value, **exec_md},
+                ),
                 pre,
                 None,
             )
         time.sleep(self.POST_ACTION_WAIT)
 
+        post_scope = self._current_scope()
         if not self._is_within_app():
             self._current_state_id = None
+            md: dict[str, Any] = {
+                "scope_pre": pre_scope.value,
+                "scope_post": post_scope.value,
+                **exec_md,
+            }
+            if post_scope == ScopeCategory.OUT_OF_SCOPE_EXTERNAL:
+                md["external_package"] = self._current_foreground_package()
+                md["left_app_reason"] = "out_of_scope_external"
+            elif post_scope == ScopeCategory.LAUNCHER_OR_HOME:
+                md["external_package"] = self._current_foreground_package()
+                md["left_app_reason"] = "launcher_or_home"
+            elif post_scope == ScopeCategory.SYSTEM_UI:
+                md["left_app_reason"] = "system_ui"
             return (
-                _trace(src=actual_src, src_screen_id=pre.screen_id, target=SENTINEL_LEFT_APP),
+                _trace(
+                    src=actual_src,
+                    src_screen_id=pre.screen_id,
+                    target=SENTINEL_LEFT_APP,
+                    extra_metadata=md,
+                ),
                 pre,
                 None,
             )
@@ -890,7 +1162,16 @@ class AppExplorer:
         if post is None:
             self._current_state_id = None
             return (
-                _trace(src=actual_src, src_screen_id=pre.screen_id, target=SENTINEL_LEFT_APP),
+                _trace(
+                    src=actual_src,
+                    src_screen_id=pre.screen_id,
+                    target=SENTINEL_LEFT_APP,
+                    extra_metadata={
+                        "scope_pre": pre_scope.value,
+                        "scope_post": post_scope.value,
+                        **exec_md,
+                    },
+                ),
                 pre,
                 None,
             )
@@ -901,6 +1182,12 @@ class AppExplorer:
                 src_screen_id=pre.screen_id,
                 target=self._current_state_id,
                 target_screen_id=post.screen_id,
+                extra_metadata={
+                    "scope_pre": pre_scope.value,
+                    "scope_post": post_scope.value,
+                    "low_trust_scope": self._scope_policy.is_low_trust(post_scope),
+                    **exec_md,
+                },
             ),
             pre,
             post,
@@ -1034,16 +1321,20 @@ class AppExplorer:
     def _execute_action(self, action: Action) -> bool:
         """Dispatch. Coordinates are resolved live — stored bounds are a hint.
 
-        For CLICK / LONG_PRESS / INPUT_TEXT: resolve the target by descriptor
-        on the current screen (scrolling to find if needed). Click at the
-        *live* bounds, not whatever was stored on the Action at enumeration.
-        For SCROLL: resolve the scroll container by descriptor. For
-        NAVIGATE_BACK / NAVIGATE_HOME: just fire the key.
+        Side channel: writes diagnostics for the most recent execution into
+        ``self._last_execution_metadata`` so :meth:`_perform_one_observation`
+        can attach them to the emitted :class:`ExplorationTrace`. Keys may
+        include ``selector_resolution`` (match / missing / ambiguous),
+        ``input_original_text``, ``input_text``, ``cleared``, ``input_policy``.
 
-        Returns False when the resolver cannot locate the target or when
-        the device API raises.
+        Strict resolution: for CLICK / LONG_PRESS / INPUT_TEXT, if the
+        action carries a stable selector we use three-valued
+        :func:`vigil.neuro.selector_resolution.resolve_selector`. AMBIGUOUS
+        results return False without firing a click — the explorer never
+        guesses which of N matching widgets to interact with.
         """
         assert self._device is not None
+        self._last_execution_metadata = {}
         try:
             t = action.action_type
             if t == ActionType.NAVIGATE_BACK:
@@ -1055,11 +1346,18 @@ class AppExplorer:
             if t in (ActionType.SCROLL_UP, ActionType.SCROLL_DOWN):
                 return self._execute_scroll(action)
             if t in (ActionType.CLICK, ActionType.LONG_PRESS, ActionType.INPUT_TEXT):
-                element = self._resolve_action_target(action, scroll_to_find=True)
+                element, resolution_status, resolved_screen = self._strict_resolve_target(action)
+                self._last_execution_metadata["selector_resolution"] = resolution_status.value
                 if element is None:
-                    logger.debug(f"resolve failed for {t.value} {_short_target(action)}")
+                    logger.debug(
+                        f"resolve {resolution_status.value} for {t.value} "
+                        f"{_short_target(action)}"
+                    )
                     return False
                 if not element.bounds:
+                    self._last_execution_metadata.setdefault(
+                        "execution_error", "resolved element has no bounds"
+                    )
                     return False
                 cx = (element.bounds[0] + element.bounds[2]) // 2
                 cy = (element.bounds[1] + element.bounds[3]) // 2
@@ -1069,24 +1367,215 @@ class AppExplorer:
                 if t == ActionType.LONG_PRESS:
                     self._device.long_click(cx, cy)
                     return True
-                # INPUT_TEXT
-                self._device.click(cx, cy)
-                time.sleep(0.3)
-                if action.input_text:
-                    self._device.send_keys(action.input_text)
-                try:
-                    if hasattr(self._device, "hide_keyboard"):
-                        self._device.hide_keyboard()
-                    else:
-                        self._device.press("back")
-                except Exception:
-                    logger.debug("keyboard dismiss failed", exc_info=True)
-                time.sleep(0.3)
-                return True
+                # INPUT_TEXT: clear-then-set, never append. Bookkeeping is
+                # stored in self._last_execution_metadata so the enclosing
+                # observation can record original text / cleared flag.
+                return self._apply_input_text(element, action, cx, cy, resolved_screen)
         except Exception:
             logger.exception(f"execute_action({action.action_type.value}) raised")
             return False
         return False
+
+    def _strict_resolve_target(
+        self, action: Action
+    ) -> tuple[UIElement | None, ResolutionStatus, RawScreen | None]:
+        """Resolve a CLICK / LONG_PRESS / INPUT_TEXT target with three-valued
+        result. AMBIGUOUS resolutions return ``(None, AMBIGUOUS)`` so the
+        explorer can refuse to execute. Falls back to legacy descriptor
+        matching only when the action carries no stable selector — and in
+        that legacy case the descriptor matcher is the (older) first-match
+        path; the trace metadata records ``selector_resolution="legacy"``.
+        """
+        screen = self._capture_screen()
+        if screen is None:
+            return None, ResolutionStatus.MISSING, None
+
+        if selector_has_stable_identity(action.target_selector):
+            result = resolve_selector(
+                action.target_selector, screen.elements, action_type=action.action_type
+            )
+            if result.status == ResolutionStatus.MATCH:
+                return result.element, ResolutionStatus.MATCH, screen
+            if result.status == ResolutionStatus.AMBIGUOUS:
+                self._last_execution_metadata.setdefault(
+                    "selector_resolution_reason", result.reason
+                )
+                self._last_execution_metadata["selector_candidates"] = result.candidates
+                return None, ResolutionStatus.AMBIGUOUS, screen
+            # MISSING from selector → try scroll-to-find as before.
+            scrolled = self._resolve_action_target(action, scroll_to_find=True)
+            if scrolled is not None:
+                # Confirm uniqueness on the scrolled-into-view screen.
+                screen_after = self._capture_screen()
+                if screen_after is not None:
+                    recheck = resolve_selector(
+                        action.target_selector,
+                        screen_after.elements,
+                        action_type=action.action_type,
+                    )
+                    if recheck.status == ResolutionStatus.AMBIGUOUS:
+                        self._last_execution_metadata.setdefault(
+                            "selector_resolution_reason", recheck.reason
+                        )
+                        return None, ResolutionStatus.AMBIGUOUS, screen_after
+                    if recheck.status == ResolutionStatus.MATCH:
+                        return recheck.element, ResolutionStatus.MATCH, screen_after
+                return scrolled, ResolutionStatus.MATCH, screen_after
+            return None, ResolutionStatus.MISSING, screen
+
+        # No stable selector — fall back to the legacy descriptor matcher.
+        legacy = self._resolve_action_target(action, scroll_to_find=True)
+        if legacy is None:
+            return None, ResolutionStatus.MISSING, screen
+        self._last_execution_metadata["selector_resolution"] = "legacy"
+        return legacy, ResolutionStatus.MATCH, self._capture_screen() or screen
+
+    def _apply_input_text(
+        self,
+        element: UIElement,
+        action: Action,
+        cx: int,
+        cy: int,
+        current_screen: RawScreen | None,
+    ) -> bool:
+        """Safely apply INPUT_TEXT with a strict clear-before-set contract.
+
+        The explorer NEVER appends text. If the device cannot atomically
+        clear the existing text before setting (uiautomator2 element-level
+        ``set_text`` is preferred; ``clear_text`` is a fallback), this
+        method returns False and records ``cleared=False`` /
+        ``input_policy="skipped_unsafe"`` in metadata so the enclosing
+        observation emits ``SENTINEL_ACTION_FAILED`` rather than mutating
+        user data with an append.
+        """
+        assert self._device is not None
+        original = element.text or ""
+        self._last_execution_metadata["input_original_text"] = original
+        self._last_execution_metadata["input_text"] = action.input_text or ""
+        cleared = False
+
+        selector_kwargs = self._input_text_selector_kwargs(element, current_screen)
+
+        # 1. Preferred path: element-level set_text via a selector that is
+        #    unique for the resolved element.
+        try:
+            selector: Any = None
+            if selector_kwargs is not None:
+                selector = self._device(**selector_kwargs)
+            elif element.class_name and not self._last_execution_metadata.get(
+                "input_selector_collision"
+            ):
+                selector = self._device(className=element.class_name)
+            if selector is not None and hasattr(selector, "set_text"):
+                exists = True
+                try:
+                    if hasattr(selector, "exists"):
+                        exists = bool(selector.exists)
+                except Exception:
+                    exists = True
+                if exists:
+                    selector.set_text(action.input_text or "")
+                    cleared = True
+                    self._last_execution_metadata["input_policy"] = "clear_set"
+                    if selector_kwargs and "instance" in selector_kwargs:
+                        self._last_execution_metadata["input_selector_policy"] = (
+                            "resource_id_instance"
+                        )
+        except Exception:
+            logger.debug("element.set_text path failed", exc_info=True)
+
+        if not cleared:
+            # 2. Fallback: focus, then clear_text. Only if clear succeeds
+            #    do we proceed to send_keys. Otherwise refuse.
+            try:
+                self._device.click(cx, cy)
+                time.sleep(0.3)
+            except Exception:
+                logger.debug("click for focus before INPUT_TEXT failed", exc_info=True)
+            try:
+                if hasattr(self._device, "clear_text"):
+                    self._device.clear_text()
+                    cleared = True
+            except Exception:
+                logger.debug("device.clear_text failed", exc_info=True)
+            if cleared:
+                try:
+                    if action.input_text:
+                        self._device.send_keys(action.input_text)
+                    self._last_execution_metadata["input_policy"] = "clear_set"
+                except Exception:
+                    logger.debug("send_keys after clear failed", exc_info=True)
+                    self._last_execution_metadata["cleared"] = True
+                    self._last_execution_metadata["input_policy"] = "send_failed"
+                    return False
+
+        if not cleared:
+            # Cannot guarantee clear-before-set: refuse rather than append.
+            self._last_execution_metadata["cleared"] = False
+            self._last_execution_metadata["input_policy"] = "skipped_unsafe"
+            logger.warning(
+                "INPUT_TEXT refused: cannot clear existing text without "
+                "risking append-on-existing-value"
+            )
+            return False
+
+        try:
+            if hasattr(self._device, "hide_keyboard"):
+                self._device.hide_keyboard()
+            else:
+                self._device.press("back")
+        except Exception:
+            logger.debug("keyboard dismiss failed", exc_info=True)
+        time.sleep(0.3)
+
+        self._last_execution_metadata["cleared"] = True
+        return True
+
+    def _input_text_selector_kwargs(
+        self, element: UIElement, current_screen: RawScreen | None
+    ) -> dict[str, Any] | None:
+        """Build a selector that targets the resolved EditText identity."""
+        if not element.resource_id:
+            return None
+
+        selector_kwargs: dict[str, Any] = {"resourceId": element.resource_id}
+        if not current_screen:
+            self._last_execution_metadata["input_selector_collision"] = True
+            self._last_execution_metadata["input_selector_reason"] = "current_screen_unavailable"
+            return None
+
+        editable_same_rid = [
+            e
+            for e in current_screen.elements
+            if e.is_editable and e.resource_id == element.resource_id
+        ]
+        if len(editable_same_rid) <= 1:
+            return selector_kwargs
+
+        indexed_peers = editable_same_rid
+        if element.class_name:
+            selector_kwargs["className"] = element.class_name
+            indexed_peers = [e for e in editable_same_rid if e.class_name == element.class_name]
+
+        target_index = self._resolved_element_index(indexed_peers, element)
+        self._last_execution_metadata["input_selector_collision"] = True
+        if target_index is None:
+            return None
+
+        selector_kwargs["instance"] = target_index
+        self._last_execution_metadata["input_selector_instance"] = target_index
+        return selector_kwargs
+
+    @staticmethod
+    def _resolved_element_index(elements: list[UIElement], target: UIElement) -> int | None:
+        for index, candidate in enumerate(elements):
+            if candidate is target:
+                return index
+            if candidate.element_id and candidate.element_id == target.element_id:
+                return index
+            if candidate.bounds == target.bounds and candidate.class_name == target.class_name:
+                return index
+        return None
 
     def _match_descriptor(self, screen: RawScreen, action: Action) -> UIElement | None:
         """Find the element whose descriptor matches ``action``.
@@ -1317,11 +1806,24 @@ class AppExplorer:
         return False
 
     def _is_within_app(self) -> bool:
+        cat = self._current_scope()
+        return self._scope_policy.is_allowed(cat)
+
+    def _current_scope(self) -> ScopeCategory:
+        """Classify the current foreground package via the scope policy."""
         assert self._device is not None
         try:
-            return bool(self._device.app_current().get("package", "") == self._app_package)
+            pkg = (self._device.app_current().get("package", "") or "").strip()
         except Exception:
-            return False
+            return ScopeCategory.OUT_OF_SCOPE_EXTERNAL
+        return self._scope_policy.classify(pkg)
+
+    def _current_foreground_package(self) -> str:
+        assert self._device is not None
+        try:
+            return (self._device.app_current().get("package", "") or "").strip()
+        except Exception:
+            return ""
 
     # ---------------------------------------------------------- finalize
 
@@ -1351,6 +1853,9 @@ class AppExplorer:
         nav_stats = {
             "observations_total": total_steps,
             "states_discovered": len(nav_paths),
+            "drift_count": self._drift_count,
+            "trusted_states": len(self._trusted_states),
+            "untrusted_targets": len(self._untrusted_targets),
             **counts,
         }
         result = ExplorationResult(
@@ -1440,6 +1945,7 @@ class AppExplorer:
             "screens": compact,
             "traces": [t.model_dump(mode="json") for t in result.traces],
             "scroll_observations": [o.model_dump(mode="json") for o in self._scroll_observations],
+            "action_attempts": [a.model_dump(mode="json") for a in self._action_attempts],
             "nav_stats": result.nav_stats,
         }
         if result.declared_activities:

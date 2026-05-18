@@ -68,6 +68,7 @@ vigil-visualize = "vigil.scripts.visualize_fsm:main"
 vigil-verify-action = "vigil.scripts.verify_action:main"
 vigil-doctor = "vigil.scripts.doctor:main"
 vigil-agent-run = "vigil.integration.agent_runner:main"
+vigil-validate-trace = "vigil.scripts.validate_trace:main"
 
 [build-system]
 requires = ["hatchling"]

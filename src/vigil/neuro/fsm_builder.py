@@ -39,6 +39,42 @@ class FsmBuilder:
     def __init__(self, app_package: str) -> None:
         self._app_package = app_package
 
+    @staticmethod
+    def _trace_transition_trust(metadata: dict[str, Any]) -> tuple[bool, float, bool]:
+        """Return (skip, confidence, low_trust) for a trace metadata dict."""
+        if not metadata:
+            return False, 1.0, False
+
+        scope_pre = metadata.get("scope_pre")
+        scope_post = metadata.get("scope_post")
+        scope_pre_value = str(scope_pre) if scope_pre is not None else None
+        scope_post_value = str(scope_post) if scope_post is not None else None
+
+        if scope_pre_value == "android_system" or scope_post_value == "android_system":
+            return True, 0.0, False
+
+        if metadata.get("low_trust_scope") is True:
+            if scope_pre_value == "in_app" and scope_post_value == "in_app":
+                return False, 0.5, True
+            return True, 0.0, False
+
+        return False, 1.0, False
+
+    @staticmethod
+    def _merge_transition_trust(existing: Transition, incoming: Transition) -> None:
+        """Combine duplicate-edge confidence without promoting low-trust-only edges."""
+        existing.observed_count += incoming.observed_count
+        if existing.low_trust and incoming.low_trust:
+            existing.confidence = min(existing.confidence, incoming.confidence)
+            return
+
+        if existing.low_trust != incoming.low_trust:
+            existing.low_trust = False
+            existing.confidence = max(existing.confidence, incoming.confidence)
+            return
+
+        existing.confidence = max(existing.confidence, incoming.confidence)
+
     def build_from_trace(
         self,
         trace_path: Path,
@@ -148,16 +184,30 @@ class FsmBuilder:
     # --- Post-processing: duplicate/error state cleanup ---
 
     def _merge_scroll_duplicates(self, fsm: AppFSM) -> int:
-        """Merge states that share the same (activity_name, page_title).
+        """Merge states that share (activity_name, base_name) AND are
+        structurally compatible.
 
-        Scroll-induced duplicates (e.g., "官方音效 #1", "官方音效 #2") share the
-        same activity and title but have different fingerprints because scrolling
-        changes visible elements. Merges them into one canonical state.
+        Earlier behavior merged every same-name pair, which silently
+        collapsed semantically distinct screens that happened to share a
+        toolbar title. The hardened policy requires:
+
+          1. Same ``activity_name``.
+          2. Same ``base_name`` (after stripping any ``#N`` scroll suffix).
+          3. Compatible structural skeletons: either identical structural
+             fingerprints, or fingerprints that agree on the non-scrollable
+             skeleton (so the only differences live inside scrollable
+             subtrees, which is the genuine scroll-duplicate signal).
+
+        Same-name candidates with incompatible skeletons are kept separate
+        and recorded as builder diagnostics so the validator surfaces them.
+        Self-loops produced by redirecting transitions are dropped only
+        when they are CLICK no-ops; SCROLL_UP / SCROLL_DOWN / INPUT_TEXT
+        and toggle self-loops are preserved because they remain legal
+        affordances after the merge.
 
         Returns:
             Number of states merged away.
         """
-        # Group states by (activity_name, base_name) — strip "#N" suffixes
         import re
 
         groups: dict[tuple[str | None, str], list[str]] = defaultdict(list)
@@ -167,86 +217,120 @@ class FsmBuilder:
             groups[key].append(state.state_id)
 
         merged_count = 0
+        diagnostics: list[dict[str, Any]] = []
+        _MEANINGFUL_SELF_LOOPS = {"scroll_up", "scroll_down", "input_text"}  # noqa: N806
+
+        def _fp(state_id: str) -> str:
+            return fsm.states[state_id].fingerprint or ""
+
         for (_activity, base_name), state_ids in groups.items():
             if len(state_ids) <= 1:
                 continue
 
-            # Keep first as canonical, merge others into it
-            canonical_id = state_ids[0]
-            duplicates = state_ids[1:]
+            # Partition into compatibility clusters by structural fingerprint.
+            # States with identical fingerprints are presumed merge-safe;
+            # states with distinct fingerprints under the same name are kept
+            # apart and reported as diagnostics.
+            clusters: dict[str, list[str]] = defaultdict(list)
+            for sid in state_ids:
+                clusters[_fp(sid)].append(sid)
 
-            # Collect raw_screens from duplicates
-            for dup_id in duplicates:
-                dup_state = fsm.states[dup_id]
-                fsm.states[canonical_id].raw_screens.extend(dup_state.raw_screens)
+            if len(clusters) > 1:
+                logger.warning(
+                    f"Skipping merge for '{base_name}' in activity {_activity}: "
+                    f"{len(clusters)} incompatible structural fingerprints "
+                    f"({sum(len(v) for v in clusters.values())} states)"
+                )
+                diagnostics.append(
+                    {
+                        "activity": _activity,
+                        "base_name": base_name,
+                        "clusters": {fp: list(ids) for fp, ids in clusters.items()},
+                    }
+                )
 
-            # Strip "#N" suffix from canonical state name
-            fsm.states[canonical_id].name = base_name
-
-            # Redirect transitions
-            redirect_map = {dup_id: canonical_id for dup_id in duplicates}
-            new_transitions: list[Transition] = []
-            seen_keys: set[tuple[str, str, tuple[tuple[str, object], ...]]] = set()
-
-            for t in fsm.transitions:
-                source = redirect_map.get(t.source, t.source)
-                target = redirect_map.get(t.target, t.target)
-                # Skip self-loops created by merging
-                if source == target:
+            for fp_key, cluster_ids in clusters.items():
+                if len(cluster_ids) <= 1:
                     continue
-                key = (source, target, canonical_action_key(t.action))
-                if key in seen_keys:
-                    # Find existing and increment count
-                    for existing in new_transitions:
-                        e_src = existing.source
-                        e_tgt = existing.target
-                        e_key = canonical_action_key(existing.action)
-                        if (e_src, e_tgt, e_key) == key:
-                            existing.observed_count += t.observed_count
-                            break
-                else:
-                    seen_keys.add(key)
-                    new_transitions.append(
-                        Transition(
-                            source=source,
-                            target=target,
+                canonical_id = cluster_ids[0]
+                duplicates = cluster_ids[1:]
+
+                for dup_id in duplicates:
+                    dup_state = fsm.states[dup_id]
+                    fsm.states[canonical_id].raw_screens.extend(dup_state.raw_screens)
+
+                fsm.states[canonical_id].name = base_name
+
+                redirect_map = {dup_id: canonical_id for dup_id in duplicates}
+                new_transitions: list[Transition] = []
+                seen_keys: set[tuple[str, str, tuple[tuple[str, object], ...]]] = set()
+
+                for t in fsm.transitions:
+                    source = redirect_map.get(t.source, t.source)
+                    target = redirect_map.get(t.target, t.target)
+                    if source == target:
+                        action_dict = t.action if isinstance(t.action, dict) else {}
+                        atype = (
+                            action_dict.get("type") or action_dict.get("action_type") or ""
+                        ).lower()
+                        if atype not in _MEANINGFUL_SELF_LOOPS:
+                            # Drop ordinary CLICK no-op self-loops. Keep
+                            # scroll / input / toggle self-loops below.
+                            continue
+                    key = (source, target, canonical_action_key(t.action))
+                    if key in seen_keys:
+                        for existing in new_transitions:
+                            e_src = existing.source
+                            e_tgt = existing.target
+                            e_key = canonical_action_key(existing.action)
+                            if (e_src, e_tgt, e_key) == key:
+                                self._merge_transition_trust(existing, t)
+                                break
+                    else:
+                        seen_keys.add(key)
+                        new_transitions.append(
+                            Transition(
+                                source=source,
+                                target=target,
+                                action=t.action,
+                                guard=t.guard,
+                                confidence=t.confidence,
+                                low_trust=t.low_trust,
+                                observed_count=t.observed_count,
+                            )
+                        )
+
+                for dup_id in duplicates:
+                    if dup_id in fsm.states:
+                        del fsm.states[dup_id]
+                    if dup_id in fsm.graph:
+                        fsm.graph.remove_node(dup_id)
+
+                fsm.graph.remove_edges_from(list(fsm.graph.edges))
+                fsm.transitions = new_transitions
+                for t in new_transitions:
+                    if t.source in fsm.graph and t.target in fsm.graph:
+                        fsm.graph.add_edge(
+                            t.source,
+                            t.target,
                             action=t.action,
                             guard=t.guard,
                             confidence=t.confidence,
+                            low_trust=t.low_trust,
                             observed_count=t.observed_count,
                         )
-                    )
 
-            # Remove duplicate states from graph and dict
-            for dup_id in duplicates:
-                if dup_id in fsm.states:
-                    del fsm.states[dup_id]
-                if dup_id in fsm.graph:
-                    fsm.graph.remove_node(dup_id)
+                if fsm.initial_state in redirect_map:
+                    fsm.initial_state = redirect_map[fsm.initial_state]
 
-            # Rebuild graph edges
-            fsm.graph.remove_edges_from(list(fsm.graph.edges))
-            fsm.transitions = new_transitions
-            for t in new_transitions:
-                if t.source in fsm.graph and t.target in fsm.graph:
-                    fsm.graph.add_edge(
-                        t.source,
-                        t.target,
-                        action=t.action,
-                        guard=t.guard,
-                        confidence=t.confidence,
-                        observed_count=t.observed_count,
-                    )
+                merged_count += len(duplicates)
+                logger.debug(
+                    f"Merged {len(duplicates)} duplicates of '{base_name}' "
+                    f"(fp={fp_key[:6]}) into {canonical_id}"
+                )
 
-            # Update initial_state if it was a duplicate
-            if fsm.initial_state in redirect_map:
-                fsm.initial_state = redirect_map[fsm.initial_state]
-
-            merged_count += len(duplicates)
-            logger.debug(
-                f"Merged {len(duplicates)} duplicates of '{base_name}' into {canonical_id}"
-            )
-
+        if diagnostics:
+            self._merge_diagnostics = diagnostics  # type: ignore[attr-defined]
         return merged_count
 
     def _remove_error_states(self, fsm: AppFSM) -> int:
@@ -625,6 +709,7 @@ class FsmBuilder:
                         action=t.action,
                         guard=t.guard,
                         confidence=t.confidence,
+                        low_trust=t.low_trust,
                         observed_count=t.observed_count,
                     )
 
@@ -952,9 +1037,24 @@ class FsmBuilder:
         include_self_loops: bool,
         raw_screens: dict[str, Any] | None = None,
     ) -> list[Transition]:
-        """Convert exploration traces into FSM transitions."""
+        """Convert exploration traces into FSM transitions.
+
+        Self-loop policy: SCROLL_UP / SCROLL_DOWN / INPUT_TEXT self-loops
+        and toggle (is_checkable) clicks are preserved unconditionally,
+        because the FSM must represent these as legal affordances even
+        when the captured pre/post screens collapsed to the same abstract
+        state. Plain CLICK no-op self-loops continue to be dropped unless
+        ``include_self_loops`` is set.
+        """
         transitions: list[Transition] = []
         skipped_self_loops = 0
+        skipped_low_trust_scope = 0
+        downgraded_low_trust_scope = 0
+        _MEANINGFUL_SELF_LOOPS = {  # noqa: N806
+            "scroll_up",
+            "scroll_down",
+            "input_text",
+        }
 
         for trace in raw_traces:
             source_sid = trace.get("source_screen_id", "")
@@ -966,15 +1066,27 @@ class FsmBuilder:
             if source_state is None or target_state is None:
                 continue
 
+            metadata = trace.get("metadata") or {}
+            skip_trace, confidence, low_trust = self._trace_transition_trust(metadata)
+            if skip_trace:
+                skipped_low_trust_scope += 1
+                continue
+            if low_trust:
+                downgraded_low_trust_scope += 1
+
+            action_data = trace.get("action", {})
+            action_type = (action_data.get("action_type") or action_data.get("type") or "").lower()
+            is_meaningful_self_loop = action_type in _MEANINGFUL_SELF_LOOPS
+
             if (
                 not include_self_loops
                 and source_state == target_state
+                and not is_meaningful_self_loop
                 and not (raw_screens and self._is_toggle_action(trace, raw_screens))
             ):
                 skipped_self_loops += 1
                 continue
 
-            action_data = trace.get("action", {})
             action = Action(**action_data)
             fsm_action = action.to_fsm_dict()
 
@@ -1002,13 +1114,18 @@ class FsmBuilder:
                     # 1.0 = observed during exploration (pre-replay).
                     # Stage 5 replay will override with success_count/total_trials.
                     # Auto-inferred transitions (dialog dismiss, tab) use 0.5.
-                    confidence=1.0,
+                    confidence=confidence,
+                    low_trust=low_trust,
                     observed_count=1,
                 )
             )
 
         if skipped_self_loops:
             logger.debug(f"Skipped {skipped_self_loops} self-loop transitions")
+        if skipped_low_trust_scope:
+            logger.debug(f"Skipped {skipped_low_trust_scope} low-trust scope traces")
+        if downgraded_low_trust_scope:
+            logger.debug(f"Downgraded {downgraded_low_trust_scope} low-trust in-app traces")
         return transitions
 
     @staticmethod
@@ -1040,7 +1157,7 @@ class FsmBuilder:
             key = (t.source, t.target, canonical_action_key(t.action))
 
             if key in key_to_trans:
-                key_to_trans[key].observed_count += t.observed_count
+                self._merge_transition_trust(key_to_trans[key], t)
             else:
                 key_to_trans[key] = t
 

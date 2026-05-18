@@ -180,10 +180,26 @@ class TestFsmBuilderSynthetic:
         assert set(home_state.raw_screens) == {"scr_001", "scr_004"}
 
     def test_self_loop_excluded_by_default(self, synthetic_trace: Path) -> None:
+        # Section B: SCROLL_UP / SCROLL_DOWN / INPUT_TEXT self-loops are
+        # meaningful affordances and must NOT be dropped even when
+        # include_self_loops=False. Plain CLICK no-op self-loops are still
+        # dropped. The synthetic trace contains a scroll_down self-loop on
+        # scr_002, so the default-built FSM still has that one self-loop.
         builder = FsmBuilder("com.test.app")
         fsm = builder.build_from_trace(synthetic_trace)
-        for t in fsm.transitions:
-            assert t.source != t.target
+        self_loops = [t for t in fsm.transitions if t.source == t.target]
+        # All self-loops present must be scroll/input (meaningful), never click no-ops.
+        for t in self_loops:
+            atype = (t.action.get("type") or t.action.get("action_type") or "").lower()
+            assert atype in {
+                "scroll_up",
+                "scroll_down",
+                "input_text",
+            }, f"Unexpected self-loop preserved: {atype}"
+        assert any(
+            (t.action.get("type") or t.action.get("action_type") or "").lower() == "scroll_down"
+            for t in self_loops
+        ), "Expected scroll_down self-loop to be preserved"
 
     def test_self_loop_included(self, synthetic_trace: Path) -> None:
         builder = FsmBuilder("com.test.app")
@@ -204,6 +220,118 @@ class TestFsmBuilderSynthetic:
         ]
         assert len(merged) == 1
         assert merged[0].observed_count == 2
+
+    def test_low_trust_in_app_trace_downgrades_transition(self, tmp_path: Path) -> None:
+        data = {
+            "app_package": "com.test.app",
+            "screens": {
+                "scr_001": {
+                    "screen_id": "scr_001",
+                    "activity_name": ".MainActivity",
+                    "interactable_elements": [
+                        {
+                            "class_name": "android.widget.Button",
+                            "resource_id": "com.test:id/next",
+                            "text": "Next",
+                            "depth": 1,
+                            "is_clickable": True,
+                        },
+                    ],
+                },
+                "scr_002": {
+                    "screen_id": "scr_002",
+                    "activity_name": ".MainActivity",
+                    "interactable_elements": [
+                        {
+                            "class_name": "android.widget.TextView",
+                            "resource_id": "com.test:id/title",
+                            "text": "Done",
+                            "depth": 2,
+                            "is_clickable": False,
+                        },
+                    ],
+                },
+            },
+            "traces": [
+                {
+                    "step_number": 1,
+                    "source_screen_id": "scr_001",
+                    "target_screen_id": "scr_002",
+                    "action": {"action_type": "click", "target_element_id": "e_001"},
+                    "timestamp": "",
+                    "metadata": {
+                        "scope_pre": "in_app",
+                        "scope_post": "in_app",
+                        "low_trust_scope": True,
+                    },
+                },
+            ],
+        }
+        path = tmp_path / "low_trust_trace.json"
+        path.write_text(json.dumps(data))
+
+        builder = FsmBuilder("com.test.app")
+        fsm = builder.build_from_trace(path)
+
+        assert len(fsm.transitions) == 1
+        transition = fsm.transitions[0]
+        assert transition.confidence < 0.7
+        assert transition.low_trust is True
+
+    def test_android_system_scope_trace_skipped(self, tmp_path: Path) -> None:
+        data = {
+            "app_package": "com.test.app",
+            "screens": {
+                "scr_001": {
+                    "screen_id": "scr_001",
+                    "activity_name": ".MainActivity",
+                    "interactable_elements": [
+                        {
+                            "class_name": "android.widget.Button",
+                            "resource_id": "com.test:id/next",
+                            "text": "Next",
+                            "depth": 1,
+                            "is_clickable": True,
+                        },
+                    ],
+                },
+                "scr_002": {
+                    "screen_id": "scr_002",
+                    "activity_name": ".PermissionDialog",
+                    "interactable_elements": [
+                        {
+                            "class_name": "android.widget.Button",
+                            "resource_id": "android:id/button1",
+                            "text": "Allow",
+                            "depth": 2,
+                            "is_clickable": True,
+                        },
+                    ],
+                },
+            },
+            "traces": [
+                {
+                    "step_number": 1,
+                    "source_screen_id": "scr_001",
+                    "target_screen_id": "scr_002",
+                    "action": {"action_type": "click", "target_element_id": "e_001"},
+                    "timestamp": "",
+                    "metadata": {
+                        "scope_pre": "in_app",
+                        "scope_post": "android_system",
+                        "low_trust_scope": True,
+                    },
+                },
+            ],
+        }
+        path = tmp_path / "android_system_trace.json"
+        path.write_text(json.dumps(data))
+
+        builder = FsmBuilder("com.test.app")
+        fsm = builder.build_from_trace(path)
+
+        trace_edges = [t for t in fsm.transitions if t.action.get("target") == "e_001"]
+        assert trace_edges == []
 
     def test_initial_state(self, synthetic_trace: Path) -> None:
         builder = FsmBuilder("com.test.app")
@@ -437,12 +565,15 @@ class TestAppFSMMethods:
 
 class TestMergeScrollDuplicates:
     def test_merge_scroll_duplicates(self) -> None:
-        """States sharing (activity, base_name) get merged."""
+        """States sharing (activity, base_name) AND compatible structural
+        fingerprints get merged. The new policy (Section I) refuses to
+        merge same-name states whose skeletons disagree, so scroll
+        duplicates must share fingerprint."""
         fsm = AppFSM(app_package="com.test")
         s1 = AbstractState(
             state_id="s1",
             name="Sound #1",
-            fingerprint="fp1",
+            fingerprint="fp_sound",
             hierarchy_level=HierarchyLevel.ACTIVITY,
             activity_name=".SubSettings",
             raw_screens=["scr_01"],
@@ -450,7 +581,7 @@ class TestMergeScrollDuplicates:
         s2 = AbstractState(
             state_id="s2",
             name="Sound #2",
-            fingerprint="fp2",
+            fingerprint="fp_sound",
             hierarchy_level=HierarchyLevel.ACTIVITY,
             activity_name=".SubSettings",
             raw_screens=["scr_02"],
@@ -506,7 +637,7 @@ class TestMergeScrollDuplicates:
         s1 = AbstractState(
             state_id="s1",
             name="List #1",
-            fingerprint="fp1",
+            fingerprint="fp_list",
             hierarchy_level=HierarchyLevel.ACTIVITY,
             activity_name=".Activity",
             raw_screens=["scr_01"],
@@ -514,7 +645,7 @@ class TestMergeScrollDuplicates:
         s2 = AbstractState(
             state_id="s2",
             name="List #2",
-            fingerprint="fp2",
+            fingerprint="fp_list",
             hierarchy_level=HierarchyLevel.ACTIVITY,
             activity_name=".Activity",
             raw_screens=["scr_02"],
@@ -567,7 +698,7 @@ class TestMergeScrollDuplicates:
         s1 = AbstractState(
             state_id="s1",
             name="Home #1",
-            fingerprint="fp1",
+            fingerprint="fp_home",
             hierarchy_level=HierarchyLevel.ACTIVITY,
             activity_name=".Main",
             raw_screens=["scr_01"],
@@ -575,7 +706,7 @@ class TestMergeScrollDuplicates:
         s2 = AbstractState(
             state_id="s2",
             name="Home #2",
-            fingerprint="fp2",
+            fingerprint="fp_home",
             hierarchy_level=HierarchyLevel.ACTIVITY,
             activity_name=".Main",
             raw_screens=["scr_02"],
@@ -588,6 +719,83 @@ class TestMergeScrollDuplicates:
         builder._merge_scroll_duplicates(fsm)
 
         assert fsm.initial_state == "s1"  # redirected to canonical
+
+    def test_incompatible_fingerprints_not_merged(self) -> None:
+        """Section I: two same-name states with different structural
+        fingerprints must NOT be merged. The builder logs a diagnostic
+        instead."""
+        fsm = AppFSM(app_package="com.test")
+        s1 = AbstractState(
+            state_id="s1",
+            name="Inbox",
+            fingerprint="fp_inbox_v1",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".Inbox",
+            raw_screens=["scr_01"],
+        )
+        s2 = AbstractState(
+            state_id="s2",
+            name="Inbox",
+            fingerprint="fp_inbox_v2_with_compose_fab",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".Inbox",
+            raw_screens=["scr_02"],
+        )
+        for s in (s1, s2):
+            fsm.add_state(s)
+        builder = FsmBuilder("com.test")
+        merged = builder._merge_scroll_duplicates(fsm)
+        assert merged == 0
+        assert "s1" in fsm.states
+        assert "s2" in fsm.states
+
+    def test_scroll_self_loop_preserved_across_merge(self) -> None:
+        """Section B+I: a SCROLL_DOWN self-loop survives merge."""
+        fsm = AppFSM(app_package="com.test")
+        s1 = AbstractState(
+            state_id="s1",
+            name="Feed #1",
+            fingerprint="fp_feed",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".Feed",
+            raw_screens=["scr_01"],
+        )
+        s2 = AbstractState(
+            state_id="s2",
+            name="Feed #2",
+            fingerprint="fp_feed",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            activity_name=".Feed",
+            raw_screens=["scr_02"],
+        )
+        for s in (s1, s2):
+            fsm.add_state(s)
+        # s2 → s2 scroll_down self-loop (meaningful affordance)
+        fsm.add_transition(
+            Transition(
+                source="s2",
+                target="s2",
+                action={"type": "scroll_down"},
+                observed_count=1,
+            )
+        )
+        # s1 → s2 plain click self-loop (no-op after merge) should be dropped
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s2",
+                action={"type": "click"},
+                observed_count=1,
+            )
+        )
+        builder = FsmBuilder("com.test")
+        builder._merge_scroll_duplicates(fsm)
+        scroll_self_loops = [
+            t
+            for t in fsm.transitions
+            if t.source == t.target and (t.action.get("type") or "").lower() == "scroll_down"
+        ]
+        assert scroll_self_loops, "scroll_down self-loop must survive merge"
 
 
 class TestRemoveErrorStates:

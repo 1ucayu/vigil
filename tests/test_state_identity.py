@@ -235,3 +235,133 @@ def test_extract_page_title_from_collapsing_toolbar() -> None:
     # scr_0049 has a collapsing_toolbar with content-desc="People".
     s49 = _load("scr_0049.xml")
     assert s49.extract_page_title() == "People"
+
+
+# ============================================================
+# Scroll-aware structural fingerprint: subtree-based exclusion
+# ============================================================
+
+
+def _make_scroll_with_sibling_fab(include_fab: bool) -> RawScreen:
+    """A page with a scrollable RecyclerView and an optional FAB sibling.
+
+    The FAB is at depth 3 (same depth as list rows) but is NOT a descendant
+    of the scrollable. Depth-based exclusion would drop it; subtree-based
+    exclusion keeps it.
+    """
+    root = UIElement(
+        element_id="e_root",
+        class_name="android.widget.FrameLayout",
+        package=APP_PKG,
+        resource_id="com.example:id/root",
+        depth=0,
+    )
+    container = UIElement(
+        element_id="e_container",
+        class_name="android.widget.LinearLayout",
+        package=APP_PKG,
+        resource_id="com.example:id/main",
+        parent_id=root.element_id,
+        depth=1,
+    )
+    scroll = UIElement(
+        element_id="e_scroll",
+        class_name="androidx.recyclerview.widget.RecyclerView",
+        package=APP_PKG,
+        resource_id="com.example:id/list",
+        is_scrollable=True,
+        parent_id=container.element_id,
+        depth=2,
+    )
+    row = UIElement(
+        element_id="e_row_0",
+        class_name="android.widget.LinearLayout",
+        package=APP_PKG,
+        resource_id="com.example:id/row",
+        is_clickable=True,
+        parent_id=scroll.element_id,
+        depth=3,
+    )
+    fab_holder = UIElement(
+        element_id="e_fab_holder",
+        class_name="android.widget.FrameLayout",
+        package=APP_PKG,
+        resource_id="com.example:id/fab_holder",
+        parent_id=container.element_id,
+        depth=2,
+    )
+    fab = UIElement(
+        element_id="e_fab",
+        class_name="com.google.android.material.floatingactionbutton.FloatingActionButton",
+        package=APP_PKG,
+        resource_id="com.example:id/fab",
+        is_clickable=True,
+        parent_id=fab_holder.element_id,
+        depth=3,
+    )
+    elements = [root, container, scroll, row, fab_holder]
+    if include_fab:
+        elements.append(fab)
+    return RawScreen(
+        screen_id="s",
+        activity_name="com.example.MainActivity",
+        package_name=APP_PKG,
+        elements=elements,
+    )
+
+
+def test_scroll_aware_fingerprint_keeps_sibling_outside_subtree() -> None:
+    """A FAB at depth 3 outside the scrollable subtree must NOT be excluded."""
+    with_fab = _make_scroll_with_sibling_fab(include_fab=True).get_structural_fingerprint(
+        scroll_aware=True
+    )
+    without_fab = _make_scroll_with_sibling_fab(include_fab=False).get_structural_fingerprint(
+        scroll_aware=True
+    )
+    assert (
+        with_fab != without_fab
+    ), "FAB outside the scrollable subtree must contribute to the structural fingerprint"
+
+
+def test_scroll_aware_fingerprint_excludes_scrollable_descendants() -> None:
+    """Rows inside the scrollable container must be excluded from the fingerprint."""
+
+    def make(n_rows: int) -> RawScreen:
+        root = UIElement(
+            element_id="e_root",
+            class_name="android.widget.FrameLayout",
+            package=APP_PKG,
+            resource_id="com.example:id/root",
+            depth=0,
+        )
+        scroll = UIElement(
+            element_id="e_scroll",
+            class_name="androidx.recyclerview.widget.RecyclerView",
+            package=APP_PKG,
+            resource_id="com.example:id/list",
+            is_scrollable=True,
+            parent_id=root.element_id,
+            depth=1,
+        )
+        rows = [
+            UIElement(
+                element_id=f"e_row_{i}",
+                class_name="android.widget.LinearLayout",
+                package=APP_PKG,
+                resource_id="com.example:id/row",
+                is_clickable=True,
+                parent_id=scroll.element_id,
+                depth=2,
+            )
+            for i in range(n_rows)
+        ]
+        return RawScreen(
+            screen_id="s",
+            activity_name="com.example.MainActivity",
+            package_name=APP_PKG,
+            elements=[root, scroll, *rows],
+        )
+
+    assert make(3).get_structural_fingerprint(scroll_aware=True) == make(
+        10
+    ).get_structural_fingerprint(scroll_aware=True)

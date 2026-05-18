@@ -456,21 +456,33 @@ class RawScreen(BaseModel):
         if not self.elements:
             return EMPTY_SCREEN_ID
 
-        # Find depths of scrollable containers — their children are scroll-volatile
-        scrollable_depths: set[int] = set()
+        # Identify true descendants of scrollable containers via parent_id, not depth.
+        # Depth-based exclusion incorrectly drops deeper siblings (FAB, dialog overlays,
+        # toolbar controls) that are not actually inside any scrollable subtree.
+        scrollable_subtree_ids: set[str] = set()
         if scroll_aware:
+            by_id = {e.element_id: e for e in self.elements}
+            scrollable_ids = {e.element_id for e in self.elements if e.is_scrollable}
             for e in self.elements:
-                if e.is_scrollable:
-                    scrollable_depths.add(e.depth)
+                if e.element_id in scrollable_ids:
+                    continue
+                cur_parent = e.parent_id
+                depth_guard = 0
+                while cur_parent is not None and depth_guard < 60:
+                    if cur_parent in scrollable_ids:
+                        scrollable_subtree_ids.add(e.element_id)
+                        break
+                    parent = by_id.get(cur_parent)
+                    if parent is None:
+                        break
+                    cur_parent = parent.parent_id
+                    depth_guard += 1
 
         components = []
         for e in self.elements:
-            # Skip elements that are children of a scrollable container
-            if (
-                scrollable_depths
-                and not e.is_scrollable
-                and any(e.depth > sd for sd in scrollable_depths)
-            ):
+            # Drop only true descendants of scrollable containers; keep the
+            # scrollable element itself and unrelated deeper siblings.
+            if e.element_id in scrollable_subtree_ids:
                 continue
 
             interactability = (
