@@ -958,8 +958,7 @@ class AppExplorer:
 
         if skipped_risky:
             logger.info(
-                f"state={state_id[:6]} skipped {skipped_risky} risky element(s) "
-                "during enumeration"
+                f"state={state_id[:6]} skipped {skipped_risky} risky element(s) during enumeration"
             )
         self._scroll_candidate_keys[state_id] = scroll_candidate_keys
         return list(collected.values())
@@ -1350,8 +1349,7 @@ class AppExplorer:
                 self._last_execution_metadata["selector_resolution"] = resolution_status.value
                 if element is None:
                     logger.debug(
-                        f"resolve {resolution_status.value} for {t.value} "
-                        f"{_short_target(action)}"
+                        f"resolve {resolution_status.value} for {t.value} {_short_target(action)}"
                     )
                     return False
                 if not element.bounds:

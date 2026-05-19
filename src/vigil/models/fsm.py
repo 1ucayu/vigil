@@ -71,6 +71,14 @@ _ACTION_KEY_FIELDS = (
     "value",
 )
 _ACTION_IDENTITY_FIELDS = tuple(k for k in _ACTION_KEY_FIELDS if k != "type")
+_TEMPLATE_ITEM_IDENTITY_FIELDS = frozenset(
+    {
+        "target",
+        "target_text",
+        "target_content_desc",
+        "target_selector",
+    }
+)
 _SELECTOR_IDENTITY_FIELDS = (
     "resource_id",
     "text",
@@ -358,6 +366,41 @@ class AppFSM:
         """True when all identity fields supplied by the proposal agree."""
         return all(stored_key.get(field) == proposed_key.get(field) for field in proposed_fields)
 
+    @staticmethod
+    def _item_specific_identity_fields(proposed_key: dict[str, Hashable | None]) -> set[str]:
+        """Identity fields strong enough to bind a dynamic-template item."""
+        return {
+            field for field in _TEMPLATE_ITEM_IDENTITY_FIELDS if proposed_key.get(field) is not None
+        }
+
+    @staticmethod
+    def _template_binding_missing_lookup() -> TransitionLookup:
+        return TransitionLookup(
+            status=TransitionLookupStatus.UNCERTAIN,
+            details="template_binding_missing",
+        )
+
+    def _template_conflict_lookup(
+        self,
+        candidates: list[Transition],
+        proposed_key: dict[str, Hashable | None],
+        item_fields: set[str],
+    ) -> TransitionLookup:
+        for field in item_fields:
+            selected = [
+                t
+                for t in candidates
+                if _canonical_action_mapping(t.action).get(field) == proposed_key.get(field)
+            ]
+            if len(selected) == 1:
+                t = selected[0]
+                return TransitionLookup(
+                    status=TransitionLookupStatus.MATCH,
+                    transition=t,
+                    target_state_id=t.target,
+                )
+        return self._template_binding_missing_lookup()
+
     def resolve_transition(self, from_state: str, action: dict[str, Any]) -> TransitionLookup:
         """Resolve an action to a transition, preserving ambiguity as UNCERTAIN."""
         if from_state not in self.graph:
@@ -376,6 +419,26 @@ class AppFSM:
         ]
         proposed_fields = _identity_fields(proposed_key)
         is_global = proposed_type in _GLOBAL_ACTION_TYPES
+        state = self.states.get(from_state)
+        template = None
+        template_state_ids: set[str] = set()
+        is_template_click = False
+        item_fields: set[str] = set()
+        if (
+            state
+            and state.sub_fsm_template_id
+            and state.container_type == ContainerType.DYNAMIC
+            and proposed_type == "click"
+        ):
+            template = self.sub_fsm_templates.get(state.sub_fsm_template_id)
+            if template is not None:
+                template_state_ids = set(template.states)
+                is_template_click = True
+                item_fields = self._item_specific_identity_fields(proposed_key)
+
+        if is_template_click and not item_fields:
+            return self._template_binding_missing_lookup()
+
         if not proposed_fields and len(same_type) > 1 and not is_global:
             return TransitionLookup(
                 status=TransitionLookupStatus.UNCERTAIN,
@@ -390,12 +453,16 @@ class AppFSM:
         ]
         if len(exact_matches) == 1:
             t = exact_matches[0]
+            if is_template_click and t.target in template_state_ids and not item_fields:
+                return self._template_binding_missing_lookup()
             return TransitionLookup(
                 status=TransitionLookupStatus.MATCH,
                 transition=t,
                 target_state_id=t.target,
             )
         if len(exact_matches) > 1:
+            if is_template_click and any(t.target in template_state_ids for t in exact_matches):
+                return self._template_conflict_lookup(exact_matches, proposed_key, item_fields)
             return TransitionLookup(
                 status=TransitionLookupStatus.UNCERTAIN,
                 details="Multiple transitions share the same canonical action key",
@@ -420,12 +487,16 @@ class AppFSM:
             ]
             if len(compatible) == 1:
                 t = compatible[0]
+                if is_template_click and t.target in template_state_ids and not item_fields:
+                    return self._template_binding_missing_lookup()
                 return TransitionLookup(
                     status=TransitionLookupStatus.MATCH,
                     transition=t,
                     target_state_id=t.target,
                 )
             if len(compatible) > 1:
+                if is_template_click and any(t.target in template_state_ids for t in compatible):
+                    return self._template_conflict_lookup(compatible, proposed_key, item_fields)
                 return TransitionLookup(
                     status=TransitionLookupStatus.UNCERTAIN,
                     details=(
@@ -434,18 +505,36 @@ class AppFSM:
                     ),
                 )
 
-        state = self.states.get(from_state)
-        if (
-            state
-            and state.sub_fsm_template_id
-            and state.container_type == ContainerType.DYNAMIC
-            and proposed_type == "click"
-            and self.sub_fsm_templates.get(state.sub_fsm_template_id)
-        ):
-            return TransitionLookup(
-                status=TransitionLookupStatus.MATCH,
-                details="Matched dynamic container sub-FSM template",
-            )
+        if is_template_click and template is not None:
+            # Scan for a concrete outgoing edge from this container to any
+            # state inside the template subgraph whose canonical action
+            # identity is compatible with the proposal. Identity-compatible
+            # means every proposed identity field equals the stored one.
+            identity_compatible_edges = [
+                t
+                for t in self.transitions
+                if t.source == from_state
+                and t.target in template.states
+                and _canonical_action_mapping(t.action).get("type") == proposed_type
+                and self._compatible_with_proposed_identity(
+                    _canonical_action_mapping(t.action), proposed_key, proposed_fields
+                )
+            ]
+            if len(identity_compatible_edges) == 1:
+                t = identity_compatible_edges[0]
+                return TransitionLookup(
+                    status=TransitionLookupStatus.MATCH,
+                    transition=t,
+                    target_state_id=t.target,
+                )
+            if len(identity_compatible_edges) > 1:
+                return self._template_conflict_lookup(
+                    identity_compatible_edges, proposed_key, item_fields
+                )
+            # No identity-compatible concrete edge exists; the action
+            # claims to bind to the template but the FSM has no record
+            # of an item-level edge with that identity.
+            return self._template_binding_missing_lookup()
 
         return TransitionLookup(
             status=TransitionLookupStatus.NO_MATCH,

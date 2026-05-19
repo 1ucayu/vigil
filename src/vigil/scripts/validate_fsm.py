@@ -178,6 +178,10 @@ def _map_fsmchecker_reason(
     output: VerificationOutput,
 ) -> ValidationReason:
     """Translate a FsmChecker verdict into the validator's vocabulary."""
+    # resolve_transition's template fallback emits this detail string when the
+    # action cannot be bound to a concrete template edge — respect it directly.
+    if "template_binding_missing" in (output.details or ""):
+        return ValidationReason.TEMPLATE_BINDING_MISSING
     if output.reason is VerifyReason.STATE_UNKNOWN:
         return ValidationReason.STATE_NOT_FOUND
     if output.reason is VerifyReason.ACTION_AMBIGUOUS:
@@ -278,16 +282,35 @@ def validate_fsm(
         )
 
         if output.result is VerifyResult.ALLOW:
+            # An ALLOW with no matched target means resolve_transition fell
+            # through a degenerate template path (no concrete edge bound).
+            # The validator must not report ok in that case.
+            if matched_target is None:
+                source_state = fsm.states.get(source_state_id)
+                if (
+                    source_state is not None
+                    and source_state.container_type == ContainerType.DYNAMIC
+                    and source_state.sub_fsm_template_id
+                ):
+                    reason = ValidationReason.TEMPLATE_BINDING_MISSING
+                    detail = (
+                        "FsmChecker returned ALLOW but no concrete template edge "
+                        f"bound the action on dynamic container {source_state_id}"
+                    )
+                else:
+                    reason = ValidationReason.ACTION_SIGNATURE_MISMATCH
+                    detail = (
+                        "FsmChecker returned ALLOW but matched_target_state_id is None; "
+                        "action identity does not uniquely select an outgoing edge"
+                    )
             # Sanity: if the FSM matched a transition to a different target
             # than the trace observed, the action's canonical identity does
             # not uniquely determine the actually-taken edge.
-            if target_screen_unmapped:
+            elif target_screen_unmapped:
                 reason = ValidationReason.ACTION_SIGNATURE_MISMATCH
                 detail = f"Trace target screen {target_sid!r} is not bound to any FSM state"
             elif (
-                expected_target_state_id is not None
-                and matched_target is not None
-                and matched_target != expected_target_state_id
+                expected_target_state_id is not None and matched_target != expected_target_state_id
             ):
                 reason = ValidationReason.ACTION_SIGNATURE_MISMATCH
                 detail = (

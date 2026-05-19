@@ -56,25 +56,38 @@ class StateLocator:
     def __init__(self, fsm: AppFSM) -> None:
         self._fsm = fsm
         self._fp_index: dict[str, str] = {}
-        self._secondary_fp_index: dict[str, str | None] = {}
+        # Refined-sibling index keyed by (base_fingerprint, secondary_hash) so
+        # a live screen with the same secondary signature but a DIFFERENT base
+        # structural fingerprint cannot falsely localize to a refined sibling.
+        # The builder guarantees every refined fingerprint encodes a single
+        # concrete secondary hash (see _refine_conflicting_successors policy).
+        self._refined_fp_index: dict[tuple[str, str], str] = {}
         for state in fsm.states.values():
             self._fp_index[state.fingerprint] = state.state_id
-            self._index_secondary_fingerprint(state.fingerprint, state.state_id)
+            self._index_refined_sibling(state.fingerprint, state.state_id)
             if state.structural_fingerprint:
                 self._fp_index[state.structural_fingerprint] = state.state_id
-                self._index_secondary_fingerprint(state.structural_fingerprint, state.state_id)
+                self._index_refined_sibling(state.structural_fingerprint, state.state_id)
 
-    def _index_secondary_fingerprint(self, fingerprint: str, state_id: str) -> None:
-        secondary_hash = self._secondary_hash_from_fingerprint(fingerprint)
-        if secondary_hash is None:
+    def _index_refined_sibling(self, fingerprint: str, state_id: str) -> None:
+        if _REFINED_SECONDARY_MARKER not in fingerprint:
             return
-        existing = self._secondary_fp_index.get(secondary_hash)
-        if existing is None and secondary_hash in self._secondary_fp_index:
+        base_fp, _, secondary_hash = fingerprint.rpartition(_REFINED_SECONDARY_MARKER)
+        if not base_fp or not secondary_hash:
             return
+        # Builder stores 16-char hashes; RawScreen.get_structural_fingerprint
+        # returns 12-char hashes (same prefix, narrower truncation). Normalize
+        # the index key to the live-screen length so locate() can match.
+        live_base_fp = base_fp[:12]
+        key = (live_base_fp, secondary_hash)
+        existing = self._refined_fp_index.get(key)
         if existing is not None and existing != state_id:
-            self._secondary_fp_index[secondary_hash] = None
+            # Two refined siblings with the same (base_fp, secondary_hash) would
+            # be indistinguishable; mark the slot poisoned by storing an empty
+            # string and let lookups fall through to UNKNOWN/SIMILAR.
+            self._refined_fp_index[key] = ""
             return
-        self._secondary_fp_index[secondary_hash] = state_id
+        self._refined_fp_index[key] = state_id
 
     def locate(self, screen: RawScreen) -> StateLocation:
         """Locate a live screen in the FSM.
@@ -90,16 +103,21 @@ class StateLocator:
         if location.result is not LocateResult.UNKNOWN:
             return location
 
+        # Refined-sibling fallback: require the live screen's structural
+        # fingerprint to match the refined state's *base* fingerprint AND
+        # its concrete secondary hash. Both must agree — secondary hash
+        # alone is unsafe because unrelated screens can share an activity
+        # name / anchor set.
         secondary_hash = self._secondary_feature_signature_hash(screen)
-        refined_state_id = self._secondary_fp_index.get(secondary_hash)
-        if refined_state_id is not None:
+        refined_state_id = self._refined_fp_index.get((fp, secondary_hash))
+        if refined_state_id:
             refined = self._fsm.states.get(refined_state_id)
             matched = refined.structural_fingerprint if refined else None
             return StateLocation(
                 result=LocateResult.EXACT,
                 state_id=refined_state_id,
                 confidence=1.0,
-                matched_fingerprint=matched or (refined.fingerprint if refined else secondary_hash),
+                matched_fingerprint=matched or (refined.fingerprint if refined else fp),
             )
 
         return location
@@ -139,13 +157,6 @@ class StateLocator:
             confidence=0.0,
             matched_fingerprint=fingerprint,
         )
-
-    @staticmethod
-    def _secondary_hash_from_fingerprint(fingerprint: str) -> str | None:
-        if _REFINED_SECONDARY_MARKER not in fingerprint:
-            return None
-        secondary_hash = fingerprint.rsplit(_REFINED_SECONDARY_MARKER, 1)[1]
-        return secondary_hash or None
 
     @staticmethod
     def _secondary_feature_signature_hash(screen: RawScreen) -> str:

@@ -158,8 +158,10 @@ class FsmBuilder:
 
         # Flush refinement diagnostics buffered on the builder into the FSM.
         refinement_log = getattr(self, "_refinement_log", None)
+        flushed_refinement_log_count = 0
         if refinement_log:
             fsm.evolution_log.extend(refinement_log)
+            flushed_refinement_log_count = len(refinement_log)
 
         # Step 8: Post-processing — merge duplicates and remove error states
         merged = self._merge_scroll_duplicates(fsm)
@@ -178,6 +180,10 @@ class FsmBuilder:
         templates_created = self._build_sub_fsm_templates(fsm)
         if templates_created:
             logger.info(f"Created {templates_created} Sub-FSM templates")
+        refinement_log = getattr(self, "_refinement_log", None)
+        if refinement_log and len(refinement_log) > flushed_refinement_log_count:
+            fsm.evolution_log.extend(refinement_log[flushed_refinement_log_count:])
+            flushed_refinement_log_count = len(refinement_log)
 
         # Step 10: Detect dialog states and assign hierarchy
         dialogs = self._detect_dialog_states(fsm, raw_screens, sid_to_state_id)
@@ -721,14 +727,61 @@ class FsmBuilder:
             state.sub_fsm_template_id = template_id
             templates_created += 1
 
-            # Collapse: redirect source→collapsed transitions to the
-            # representative, then remove non-representative states from the
-            # FSM (states dict + graph nodes). Their non-source-originating
-            # transitions are pruned during the post-pass below.
+            # Lossless collapse: merge each collapsed sibling's raw_screens
+            # AND its incoming/outgoing transitions onto the representative
+            # before deleting it. Validator (validate_fsm) inverts
+            # AbstractState.raw_screens to recover screen→state mappings, so
+            # any screen left orphaned by the old "delete + prune" policy
+            # would surface as state_not_found on its own training trace.
+            #
+            # Collapsed siblings share structural_fingerprint by construction
+            # (the collapse criterion in _find_same_fingerprint_targets), so
+            # the representative's structural_fingerprint already covers them;
+            # we deliberately do NOT overwrite it.
             collapsed_others = {tid for tid, _ in click_targets[1:]}
+            rep_state = fsm.states.get(representative_target_id)
+            if rep_state is not None:
+                rep_screens = set(rep_state.raw_screens)
+                for tid in collapsed_others:
+                    absorbed_state = fsm.states.get(tid)
+                    if absorbed_state is None:
+                        continue
+                    for sid in absorbed_state.raw_screens:
+                        if sid not in rep_screens:
+                            rep_state.raw_screens.append(sid)
+                            rep_screens.add(sid)
+
+            # Re-source/-target transitions touching collapsed siblings onto
+            # the representative, then dedupe via _merge_transition_trust so
+            # provenance and observed_count aggregate correctly.
             for t in fsm.transitions:
-                if t.source == state_id and t.target in collapsed_others:
+                if t.source in collapsed_others:
+                    t.source = representative_target_id
+                if t.target in collapsed_others:
                     t.target = representative_target_id
+
+            merged_transitions: dict[
+                tuple[str, str, tuple[tuple[str, object], ...]], Transition
+            ] = {}
+            for t in fsm.transitions:
+                key = (t.source, t.target, canonical_action_key(t.action))
+                if key in merged_transitions:
+                    self._merge_transition_trust(merged_transitions[key], t)
+                else:
+                    merged_transitions[key] = t
+            fsm.transitions = list(merged_transitions.values())
+            self._downgrade_post_collapse_conflicts(representative_target_id, fsm.transitions)
+
+            # Stamp a builder-side collapse diagnostic for post-build visibility.
+            if not hasattr(self, "_template_collapse_log"):
+                self._template_collapse_log: list[dict[str, Any]] = []
+            self._template_collapse_log.append(
+                {
+                    "template_id": template_id,
+                    "representative_state": representative_target_id,
+                    "absorbed_states": sorted(collapsed_others),
+                }
+            )
 
             for tid in collapsed_others:
                 if tid in fsm.states:
@@ -736,14 +789,6 @@ class FsmBuilder:
                 if tid in fsm.graph:
                     fsm.graph.remove_node(tid)
 
-            # Drop any lingering transitions that still touch removed states,
-            # then rebuild graph edges from the authoritative transitions
-            # list (same post-pass pattern used by _merge_scroll_duplicates).
-            fsm.transitions = [
-                t
-                for t in fsm.transitions
-                if t.source not in collapsed_others and t.target not in collapsed_others
-            ]
             fsm.graph.remove_edges_from(list(fsm.graph.edges))
             for t in fsm.transitions:
                 if t.source in fsm.graph and t.target in fsm.graph:
@@ -785,6 +830,28 @@ class FsmBuilder:
                 logger.info(f"  {sid[:6]}  {summary or '<no click targets>'}")
 
         return templates_created
+
+    def _downgrade_post_collapse_conflicts(
+        self, representative_state_id: str, transitions: list[Transition]
+    ) -> None:
+        """Downgrade conflicts introduced by template sibling collapse."""
+        if not hasattr(self, "_refinement_log"):
+            self._refinement_log = []
+        groups: dict[tuple[str, tuple[tuple[str, Any], ...]], list[Transition]] = defaultdict(list)
+        for t in transitions:
+            if t.source != representative_state_id:
+                continue
+            groups[(t.source, canonical_action_key(t.action))].append(t)
+
+        for (source_id, action_key), conflicting in groups.items():
+            if len({t.target for t in conflicting}) <= 1:
+                continue
+            self._downgrade_conflict(
+                conflicting,
+                source_id,
+                action_key,
+                "post_collapse_conflict",
+            )
 
     @staticmethod
     def _collect_template_subgraph(
@@ -958,6 +1025,29 @@ class FsmBuilder:
             if ambiguous:
                 self._downgrade_conflict(
                     conflicting, source_id, action_key, "indistinguishable_secondary_features"
+                )
+                continue
+
+            # Stricter precondition for splitting: every target's raw screens must
+            # produce a SINGLE stable secondary-feature signature. If a target's
+            # screens span multiple signatures, the resulting refined sibling
+            # would need a group-hash fingerprint that StateLocator cannot safely
+            # disambiguate from a serialized FSM alone. Downgrade instead so the
+            # validator surfaces the ambiguity without a malformed split.
+            multi_signature_target = False
+            for screens in target_to_screens.values():
+                distinct_sigs = {
+                    self._secondary_feature_signature(raw_screens.get(sid, {})) for sid in screens
+                }
+                if len(distinct_sigs) > 1:
+                    multi_signature_target = True
+                    break
+            if multi_signature_target:
+                self._downgrade_conflict(
+                    conflicting,
+                    source_id,
+                    action_key,
+                    "target_spans_multiple_secondary_signatures",
                 )
                 continue
 

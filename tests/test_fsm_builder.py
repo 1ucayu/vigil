@@ -15,6 +15,8 @@ from vigil.models.fsm import (
     HierarchyLevel,
     SubFsmTemplate,
     Transition,
+    TransitionLookupStatus,
+    canonical_action_key,
 )
 from vigil.models.state import RawScreen, UIElement
 from vigil.neuro.fsm_builder import FsmBuilder
@@ -1150,7 +1152,10 @@ class TestBuildSubFsmTemplates:
 
 class TestTemplateBasedValidation:
     def test_click_valid_via_template(self) -> None:
-        """DYNAMIC state with template: click is valid even without explicit edge."""
+        """DYNAMIC state with template: bare click without identity is UNCERTAIN
+        (template_binding_missing). Click with identity routing to a concrete
+        template edge resolves to MATCH.
+        """
         fsm = AppFSM(app_package="com.test.app")
         fsm.add_state(
             AbstractState(
@@ -1162,12 +1167,37 @@ class TestTemplateBasedValidation:
                 sub_fsm_template_id="tmpl_1",
             )
         )
+        fsm.add_state(
+            AbstractState(
+                state_id="s_detail",
+                name="Detail",
+                fingerprint="fp_detail",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
         fsm.sub_fsm_templates["tmpl_1"] = SubFsmTemplate(
             template_id="tmpl_1",
             source_state_id="s_list",
             entry_fingerprint="fp_detail",
+            states={"s_detail": fsm.states["s_detail"]},
         )
-        assert fsm.is_valid_transition("s_list", {"type": "click"}) is True
+        # Bare click — no identity field — must NOT bind to the template.
+        assert fsm.is_valid_transition("s_list", {"type": "click"}) is None
+
+        # Click with identity that matches a concrete template edge resolves.
+        fsm.add_transition(
+            Transition(
+                source="s_list",
+                target="s_detail",
+                action={"type": "click", "target_text": "Item A"},
+                confidence=0.9,
+            )
+        )
+        assert fsm.is_valid_transition("s_list", {"type": "click", "target_text": "Item A"}) is True
+
+        # Click with identity that does NOT match any concrete edge returns
+        # UNCERTAIN (template_binding_missing), not MATCH.
+        assert fsm.is_valid_transition("s_list", {"type": "click", "target_text": "Item Z"}) is None
 
     def test_non_click_not_valid_via_template(self) -> None:
         """Template only covers click — scroll_up should still fail."""
@@ -1894,3 +1924,531 @@ class TestProvenanceNonEmpty:
             assert t.provenance, f"transition {t.source}→{t.target} missing provenance"
             entry = t.provenance[0]
             assert entry.confidence_source in {"observed", "inferred_dialog", "inferred_tab"}
+
+
+# ── Follow-up alignment: template collapse, identity-required fallback, ──
+# ── secondary-index safety, multi-signature refinement guard. ──
+
+
+class TestLosslessTemplateCollapse:
+    """SubFsmTemplate collapse must preserve raw_screens and re-source transitions."""
+
+    def _build_dynamic_list_trace(self, tmp_path: Path) -> Path:
+        # Container "Home" has three list rows leading to three structurally-
+        # identical detail pages (same skeleton, different titles). The builder
+        # should collapse the three detail states into one template
+        # representative.
+        click_a = {
+            "element_id": "e_a",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/row_a",
+            "text": "Row A",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        click_b = {
+            "element_id": "e_b",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/row_b",
+            "text": "Row B",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        click_c = {
+            "element_id": "e_c",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/row_c",
+            "text": "Row C",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        scrollable = {
+            "element_id": "e_list",
+            "class_name": "android.widget.ScrollView",
+            "resource_id": "com.test:id/list",
+            "depth": 1,
+            "is_scrollable": True,
+        }
+        # Detail pages must share the same structural skeleton.
+        detail_skeleton = [
+            {
+                "element_id": "e_detail_title",
+                "class_name": "android.widget.TextView",
+                "resource_id": "com.test:id/detail_title",
+                "depth": 1,
+                "is_clickable": False,
+            },
+            {
+                "element_id": "e_back",
+                "class_name": "android.widget.ImageButton",
+                "resource_id": "com.test:id/back",
+                "depth": 1,
+                "is_clickable": True,
+            },
+        ]
+        screens = {
+            "scr_home": _screen(
+                "scr_home",
+                ".HomeActivity",
+                "Home",
+                extra=[scrollable, click_a, click_b, click_c],
+            ),
+            "scr_a": {
+                "screen_id": "scr_a",
+                "activity_name": ".DetailActivity",
+                "metadata": {"page_title": "Detail A"},
+                "interactable_elements": [
+                    {**el, "text": "A" if el["element_id"] == "e_detail_title" else el.get("text")}
+                    for el in detail_skeleton
+                ],
+            },
+            "scr_b": {
+                "screen_id": "scr_b",
+                "activity_name": ".DetailActivity",
+                "metadata": {"page_title": "Detail B"},
+                "interactable_elements": [
+                    {**el, "text": "B" if el["element_id"] == "e_detail_title" else el.get("text")}
+                    for el in detail_skeleton
+                ],
+            },
+            "scr_c": {
+                "screen_id": "scr_c",
+                "activity_name": ".DetailActivity",
+                "metadata": {"page_title": "Detail C"},
+                "interactable_elements": [
+                    {**el, "text": "C" if el["element_id"] == "e_detail_title" else el.get("text")}
+                    for el in detail_skeleton
+                ],
+            },
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_home",
+                "target_screen_id": "scr_a",
+                "action": {"action_type": "click", "target_element_id": "e_a"},
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_home",
+                "target_screen_id": "scr_b",
+                "action": {"action_type": "click", "target_element_id": "e_b"},
+            },
+            {
+                "step_number": 3,
+                "source_screen_id": "scr_home",
+                "target_screen_id": "scr_c",
+                "action": {"action_type": "click", "target_element_id": "e_c"},
+            },
+        ]
+        return _write_trace(tmp_path, screens, traces)
+
+    def _build_post_collapse_conflict_trace(self, tmp_path: Path) -> Path:
+        row_a = {
+            "element_id": "e_a",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/shared_row",
+            "text": "Row A",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        row_b = {
+            "element_id": "e_b",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/shared_row",
+            "text": "Row B",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        scrollable = {
+            "element_id": "e_list",
+            "class_name": "android.widget.ScrollView",
+            "resource_id": "com.test:id/list",
+            "depth": 1,
+            "is_scrollable": True,
+        }
+        more_button = {
+            "element_id": "e_more",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/more",
+            "text": "More",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        screens = {
+            "scr_home": _screen(
+                "scr_home",
+                ".HomeActivity",
+                "Home",
+                extra=[scrollable, row_a, row_b],
+            ),
+            "scr_a": _screen(
+                "scr_a",
+                ".DetailActivity",
+                "Detail A",
+                extra=[more_button],
+            ),
+            "scr_b": _screen(
+                "scr_b",
+                ".DetailActivity",
+                "Detail B",
+                extra=[more_button],
+            ),
+            "scr_down_a": _screen("scr_down_a", ".TargetAActivity", "Target A"),
+            "scr_down_b": _screen("scr_down_b", ".TargetBActivity", "Target B"),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_home",
+                "target_screen_id": "scr_a",
+                "action": {"action_type": "click", "target_element_id": "e_a"},
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_home",
+                "target_screen_id": "scr_b",
+                "action": {"action_type": "click", "target_element_id": "e_b"},
+            },
+            {
+                "step_number": 3,
+                "source_screen_id": "scr_a",
+                "target_screen_id": "scr_down_a",
+                "action": {"action_type": "click", "target_element_id": "e_more"},
+            },
+            {
+                "step_number": 4,
+                "source_screen_id": "scr_b",
+                "target_screen_id": "scr_down_b",
+                "action": {"action_type": "click", "target_element_id": "e_more"},
+            },
+        ]
+        return _write_trace(tmp_path, screens, traces)
+
+    def test_collapse_preserves_raw_screens(self, tmp_path: Path) -> None:
+        trace = self._build_dynamic_list_trace(tmp_path)
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+        # If a template was created, the representative absorbed the others.
+        templates = list(fsm.sub_fsm_templates.values())
+        if not templates:
+            pytest.skip("no template produced by builder for this fixture")
+        tmpl = templates[0]
+        rep = fsm.states[tmpl.source_state_id]
+        # The container's outgoing click edges remain, each carrying provenance.
+        click_edges = [
+            t
+            for t in fsm.transitions
+            if t.source == tmpl.source_state_id and t.action.get("type") == "click"
+        ]
+        assert click_edges, "container has no outgoing clicks after collapse"
+        # All target detail screens must be bound to SOME existing FSM state
+        # (validator inverts raw_screens, so unbound screens would surface as
+        # state_not_found).
+        rep_screens: set[str] = set()
+        for state in fsm.states.values():
+            rep_screens.update(state.raw_screens)
+        # Every detail screen the trace observed must be reachable through
+        # raw_screens of some surviving state.
+        for sid in ("scr_a", "scr_b", "scr_c"):
+            assert sid in rep_screens, f"detail screen {sid!r} lost during collapse"
+        # No transition should reference a deleted state.
+        live_state_ids = set(fsm.states.keys())
+        for t in fsm.transitions:
+            assert t.source in live_state_ids
+            assert t.target in live_state_ids
+        # And the rep is one of the surviving states.
+        assert rep.state_id in live_state_ids
+
+    def test_post_collapse_conflicting_outgoing_edges_are_downgraded(self, tmp_path: Path) -> None:
+        trace = self._build_post_collapse_conflict_trace(tmp_path)
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+        downgrade_entries = [
+            entry
+            for entry in fsm.evolution_log
+            if entry.get("action") == "downgrade"
+            and entry.get("reason") == "post_collapse_conflict"
+        ]
+        assert downgrade_entries, f"evolution_log={fsm.evolution_log}"
+
+        source_id = downgrade_entries[0]["source_state"]
+        conflict_groups: dict[tuple[tuple[str, object], ...], list[Transition]] = {}
+        for t in fsm.transitions:
+            if t.source != source_id:
+                continue
+            conflict_groups.setdefault(canonical_action_key(t.action), []).append(t)
+        post_collapse_conflicts = [
+            group for group in conflict_groups.values() if len({t.target for t in group}) > 1
+        ]
+        assert post_collapse_conflicts
+        for group in post_collapse_conflicts:
+            for transition in group:
+                assert transition.low_trust is True
+                assert transition.confidence <= 0.5
+
+
+class TestResolveTemplateBindingMissing:
+    """resolve_transition must never return MATCH with no transition."""
+
+    @staticmethod
+    def _make_template_binding_fsm() -> AppFSM:
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_list",
+                name="List",
+                fingerprint="fp_list",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+                sub_fsm_template_id="tmpl_1",
+            )
+        )
+        for suffix in ("a", "b"):
+            fsm.add_state(
+                AbstractState(
+                    state_id=f"s_detail_{suffix}",
+                    name=f"Detail {suffix}",
+                    fingerprint=f"fp_detail_{suffix}",
+                    hierarchy_level=HierarchyLevel.ACTIVITY,
+                )
+            )
+        fsm.sub_fsm_templates["tmpl_1"] = SubFsmTemplate(
+            template_id="tmpl_1",
+            source_state_id="s_list",
+            entry_fingerprint="fp_detail",
+            states={
+                "s_detail_a": fsm.states["s_detail_a"],
+                "s_detail_b": fsm.states["s_detail_b"],
+            },
+        )
+        for suffix, label in (("a", "Item A"), ("b", "Item B")):
+            fsm.add_transition(
+                Transition(
+                    source="s_list",
+                    target=f"s_detail_{suffix}",
+                    action={
+                        "type": "click",
+                        "target_resource_id": "com.test:id/shared_row",
+                        "target_class": "android.widget.TextView",
+                        "target_text": label,
+                        "target_selector": {
+                            "resource_id": "com.test:id/shared_row",
+                            "text": label,
+                            "class_name": "android.widget.TextView",
+                        },
+                    },
+                    confidence=0.9,
+                )
+            )
+        return fsm
+
+    def test_bare_click_on_template_state_is_uncertain(self) -> None:
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_list",
+                name="List",
+                fingerprint="fp_list",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+                sub_fsm_template_id="tmpl_1",
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="s_detail",
+                name="Detail",
+                fingerprint="fp_detail",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.sub_fsm_templates["tmpl_1"] = SubFsmTemplate(
+            template_id="tmpl_1",
+            source_state_id="s_list",
+            entry_fingerprint="fp_detail",
+            states={"s_detail": fsm.states["s_detail"]},
+        )
+
+        # Bare click → UNCERTAIN, never MATCH-with-None.
+        lookup = fsm.resolve_transition("s_list", {"type": "click"})
+
+        assert lookup.status is TransitionLookupStatus.UNCERTAIN
+        assert "template_binding_missing" in lookup.details
+        assert lookup.transition is None
+        assert lookup.target_state_id is None
+
+        # Identity that matches no concrete template edge → UNCERTAIN.
+        lookup = fsm.resolve_transition("s_list", {"type": "click", "target_text": "Mystery"})
+        assert lookup.status is TransitionLookupStatus.UNCERTAIN
+        assert "template_binding_missing" in lookup.details
+
+    def test_class_only_template_click_is_binding_missing(self) -> None:
+        fsm = self._make_template_binding_fsm()
+        lookup = fsm.resolve_transition(
+            "s_list",
+            {"type": "click", "target_class": "android.widget.TextView"},
+        )
+        assert lookup.status is TransitionLookupStatus.UNCERTAIN
+        assert lookup.details == "template_binding_missing"
+
+    def test_shared_resource_only_template_click_is_binding_missing(self) -> None:
+        fsm = self._make_template_binding_fsm()
+        lookup = fsm.resolve_transition(
+            "s_list",
+            {"type": "click", "target_resource_id": "com.test:id/shared_row"},
+        )
+        assert lookup.status is TransitionLookupStatus.UNCERTAIN
+        assert lookup.details == "template_binding_missing"
+
+    def test_target_text_template_click_matches_one_concrete_edge(self) -> None:
+        fsm = self._make_template_binding_fsm()
+        lookup = fsm.resolve_transition(
+            "s_list",
+            {"type": "click", "target_text": "Item A"},
+        )
+        assert lookup.status is TransitionLookupStatus.MATCH
+        assert lookup.target_state_id == "s_detail_a"
+
+    def test_target_selector_template_click_matches_one_concrete_edge(self) -> None:
+        fsm = self._make_template_binding_fsm()
+        lookup = fsm.resolve_transition(
+            "s_list",
+            {
+                "type": "click",
+                "target_selector": {
+                    "resource_id": "com.test:id/shared_row",
+                    "text": "Item B",
+                    "class_name": "android.widget.TextView",
+                },
+            },
+        )
+        assert lookup.status is TransitionLookupStatus.MATCH
+        assert lookup.target_state_id == "s_detail_b"
+
+    def test_built_fsm_resolve_never_returns_match_with_none(self, tmp_path: Path) -> None:
+        # On the real builder output, no reachable (state, action) should give
+        # MATCH with no Transition.
+        builder = FsmBuilder("com.test.app")
+        # Reuse the lossless-collapse fixture which exercises template paths.
+        trace = TestLosslessTemplateCollapse()._build_dynamic_list_trace(tmp_path)
+        fsm = builder.build_from_trace(trace)
+
+        for state_id in fsm.states:
+            for t in fsm.transitions:
+                if t.source != state_id:
+                    continue
+                lookup = fsm.resolve_transition(state_id, t.action)
+                if lookup.status is TransitionLookupStatus.MATCH:
+                    assert lookup.transition is not None
+                    assert lookup.target_state_id is not None
+
+
+class TestStateLocatorSecondarySafety:
+    """Refined-secondary index must require base fingerprint compatibility."""
+
+    def test_same_secondary_hash_different_base_does_not_match(self) -> None:
+        # Hand-build an FSM with one refined sibling whose base fp is B1.
+        fsm = AppFSM(app_package="com.test.app")
+        # Use a string that mimics a 12-char base hash so live screens that
+        # genuinely correspond can match.
+        base_b1 = "b1aaaaaaaaaa"
+        secondary_h = "deadbeefcafe"
+        from vigil.symbolic.state_locator import _REFINED_SECONDARY_MARKER
+
+        fsm.add_state(
+            AbstractState(
+                state_id="s_refined",
+                name="Refined",
+                fingerprint=f"{base_b1}{_REFINED_SECONDARY_MARKER}{secondary_h}",
+                structural_fingerprint=f"{base_b1}{_REFINED_SECONDARY_MARKER}{secondary_h}",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+
+        locator = StateLocator(fsm)
+
+        # A live screen with a DIFFERENT primary structure but contrived to
+        # produce the same secondary hash must NOT match. We exercise the
+        # index directly because synthesizing a live RawScreen with a precise
+        # secondary hash is fragile; the index is the safety boundary.
+        assert ("b2ZZZZZZZZZZ", secondary_h) not in locator._refined_fp_index
+        # And the indexed key uses the 12-char-truncated base.
+        assert (base_b1, secondary_h) in locator._refined_fp_index
+        assert locator._refined_fp_index[(base_b1, secondary_h)] == "s_refined"
+
+
+class TestApeRefinementMultiSignatureDowngrade:
+    """If any target's screens span multiple secondary signatures, downgrade."""
+
+    def test_target_with_multiple_signatures_is_downgraded(self, tmp_path: Path) -> None:
+        click_elem = {
+            "element_id": "e_go",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/btn_go",
+            "text": "Go",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        anchor_alpha = {
+            "element_id": "e_alpha",
+            "class_name": "android.widget.TextView",
+            "resource_id": "",
+            "text": "Alpha",
+            "depth": 1,
+            "is_clickable": False,
+        }
+        anchor_beta = {
+            "element_id": "e_beta",
+            "class_name": "android.widget.TextView",
+            "resource_id": "",
+            "text": "Beta",
+            "depth": 1,
+            "is_clickable": False,
+        }
+        anchor_gamma = {
+            "element_id": "e_gamma",
+            "class_name": "android.widget.TextView",
+            "resource_id": "",
+            "text": "Gamma",
+            "depth": 1,
+            "is_clickable": False,
+        }
+        # Same primary fingerprint across h1/h2/h3 (page_title="Home").
+        # h1 and h2 both go to scr_a but have DIFFERENT secondary signatures
+        # (Alpha vs Beta anchor). h3 goes to scr_b with anchor Gamma.
+        # Target "scr_a" therefore spans two secondary signatures → downgrade,
+        # not split.
+        screens = {
+            "scr_h1": _screen("scr_h1", ".MainActivity", "Home", extra=[click_elem, anchor_alpha]),
+            "scr_h2": _screen("scr_h2", ".MainActivity", "Home", extra=[click_elem, anchor_beta]),
+            "scr_h3": _screen("scr_h3", ".MainActivity", "Home", extra=[click_elem, anchor_gamma]),
+            "scr_a": _screen("scr_a", ".PageA", "PageA"),
+            "scr_b": _screen("scr_b", ".PageB", "PageB"),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_h1",
+                "target_screen_id": "scr_a",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_h2",
+                "target_screen_id": "scr_a",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+            {
+                "step_number": 3,
+                "source_screen_id": "scr_h3",
+                "target_screen_id": "scr_b",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+        log_actions = [(e.get("action"), e.get("reason")) for e in fsm.evolution_log]
+        # Must be a downgrade with the new multi-signature reason — not a split.
+        assert any(
+            action == "downgrade" and reason == "target_spans_multiple_secondary_signatures"
+            for action, reason in log_actions
+        ), f"evolution_log={fsm.evolution_log}"

@@ -329,3 +329,93 @@ class TestCli:
         payload = json.loads(out.read_text())
         assert payload["total_steps"] == 3
         assert payload["counts_by_reason"] == {ValidationReason.OK.value: 3}
+
+
+# ── Follow-up: ALLOW with no matched target must not report ok ──
+
+
+class TestTemplateBindingMissingPath:
+    """When resolve_transition returns ALLOW but no concrete matched edge exists,
+    validate_fsm must classify the step as TEMPLATE_BINDING_MISSING for dynamic
+    container/template states, never as ok."""
+
+    def test_dynamic_container_no_representative_edge_flagged(self, tmp_path: Path) -> None:
+        from vigil.models.fsm import (
+            AbstractState,
+            AppFSM,
+            ContainerType,
+            HierarchyLevel,
+            SubFsmTemplate,
+            Transition,
+        )
+
+        # Hand-build a minimal FSM whose container state has a template but
+        # no representative edge with the proposed identity. Replay a click
+        # carrying identity that does NOT match any concrete edge.
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_list",
+                name="List",
+                fingerprint="fp_list",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+                sub_fsm_template_id="tmpl_1",
+                raw_screens=["scr_001"],
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="s_detail",
+                name="Detail",
+                fingerprint="fp_detail",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                raw_screens=["scr_002"],
+            )
+        )
+        fsm.sub_fsm_templates["tmpl_1"] = SubFsmTemplate(
+            template_id="tmpl_1",
+            source_state_id="s_list",
+            entry_fingerprint="fp_detail",
+            states={"s_detail": fsm.states["s_detail"]},
+        )
+        # Concrete edge with a known identity that the replayed action will NOT
+        # match.
+        fsm.add_transition(
+            Transition(
+                source="s_list",
+                target="s_detail",
+                action={"type": "click", "target_text": "Known Item"},
+                confidence=0.9,
+            )
+        )
+
+        # Synthetic trace: replay a click with a DIFFERENT identity.
+        trace_data = {
+            "app_package": "com.test.app",
+            "screens": {
+                "scr_001": {"screen_id": "scr_001", "activity_name": ".ListActivity"},
+                "scr_002": {"screen_id": "scr_002", "activity_name": ".DetailActivity"},
+            },
+            "traces": [
+                {
+                    "step_number": 1,
+                    "source_screen_id": "scr_001",
+                    "target_screen_id": "scr_002",
+                    "action": {
+                        "action_type": "click",
+                        "target_element_id": "e_x",
+                        "target_text": "Unknown Mystery Item",
+                    },
+                }
+            ],
+        }
+        path = tmp_path / "trace.json"
+        path.write_text(json.dumps(trace_data))
+
+        report = validate_fsm(fsm, path)
+        # The step must NOT be ok. Because s_list has container_type=DYNAMIC
+        # and a sub_fsm_template_id, it should be TEMPLATE_BINDING_MISSING.
+        reasons = [s.reason for s in report.steps]
+        assert ValidationReason.OK not in reasons
+        assert ValidationReason.TEMPLATE_BINDING_MISSING in reasons
