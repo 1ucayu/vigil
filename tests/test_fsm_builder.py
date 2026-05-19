@@ -2452,3 +2452,220 @@ class TestApeRefinementMultiSignatureDowngrade:
             action == "downgrade" and reason == "target_spans_multiple_secondary_signatures"
             for action, reason in log_actions
         ), f"evolution_log={fsm.evolution_log}"
+
+
+# ── Pass 3: integrity + identity preservation ──
+
+
+_SETTINGS_TRACE = (
+    Path(__file__).parent.parent
+    / "data/apps/com_android_settings/traces/exploration_20260420_164556.json"
+)
+
+
+def _settings_trace_available() -> bool:
+    return _SETTINGS_TRACE.exists()
+
+
+class TestRealTraceIntegrity:
+    """After building the Settings FSM, no template artifact may reference a
+    deleted state id, and the safety-net dropped_count must be zero (the
+    cumulative redirect map is the primary mechanism)."""
+
+    @pytest.mark.skipif(
+        not _settings_trace_available(),
+        reason="Settings exploration trace fixture not present",
+    )
+    def test_no_dangling_state_references_after_real_trace_build(self) -> None:
+        builder = FsmBuilder("com.android.settings")
+        fsm = builder.build_from_trace(_SETTINGS_TRACE)
+        live = set(fsm.states.keys())
+
+        # 1. fsm.transitions
+        for t in fsm.transitions:
+            assert t.source in live, f"transition source {t.source!r} not in fsm.states"
+            assert t.target in live, f"transition target {t.target!r} not in fsm.states"
+
+        # 2. fsm.graph nodes
+        for node in fsm.graph.nodes():
+            assert node in live, f"graph node {node!r} not in fsm.states"
+
+        # 3. SubFsmTemplate.source_state_id
+        for tid, tmpl in fsm.sub_fsm_templates.items():
+            assert (
+                tmpl.source_state_id in live
+            ), f"template {tid!r}: source_state_id {tmpl.source_state_id!r} not in fsm.states"
+
+        # 4. SubFsmTemplate.states
+        for tid, tmpl in fsm.sub_fsm_templates.items():
+            for sid in tmpl.states:
+                assert sid in live, f"template {tid!r}: states[{sid!r}] not in fsm.states"
+
+        # 5. SubFsmTemplate.transitions
+        for tid, tmpl in fsm.sub_fsm_templates.items():
+            for t in tmpl.transitions:
+                assert (
+                    t.source in live
+                ), f"template {tid!r}: transition source {t.source!r} not in fsm.states"
+                assert (
+                    t.target in live
+                ), f"template {tid!r}: transition target {t.target!r} not in fsm.states"
+
+        # Safety-net dropped count: must be 0 (correct redirect logic leaves
+        # nothing dangling; the sweep is only a defensive backstop).
+        assert getattr(builder, "_template_collapse_dropped_count", 0) == 0
+
+
+class TestCascadeCollapseUpdatesPriorTemplates:
+    """When template B collapses a state that template A previously held as
+    its representative, template A must no longer reference the deleted id."""
+
+    def test_cascade_collapse_updates_prior_templates(self, tmp_path: Path) -> None:
+        # Two DYNAMIC containers, each with two identical-skeleton detail
+        # pages. We arrange the detail-page skeletons so the FIRST container's
+        # representative is itself a row of the SECOND container — triggering
+        # a cascade. This is engineered via shared structural fingerprints.
+        from vigil.models.fsm import (
+            AbstractState,
+            AppFSM,
+            ContainerType,
+            HierarchyLevel,
+            Transition,
+        )
+        from vigil.neuro.fsm_builder import FsmBuilder
+
+        fsm = AppFSM(app_package="com.test.app")
+        # Container A and its three rows (all share structural_fingerprint=sfp_row).
+        fsm.add_state(
+            AbstractState(
+                state_id="cA",
+                name="ContainerA",
+                fingerprint="fp_a",
+                structural_fingerprint="sfp_a",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+            )
+        )
+        for sid in ("rA1", "rA2", "rA3"):
+            fsm.add_state(
+                AbstractState(
+                    state_id=sid,
+                    name=sid,
+                    fingerprint=f"fp_{sid}",
+                    structural_fingerprint="sfp_row",
+                    hierarchy_level=HierarchyLevel.ACTIVITY,
+                )
+            )
+        for sid in ("rA1", "rA2", "rA3"):
+            fsm.add_transition(
+                Transition(
+                    source="cA",
+                    target=sid,
+                    action={"type": "click", "target_text": sid},
+                    confidence=1.0,
+                )
+            )
+
+        # Container B and its rows: one of them is rA1 (the kept rep of A).
+        fsm.add_state(
+            AbstractState(
+                state_id="cB",
+                name="ContainerB",
+                fingerprint="fp_b",
+                structural_fingerprint="sfp_b",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="rB1",
+                name="rB1",
+                fingerprint="fp_rB1",
+                structural_fingerprint="sfp_row",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="cB",
+                target="rA1",
+                action={"type": "click", "target_text": "rA1"},
+                confidence=1.0,
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="cB",
+                target="rB1",
+                action={"type": "click", "target_text": "rB1"},
+                confidence=1.0,
+            )
+        )
+
+        builder = FsmBuilder("com.test.app")
+        templates_created = builder._build_sub_fsm_templates(fsm)
+        assert templates_created >= 1
+
+        live = set(fsm.states.keys())
+        for tid, tmpl in fsm.sub_fsm_templates.items():
+            assert (
+                tmpl.source_state_id in live
+            ), f"template {tid!r}.source_state_id={tmpl.source_state_id!r} dangling"
+            for sid in tmpl.states:
+                assert sid in live, f"template {tid!r}.states[{sid!r}] dangling"
+            for t in tmpl.transitions:
+                assert (
+                    t.source in live and t.target in live
+                ), f"template {tid!r} has a dangling transition"
+        for t in fsm.transitions:
+            assert t.source in live and t.target in live
+
+
+class TestObservedTargetTextPreserved:
+    """_build_transitions must never overwrite a populated identity field
+    from the raw trace action with an empty element-derived value."""
+
+    def test_observed_target_text_preserved_when_element_text_empty(self, tmp_path: Path) -> None:
+        # Action carries target_text="Network & internet"; the looked-up
+        # element has empty text and content_description. The stored
+        # transition action must keep target_text intact.
+        screens = {
+            "scr_001": {
+                "screen_id": "scr_001",
+                "activity_name": ".MainActivity",
+                "metadata": {"page_title": "Settings"},
+                "interactable_elements": [
+                    {
+                        "element_id": "e_row",
+                        "class_name": "android.widget.LinearLayout",
+                        "resource_id": "com.test:id/row",
+                        # Deliberately empty text / content_description.
+                        "text": "",
+                        "content_description": "",
+                        "depth": 2,
+                        "is_clickable": True,
+                    }
+                ],
+            },
+            "scr_002": _screen("scr_002", ".DetailActivity", "Network details"),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_001",
+                "target_screen_id": "scr_002",
+                "action": {
+                    "action_type": "click",
+                    "target_element_id": "e_row",
+                    "target_text": "Network & internet",
+                },
+            }
+        ]
+        path = _write_trace(tmp_path, screens, traces)
+        fsm = FsmBuilder("com.test.app").build_from_trace(path)
+        observed = [t for t in fsm.transitions if t.action.get("type") == "click"]
+        assert observed, "expected one observed click transition"
+        assert (
+            observed[0].action.get("target_text") == "Network & internet"
+        ), f"target_text was wiped: {observed[0].action!r}"

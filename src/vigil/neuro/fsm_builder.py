@@ -671,8 +671,20 @@ class FsmBuilder:
         dynamic_state_ids = [
             sid for sid, s in fsm.states.items() if s.container_type == ContainerType.DYNAMIC
         ]
+        # Cumulative redirect map across template iterations. A collapsed
+        # state may itself be redirected by a later template; resolving
+        # transitively (`_resolve_redirect`) ensures previously-built
+        # templates and live transitions never reference a deleted id.
+        self._collapse_redirects: dict[str, str] = getattr(self, "_collapse_redirects", {}) or {}
 
         for state_id in list(dynamic_state_ids):
+            # The container itself may have been redirected by an earlier
+            # collapse. Resolve through the cumulative map; skip if the chain
+            # leads to a non-live state.
+            resolved_container = self._resolve_redirect(state_id)
+            if resolved_container not in fsm.states:
+                continue
+            state_id = resolved_container
             state = fsm.states.get(state_id)
             if state is None:
                 continue
@@ -788,6 +800,20 @@ class FsmBuilder:
                     del fsm.states[tid]
                 if tid in fsm.graph:
                     fsm.graph.remove_node(tid)
+                # Insert the literal representative (live by construction at
+                # the start of this iteration). Walking _resolve_redirect here
+                # could chain through an older entry pointing back at a state
+                # also in collapsed_others, producing a self-loop. Transitive
+                # resolution from prior keys still works because _resolve_redirect
+                # walks the chain when older lookups land on this entry.
+                self._collapse_redirects[tid] = representative_target_id
+
+            # Update previously-created SubFsmTemplates so none of them
+            # reference a state that was just deleted. Each tmpl's
+            # source_state_id / states / transitions are rewritten through
+            # the cumulative redirect map.
+            for prior in fsm.sub_fsm_templates.values():
+                self._rewrite_template_through_redirects(prior, fsm)
 
             fsm.graph.remove_edges_from(list(fsm.graph.edges))
             for t in fsm.transitions:
@@ -829,7 +855,96 @@ class FsmBuilder:
                 summary = ", ".join(f"{k[:8]}:{v}" for k, v in counts.items())
                 logger.info(f"  {sid[:6]}  {summary or '<no click targets>'}")
 
+        # Final integrity sweep (safety net — correct redirect logic should
+        # leave nothing dangling). Drop any fsm.transition whose source or
+        # target is no longer in fsm.states and log how many were dropped.
+        # The regression test asserts this is 0 on the Settings trace.
+        live_state_ids = set(fsm.states.keys())
+        dangling = [
+            t
+            for t in fsm.transitions
+            if t.source not in live_state_ids or t.target not in live_state_ids
+        ]
+        self._template_collapse_dropped_count = len(dangling)
+        if dangling:
+            logger.warning(
+                f"Template collapse left {len(dangling)} dangling transitions; "
+                "dropping them as a safety net (redirect logic should make this zero)."
+            )
+            fsm.transitions = [
+                t
+                for t in fsm.transitions
+                if t.source in live_state_ids and t.target in live_state_ids
+            ]
+            fsm.graph.remove_edges_from(list(fsm.graph.edges))
+            for t in fsm.transitions:
+                fsm.graph.add_edge(
+                    t.source,
+                    t.target,
+                    action=t.action,
+                    guard=t.guard,
+                    confidence=t.confidence,
+                    low_trust=t.low_trust,
+                    observed_count=t.observed_count,
+                )
+
         return templates_created
+
+    def _resolve_redirect(self, state_id: str) -> str:
+        """Follow ``self._collapse_redirects`` transitively to find the live
+        representative for ``state_id``. Bounded loop guards against accidental
+        cycles in the redirect chain (should be impossible by construction)."""
+        redirects = getattr(self, "_collapse_redirects", None) or {}
+        seen: set[str] = set()
+        current = state_id
+        for _ in range(64):
+            if current in seen:
+                break
+            seen.add(current)
+            nxt = redirects.get(current)
+            if nxt is None or nxt == current:
+                return current
+            current = nxt
+        return current
+
+    def _rewrite_template_through_redirects(self, tmpl: SubFsmTemplate, fsm: AppFSM) -> None:
+        """Rewrite a SubFsmTemplate so every state id it references is alive.
+
+        Resolves ``source_state_id``, every key in ``states``, and every
+        ``(source, target)`` in ``transitions`` through the cumulative redirect
+        map. Entries that resolve to a non-live state are dropped. ``states``
+        values are replaced with the live ``fsm.states[id]`` so absorbed
+        ``raw_screens`` propagate into the template view. Transitions are
+        deduped by ``(source, target, canonical_action_key)`` post-rewrite.
+        """
+        live_state_ids = set(fsm.states.keys())
+
+        new_source = self._resolve_redirect(tmpl.source_state_id)
+        if new_source in live_state_ids:
+            tmpl.source_state_id = new_source
+
+        rewritten_states: dict[str, AbstractState] = {}
+        for sid in list(tmpl.states.keys()):
+            resolved = self._resolve_redirect(sid)
+            if resolved in live_state_ids and resolved not in rewritten_states:
+                rewritten_states[resolved] = fsm.states[resolved]
+        tmpl.states.clear()
+        tmpl.states.update(rewritten_states)
+
+        merged: dict[tuple[str, str, tuple[tuple[str, object], ...]], Transition] = {}
+        for t in tmpl.transitions:
+            new_src = self._resolve_redirect(t.source)
+            new_tgt = self._resolve_redirect(t.target)
+            if new_src not in live_state_ids or new_tgt not in live_state_ids:
+                continue
+            t.source = new_src
+            t.target = new_tgt
+            key = (new_src, new_tgt, canonical_action_key(t.action))
+            if key in merged:
+                self._merge_transition_trust(merged[key], t)
+            else:
+                merged[key] = t
+        tmpl.transitions = list(merged.values())
 
     def _downgrade_post_collapse_conflicts(
         self, representative_state_id: str, transitions: list[Transition]
@@ -922,6 +1037,7 @@ class FsmBuilder:
             no group has >= 2 members.
         """
         fp_groups: dict[str, list[str]] = defaultdict(list)
+        seen_per_group: dict[str, set[str]] = defaultdict(set)
         for t in fsm.transitions:
             if t.source != source_id:
                 continue
@@ -933,6 +1049,12 @@ class FsmBuilder:
             sfp = target.structural_fingerprint
             if not sfp:
                 continue
+            # Multiple observations of the same (source, target) edge must not
+            # produce duplicate group members; otherwise the collapse loop can
+            # treat the representative as one of its own collapsed_others.
+            if t.target in seen_per_group[sfp]:
+                continue
+            seen_per_group[sfp].add(t.target)
             fp_groups[sfp].append(t.target)
 
         best_group: list[str] = []
@@ -1555,7 +1677,10 @@ class FsmBuilder:
             action = Action(**action_data)
             fsm_action = action.to_fsm_dict()
 
-            # Enrich action dict with target element metadata
+            # Enrich action dict with target element metadata. Fill-only-when-missing:
+            # never overwrite a populated identity field from Action.to_fsm_dict()
+            # with an empty or weaker element-derived value. Action carries the raw
+            # trace identity; the element row is a best-effort supplement.
             if raw_screens and action.target_element_id:
                 source_screen = raw_screens.get(source_sid, {})
                 elements = source_screen.get(
@@ -1565,10 +1690,24 @@ class FsmBuilder:
                     if el.get("element_id") == action.target_element_id:
                         text = el.get("text") or ""
                         desc = el.get("content_description") or ""
-                        fsm_action["target_text"] = text or desc
-                        fsm_action["target_resource_id"] = el.get("resource_id") or ""
-                        fsm_action["target_class"] = el.get("class_name") or ""
-                        fsm_action["target_content_desc"] = desc
+                        rid = el.get("resource_id") or ""
+                        cls = el.get("class_name") or ""
+                        candidates = {
+                            "target_text": text or desc,
+                            "target_content_desc": desc,
+                            "target_resource_id": rid,
+                            "resource_id": rid,
+                            "target_class": cls,
+                            "target_class_name": cls,
+                        }
+                        for field, candidate in candidates.items():
+                            if candidate and not (fsm_action.get(field) or ""):
+                                fsm_action[field] = candidate
+                        # target_selector: only fill if the element provides a
+                        # structured selector and the action dict has none.
+                        el_selector = el.get("target_selector") or el.get("selector")
+                        if el_selector and not fsm_action.get("target_selector"):
+                            fsm_action["target_selector"] = el_selector
                         break
 
             step_index = trace.get("step_number")
