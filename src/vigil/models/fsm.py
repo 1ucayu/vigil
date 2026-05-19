@@ -239,6 +239,27 @@ class AbstractState(BaseModel):
     sub_fsm_template_id: str | None = None
 
 
+class ProvenanceEntry(BaseModel):
+    """Single evidence record explaining how a transition entered the FSM.
+
+    A transition may carry multiple entries when traces are merged or when an
+    inferred edge is later corroborated by an observed edge.
+
+    Attributes:
+        trace_step_index: Position in the source trace ``traces`` array; ``-1``
+            for synthetic entries produced by dialog/tab inferrers.
+        source_screen_id: Raw screen id captured before the action.
+        target_screen_id: Raw screen id captured after the action.
+        confidence_source: Where the supporting evidence came from. One of
+            ``"observed" | "inferred_dialog" | "inferred_tab"``.
+    """
+
+    trace_step_index: int = -1
+    source_screen_id: str | None = None
+    target_screen_id: str | None = None
+    confidence_source: str = "observed"
+
+
 class Transition(BaseModel):
     """A transition between two abstract states in the FSM.
 
@@ -250,6 +271,7 @@ class Transition(BaseModel):
         confidence: Replay confidence score (success_count / total_trials).
         low_trust: Whether the edge came from a low-trust observation scope.
         observed_count: Number of times this transition was observed during exploration.
+        provenance: Evidence records explaining where this transition came from.
     """
 
     source: str
@@ -259,6 +281,7 @@ class Transition(BaseModel):
     confidence: float = 0.0
     low_trust: bool = False
     observed_count: int = 0
+    provenance: list[ProvenanceEntry] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)

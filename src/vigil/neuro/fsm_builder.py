@@ -22,11 +22,14 @@ from vigil.models.fsm import (
     AppFSM,
     ContainerType,
     HierarchyLevel,
+    ProvenanceEntry,
     SubFsmTemplate,
     Transition,
     canonical_action_key,
 )
 from vigil.neuro.app_prior import AppPrior
+
+_REFINED_SECONDARY_MARKER = "::secondary:"
 
 
 class FsmBuilder:
@@ -64,6 +67,10 @@ class FsmBuilder:
     def _merge_transition_trust(existing: Transition, incoming: Transition) -> None:
         """Combine duplicate-edge confidence without promoting low-trust-only edges."""
         existing.observed_count += incoming.observed_count
+        # Provenance lists are append-only; preserve every supporting record so the
+        # validator (and future replay aggregation) can reconstruct evidence.
+        if incoming.provenance:
+            existing.provenance.extend(incoming.provenance)
         if existing.low_trust and incoming.low_trust:
             existing.confidence = min(existing.confidence, incoming.confidence)
             return
@@ -124,8 +131,15 @@ class FsmBuilder:
         # Step 3: Merge duplicate transitions
         transitions = self._merge_transitions(transitions)
 
-        # Step 4: Detect initial state
-        initial_state = self._detect_initial_state(raw_traces, sid_to_state_id)
+        # Step 3.5: APE-style refinement — split or downgrade conflicting successors
+        transitions = self._refine_conflicting_successors(
+            states, sid_to_state_id, transitions, raw_screens
+        )
+
+        # Step 4: Detect initial state (prefers manifest launcher activity)
+        initial_state = self._detect_initial_state(
+            raw_traces, sid_to_state_id, states=states, app_prior=app_prior
+        )
 
         # Step 5: Disambiguate duplicate state names
         self._disambiguate_names(states)
@@ -141,6 +155,11 @@ class FsmBuilder:
             fsm.add_state(state)
         for t in transitions:
             fsm.add_transition(t)
+
+        # Flush refinement diagnostics buffered on the builder into the FSM.
+        refinement_log = getattr(self, "_refinement_log", None)
+        if refinement_log:
+            fsm.evolution_log.extend(refinement_log)
 
         # Step 8: Post-processing — merge duplicates and remove error states
         merged = self._merge_scroll_duplicates(fsm)
@@ -297,6 +316,7 @@ class FsmBuilder:
                                 confidence=t.confidence,
                                 low_trust=t.low_trust,
                                 observed_count=t.observed_count,
+                                provenance=list(t.provenance),
                             )
                         )
 
@@ -468,6 +488,12 @@ class FsmBuilder:
                     action={"type": "click", "target_text": "OK/Cancel"},
                     confidence=0.5,
                     observed_count=0,
+                    provenance=[
+                        ProvenanceEntry(
+                            trace_step_index=-1,
+                            confidence_source="inferred_dialog",
+                        )
+                    ],
                 )
                 fsm.add_transition(t)
                 added += 1
@@ -478,6 +504,12 @@ class FsmBuilder:
                     action={"type": "navigate_back"},
                     confidence=0.5,
                     observed_count=0,
+                    provenance=[
+                        ProvenanceEntry(
+                            trace_step_index=-1,
+                            confidence_source="inferred_dialog",
+                        )
+                    ],
                 )
                 fsm.add_transition(t)
                 added += 1
@@ -539,6 +571,12 @@ class FsmBuilder:
                                 },
                                 confidence=0.5,
                                 observed_count=0,
+                                provenance=[
+                                    ProvenanceEntry(
+                                        trace_step_index=-1,
+                                        confidence_source="inferred_tab",
+                                    )
+                                ],
                             )
                         )
                         added += 1
@@ -553,6 +591,12 @@ class FsmBuilder:
                                 },
                                 confidence=0.5,
                                 observed_count=0,
+                                provenance=[
+                                    ProvenanceEntry(
+                                        trace_step_index=-1,
+                                        confidence_source="inferred_tab",
+                                    )
+                                ],
                             )
                         )
                         added += 1
@@ -835,6 +879,337 @@ class FsmBuilder:
             return []
         return [(tid, best_fp) for tid in best_group]
 
+    # --- APE-style refinement ---
+
+    def _refine_conflicting_successors(
+        self,
+        states: dict[str, AbstractState],
+        sid_to_state_id: dict[str, str],
+        transitions: list[Transition],
+        raw_screens: dict[str, Any],
+    ) -> list[Transition]:
+        """Split or downgrade states where the same canonical action yields
+        conflicting successors (the APE-style refinement step).
+
+        After ``_merge_transitions``, two outgoing edges of the same source
+        with the same ``canonical_action_key`` but different targets prove the
+        abstract state actually represents two distinct concrete situations.
+        We try to split, but only conservatively:
+
+          1. Every conflicting edge must carry provenance pointing at a real
+             ``source_screen_id``; otherwise we cannot attribute the conflict
+             to specific raw screens and we downgrade.
+          2. The raw source screens that lead to each target must be
+             distinguishable by stable *secondary* features (activity,
+             modal flag, non-editable text anchors, content descriptions)
+             that are NOT already captured by the primary fingerprint. If the
+             screens are indistinguishable, we keep both edges, downgrade
+             their confidence to ``min(current, 0.5)`` and set
+             ``low_trust=True``.
+
+        Diagnostics are buffered on the builder as ``self._refinement_log``;
+        the caller copies them into ``AppFSM.evolution_log`` after the FSM is
+        assembled (this method runs before the AppFSM exists).
+        """
+        self._refinement_log = []
+
+        conflict_groups: dict[tuple[str, tuple[tuple[str, Any], ...]], list[Transition]] = (
+            defaultdict(list)
+        )
+        for t in transitions:
+            conflict_groups[(t.source, canonical_action_key(t.action))].append(t)
+
+        working = list(transitions)
+
+        for (source_id, action_key), conflicting in conflict_groups.items():
+            distinct_targets = {t.target for t in conflicting}
+            if len(distinct_targets) <= 1:
+                continue
+            source_state = states.get(source_id)
+            if source_state is None:
+                continue
+
+            target_to_screens: dict[str, set[str]] = defaultdict(set)
+            attribution_complete = True
+            for t in conflicting:
+                screens_for_t = {p.source_screen_id for p in t.provenance if p.source_screen_id}
+                if not screens_for_t:
+                    attribution_complete = False
+                    break
+                target_to_screens[t.target].update(screens_for_t)
+
+            if not attribution_complete:
+                self._downgrade_conflict(conflicting, source_id, action_key, "missing_provenance")
+                continue
+
+            sig_to_target: dict[Any, str] = {}
+            ambiguous = False
+            for tgt, screens in target_to_screens.items():
+                for sid in screens:
+                    sig = self._secondary_feature_signature(raw_screens.get(sid, {}))
+                    seen = sig_to_target.get(sig)
+                    if seen is not None and seen != tgt:
+                        ambiguous = True
+                        break
+                    sig_to_target[sig] = tgt
+                if ambiguous:
+                    break
+
+            if ambiguous:
+                self._downgrade_conflict(
+                    conflicting, source_id, action_key, "indistinguishable_secondary_features"
+                )
+                continue
+
+            working = self._split_state_for_conflict(
+                states=states,
+                sid_to_state_id=sid_to_state_id,
+                transitions=working,
+                raw_screens=raw_screens,
+                source_state=source_state,
+                conflicting=conflicting,
+                target_to_screens=target_to_screens,
+                action_key=action_key,
+            )
+
+        return working
+
+    def _downgrade_conflict(
+        self,
+        conflicting: list[Transition],
+        source_id: str,
+        action_key: tuple[tuple[str, Any], ...],
+        reason: str,
+    ) -> None:
+        """Mark all conflicting edges low-trust and cap their confidence at 0.5."""
+        for t in conflicting:
+            t.confidence = min(t.confidence, 0.5)
+            t.low_trust = True
+        self._refinement_log.append(
+            {
+                "action": "downgrade",
+                "source_state": source_id,
+                "canonical_action_key": [list(item) for item in action_key],
+                "targets": sorted({t.target for t in conflicting}),
+                "reason": reason,
+            }
+        )
+
+    def _split_state_for_conflict(
+        self,
+        *,
+        states: dict[str, AbstractState],
+        sid_to_state_id: dict[str, str],
+        transitions: list[Transition],
+        raw_screens: dict[str, Any],
+        source_state: AbstractState,
+        conflicting: list[Transition],
+        target_to_screens: dict[str, set[str]],
+        action_key: tuple[tuple[str, Any], ...],
+    ) -> list[Transition]:
+        """Split ``source_state`` so that each conflicting target gets its own
+        specialized source state. Keeps the first target on the original state
+        and creates ``s_xxx__refined_N`` siblings for the rest.
+
+        The split must keep three things in sync:
+          - ``states`` (new entries added)
+          - ``sid_to_state_id`` (raw screens re-attributed)
+          - ``transitions`` (conflicting edges re-sourced, other outgoing
+            edges replicated, incoming edges re-targeted via provenance)
+        """
+        source_id = source_state.state_id
+        target_order = sorted(target_to_screens.keys())
+        keep_target = target_order[0]
+        new_state_ids: dict[str, str] = {}
+        base_fingerprint = source_state.fingerprint
+        base_structural_fingerprint = source_state.structural_fingerprint
+        target_secondary_hashes = {
+            tgt: self._secondary_feature_group_hash(screens, raw_screens)
+            for tgt, screens in target_to_screens.items()
+        }
+
+        keep_hash = target_secondary_hashes[keep_target]
+        source_state.fingerprint = self._with_secondary_feature_hash(base_fingerprint, keep_hash)
+        source_state.structural_fingerprint = self._with_secondary_feature_hash(
+            base_structural_fingerprint, keep_hash
+        )
+
+        for idx, tgt in enumerate(target_order[1:], start=1):
+            base = f"{source_id}__refined_{idx}"
+            new_state_id = base
+            collision = 1
+            while new_state_id in states:
+                collision += 1
+                new_state_id = f"{base}_{collision}"
+            screens_for_new = target_to_screens[tgt]
+            secondary_hash = target_secondary_hashes[tgt]
+            new_state = AbstractState(
+                state_id=new_state_id,
+                name=f"{source_state.name} #refined-{idx}",
+                fingerprint=self._with_secondary_feature_hash(base_fingerprint, secondary_hash),
+                structural_fingerprint=self._with_secondary_feature_hash(
+                    base_structural_fingerprint, secondary_hash
+                ),
+                hierarchy_level=source_state.hierarchy_level,
+                parent_state=source_state.parent_state,
+                activity_name=source_state.activity_name,
+                invariants=list(source_state.invariants),
+                raw_screens=sorted(screens_for_new),
+                container_type=source_state.container_type,
+                container_resource_id=source_state.container_resource_id,
+                semantic_profile=source_state.semantic_profile,
+                state_invariants=list(source_state.state_invariants),
+                invariant_confidence=source_state.invariant_confidence,
+                sub_fsm_template_id=source_state.sub_fsm_template_id,
+            )
+            states[new_state_id] = new_state
+            new_state_ids[tgt] = new_state_id
+            for sid in screens_for_new:
+                sid_to_state_id[sid] = new_state_id
+
+        relocated_screens = {s for tgt in target_order[1:] for s in target_to_screens[tgt]}
+        source_state.raw_screens = [
+            s for s in source_state.raw_screens if s not in relocated_screens
+        ]
+
+        # 1. Update conflicting transitions: re-source the ones whose target is not the kept one.
+        for t in conflicting:
+            if t.target == keep_target:
+                continue
+            new_src = new_state_ids.get(t.target)
+            if new_src:
+                t.source = new_src
+
+        # 2. Partition other outgoing transitions by provenance source screen.
+        target_to_state_id = {keep_target: source_id, **new_state_ids}
+        state_to_raw_screens = {
+            target_to_state_id[tgt]: set(screens) for tgt, screens in target_to_screens.items()
+        }
+        other_outgoing = [t for t in transitions if t.source == source_id and t not in conflicting]
+        rebuilt_outgoing: list[Transition] = []
+        for t in other_outgoing:
+            source_screen_ids = {p.source_screen_id for p in t.provenance if p.source_screen_id}
+            matched_states = [
+                state_id
+                for state_id, screens in state_to_raw_screens.items()
+                if source_screen_ids & screens
+            ]
+            unattributed = not source_screen_ids
+            destinations = list(state_to_raw_screens) if unattributed else matched_states
+            spans_multiple_siblings = len(matched_states) > 1
+
+            for state_id in destinations:
+                if unattributed:
+                    provenance = list(t.provenance)
+                else:
+                    provenance = [
+                        p
+                        for p in t.provenance
+                        if p.source_screen_id in state_to_raw_screens[state_id]
+                    ]
+                low_trust_partition = unattributed or spans_multiple_siblings
+                # Low-trust partitions keep inferred/broad evidence usable without
+                # preserving the original high-confidence edge on every sibling.
+                rebuilt_outgoing.append(
+                    Transition(
+                        source=state_id,
+                        target=t.target,
+                        action=dict(t.action),
+                        guard=t.guard,
+                        confidence=min(t.confidence, 0.5) if low_trust_partition else t.confidence,
+                        low_trust=t.low_trust or low_trust_partition,
+                        observed_count=len(provenance) if provenance else t.observed_count,
+                        provenance=provenance,
+                    )
+                )
+
+        transitions = [t for t in transitions if t not in other_outgoing] + rebuilt_outgoing
+
+        # 3. Redirect incoming transitions based on provenance.target_screen_id.
+        for t in transitions:
+            if t.target != source_id or not t.provenance:
+                continue
+            redirects = set()
+            for entry in t.provenance:
+                if entry.target_screen_id and entry.target_screen_id in sid_to_state_id:
+                    redirects.add(sid_to_state_id[entry.target_screen_id])
+            redirects.discard(source_id)
+            if len(redirects) == 1:
+                t.target = next(iter(redirects))
+
+        self._refinement_log.append(
+            {
+                "action": "split",
+                "source_state": source_id,
+                "new_states": list(new_state_ids.values()),
+                "canonical_action_key": [list(item) for item in action_key],
+                "targets": target_order,
+            }
+        )
+        return transitions
+
+    @staticmethod
+    def _with_secondary_feature_hash(fingerprint: str | None, secondary_hash: str) -> str | None:
+        """Attach a split-specific secondary hash to a state fingerprint."""
+        if not fingerprint:
+            return fingerprint
+        base = fingerprint.split(_REFINED_SECONDARY_MARKER, 1)[0]
+        return f"{base}{_REFINED_SECONDARY_MARKER}{secondary_hash}"
+
+    @staticmethod
+    def _secondary_feature_signature_hash(signature: tuple[Any, ...]) -> str:
+        return hashlib.sha256(repr(signature).encode()).hexdigest()[:12]
+
+    @classmethod
+    def _secondary_feature_group_hash(
+        cls, screen_ids: set[str], raw_screens: dict[str, Any]
+    ) -> str:
+        signature_hashes = sorted(
+            cls._secondary_feature_signature_hash(
+                cls._secondary_feature_signature(raw_screens.get(sid, {}))
+            )
+            for sid in screen_ids
+        )
+        if len(signature_hashes) == 1:
+            return signature_hashes[0]
+        return hashlib.sha256(repr(tuple(signature_hashes)).encode()).hexdigest()[:12]
+
+    @staticmethod
+    def _secondary_feature_signature(screen: dict[str, Any]) -> tuple[Any, ...]:
+        """Stable secondary features that can distinguish raw screens with the
+        same primary fingerprint.
+
+        Combines activity, modal-flag, sorted non-editable text anchors, and
+        sorted content-description anchors. Text from editable fields is
+        excluded because user input is volatile.
+        """
+        metadata = screen.get("metadata", {}) if isinstance(screen, dict) else {}
+        elements = (
+            screen.get("interactable_elements", screen.get("elements", []))
+            if isinstance(screen, dict)
+            else []
+        )
+        text_anchors = sorted(
+            {
+                (el.get("text") or "").strip()
+                for el in elements
+                if (el.get("text") or "").strip() and not el.get("is_editable")
+            }
+        )
+        desc_anchors = sorted(
+            {
+                (el.get("content_description") or "").strip()
+                for el in elements
+                if (el.get("content_description") or "").strip()
+            }
+        )
+        return (
+            (screen.get("activity_name") or "") if isinstance(screen, dict) else "",
+            bool(metadata.get("has_modal")),
+            tuple(text_anchors),
+            tuple(desc_anchors),
+        )
+
     def _build_states(
         self,
         raw_screens: dict[str, Any],
@@ -1056,7 +1431,7 @@ class FsmBuilder:
             "input_text",
         }
 
-        for trace in raw_traces:
+        for loop_index, trace in enumerate(raw_traces):
             source_sid = trace.get("source_screen_id", "")
             target_sid = trace.get("target_screen_id", "")
 
@@ -1106,6 +1481,10 @@ class FsmBuilder:
                         fsm_action["target_content_desc"] = desc
                         break
 
+            step_index = trace.get("step_number")
+            if not isinstance(step_index, int):
+                step_index = loop_index
+
             transitions.append(
                 Transition(
                     source=source_state,
@@ -1117,6 +1496,14 @@ class FsmBuilder:
                     confidence=confidence,
                     low_trust=low_trust,
                     observed_count=1,
+                    provenance=[
+                        ProvenanceEntry(
+                            trace_step_index=step_index,
+                            source_screen_id=source_sid or None,
+                            target_screen_id=target_sid or None,
+                            confidence_source="observed",
+                        )
+                    ],
                 )
             )
 
@@ -1170,11 +1557,33 @@ class FsmBuilder:
         self,
         raw_traces: list[dict[str, Any]],
         sid_to_state_id: dict[str, str],
+        states: dict[str, AbstractState] | None = None,
+        app_prior: AppPrior | None = None,
     ) -> str | None:
-        """Detect the initial state from the first trace step."""
+        """Detect the initial state.
+
+        Preference order:
+          1. The state whose ``activity_name`` matches the launcher activity
+             declared in ``AppPrior`` (manifest ``MAIN/LAUNCHER`` intent
+             filter). Matching tolerates short-class-name equality so the
+             launcher ``.MainActivity`` notation in the manifest aligns with
+             the fully-qualified runtime ``com.example.app.MainActivity``.
+          2. Fallback: the source of the earliest-numbered trace step.
+        """
+        entry_activity = app_prior.entry_activity if app_prior else None
+        if entry_activity and states:
+            entry_short = entry_activity.rsplit(".", 1)[-1]
+            for state in states.values():
+                activity_name = state.activity_name
+                if not activity_name:
+                    continue
+                if activity_name == entry_activity:
+                    return state.state_id
+                if activity_name.rsplit(".", 1)[-1] == entry_short:
+                    return state.state_id
+
         if not raw_traces:
             return None
-        # Sort by step_number and take the source of the first step
         sorted_traces = sorted(raw_traces, key=lambda t: t.get("step_number", 0))
         first_source = sorted_traces[0].get("source_screen_id", "")
         return sid_to_state_id.get(first_source)

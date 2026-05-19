@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,7 +16,10 @@ from vigil.models.fsm import (
     SubFsmTemplate,
     Transition,
 )
+from vigil.models.state import RawScreen, UIElement
 from vigil.neuro.fsm_builder import FsmBuilder
+from vigil.symbolic.fsm_checker import FsmChecker, VerifyResult
+from vigil.symbolic.state_locator import LocateResult, StateLocator
 
 TRACE_PATH = (
     Path(__file__).parent.parent
@@ -1359,3 +1363,534 @@ class TestCanonicalActionIdentity:
         assert fsm.get_transition_target("s1", {"type": "set_text", "value": "alice"}) == "s2"
         assert fsm.get_transition_target("s1", {"type": "set_text", "value": "bob"}) == "s3"
         assert fsm.get_transition_target("s1", {"type": "set_text", "value": "charlie"}) is None
+
+
+# ── Alignment patches: AppPrior s0, action discrimination, APE refinement, provenance ──
+
+from vigil.neuro.app_prior import ActivityInfo, AppPrior  # noqa: E402
+
+
+def _write_trace(tmp_path: Path, screens: dict, traces: list) -> Path:
+    path = tmp_path / "trace.json"
+    path.write_text(
+        json.dumps(
+            {
+                "app_package": "com.test.app",
+                "screens": screens,
+                "traces": traces,
+            }
+        )
+    )
+    return path
+
+
+def _screen(sid: str, activity: str, title: str, *, extra=None, has_modal=False):
+    elems = [
+        {
+            "element_id": "e_title",
+            "class_name": "android.widget.TextView",
+            "resource_id": "com.test:id/title",
+            "text": title,
+            "depth": 1,
+            "is_clickable": False,
+        }
+    ]
+    if extra:
+        elems.extend(extra)
+    return {
+        "screen_id": sid,
+        "activity_name": activity,
+        "metadata": {"has_modal": has_modal, "page_title": title},
+        "interactable_elements": elems,
+    }
+
+
+def _raw_screen_from_dict(screen: dict[str, Any]) -> RawScreen:
+    return RawScreen(
+        screen_id=screen["screen_id"],
+        activity_name=screen.get("activity_name"),
+        metadata=screen.get("metadata", {}),
+        elements=[
+            UIElement(
+                element_id=el.get("element_id", f"el_{idx}"),
+                class_name=el.get("class_name", "android.view.View"),
+                resource_id=el.get("resource_id"),
+                text=el.get("text"),
+                content_description=el.get("content_description"),
+                is_clickable=el.get("is_clickable", False),
+                is_long_clickable=el.get("is_long_clickable", False),
+                is_scrollable=el.get("is_scrollable", False),
+                is_editable=el.get("is_editable", False),
+                is_checkable=el.get("is_checkable", False),
+                depth=el.get("depth", 0),
+            )
+            for idx, el in enumerate(
+                screen.get("interactable_elements", screen.get("elements", []))
+            )
+        ],
+    )
+
+
+class TestAppPriorInitialState:
+    """AppPrior's launcher activity should pick s0 even when it's not first in the trace."""
+
+    def test_launcher_activity_chooses_s0(self, tmp_path: Path) -> None:
+        screens = {
+            "scr_home": _screen("scr_home", "com.test.app.HomeActivity", "Home"),
+            "scr_main": _screen(
+                "scr_main",
+                "com.test.app.MainActivity",
+                "Main",
+                extra=[
+                    {
+                        "element_id": "e_go",
+                        "class_name": "android.widget.Button",
+                        "resource_id": "com.test:id/go",
+                        "text": "Go",
+                        "depth": 2,
+                        "is_clickable": True,
+                    }
+                ],
+            ),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_home",
+                "target_screen_id": "scr_main",
+                "action": {"action_type": "navigate_back"},
+            }
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+        prior = AppPrior(
+            package_name="com.test.app",
+            entry_activity="com.test.app.MainActivity",
+            activities=[
+                ActivityInfo(name="com.test.app.MainActivity", is_launcher=True),
+            ],
+        )
+        builder = FsmBuilder("com.test.app")
+        fsm = builder.build_from_trace(trace, app_prior=prior)
+        initial = fsm.states[fsm.initial_state]
+        assert initial.activity_name == "com.test.app.MainActivity"
+
+
+class TestApePriorOnlyProducesNoEdges:
+    """AppPrior on its own (no real trace edges) must produce zero transitions."""
+
+    def test_static_only_zero_edges(self, tmp_path: Path) -> None:
+        screens = {
+            "scr_only": _screen("scr_only", "com.test.app.MainActivity", "Main"),
+        }
+        trace = _write_trace(tmp_path, screens, [])
+        prior = AppPrior(
+            package_name="com.test.app",
+            entry_activity="com.test.app.MainActivity",
+            activities=[ActivityInfo(name="com.test.app.MainActivity", is_launcher=True)],
+        )
+        builder = FsmBuilder("com.test.app")
+        fsm = builder.build_from_trace(trace, app_prior=prior)
+        assert fsm.transitions == []
+
+
+class TestActionSignatureDiscrimination:
+    """Same action type on different widgets must yield two distinct transitions."""
+
+    def test_two_buttons_keep_two_edges(self, tmp_path: Path) -> None:
+        screens = {
+            "scr_home": _screen(
+                "scr_home",
+                ".MainActivity",
+                "Home",
+                extra=[
+                    {
+                        "element_id": "e_a",
+                        "class_name": "android.widget.Button",
+                        "resource_id": "com.test:id/btn_a",
+                        "text": "A",
+                        "depth": 2,
+                        "is_clickable": True,
+                    },
+                    {
+                        "element_id": "e_b",
+                        "class_name": "android.widget.Button",
+                        "resource_id": "com.test:id/btn_b",
+                        "text": "B",
+                        "depth": 2,
+                        "is_clickable": True,
+                    },
+                ],
+            ),
+            "scr_a": _screen("scr_a", ".PageA", "PageA"),
+            "scr_b": _screen("scr_b", ".PageB", "PageB"),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_home",
+                "target_screen_id": "scr_a",
+                "action": {"action_type": "click", "target_element_id": "e_a"},
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_home",
+                "target_screen_id": "scr_b",
+                "action": {"action_type": "click", "target_element_id": "e_b"},
+            },
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+        outgoing_from_home = [t for t in fsm.transitions if t.source == "s_001"]
+        # Two distinct click edges, not one ambiguous merge.
+        click_targets = {t.target for t in outgoing_from_home if t.action.get("type") == "click"}
+        assert len(click_targets) == 2
+
+
+class TestApeRefinementSplit:
+    """When raw screens differ by secondary features, refinement should split."""
+
+    def test_split_distinguishable_secondary_features(self, tmp_path: Path) -> None:
+        # Two raw screens with the same page_title 'Home' (so same primary
+        # fingerprint), but distinguishable secondary features: one has a
+        # modal flag set, the other doesn't. Both click the same button but
+        # go to different targets — APE refinement should split the source.
+        click_elem = {
+            "element_id": "e_go",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/btn_go",
+            "text": "Go",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        anchor_alpha = {
+            "element_id": "e_x",
+            "class_name": "T",
+            "resource_id": "",
+            "text": "AnchorAlpha",
+            "depth": 1,
+            "is_clickable": False,
+        }
+        anchor_beta = {
+            "element_id": "e_y",
+            "class_name": "T",
+            "resource_id": "",
+            "text": "AnchorBeta",
+            "depth": 1,
+            "is_clickable": False,
+        }
+        screens = {
+            "scr_h1": _screen(
+                "scr_h1",
+                ".MainActivity",
+                "Home",
+                extra=[click_elem, anchor_alpha],
+            ),
+            "scr_h2": _screen(
+                "scr_h2",
+                ".MainActivity",
+                "Home",
+                extra=[click_elem, anchor_beta],
+            ),
+            "scr_a": _screen("scr_a", ".PageA", "PageA"),
+            "scr_b": _screen("scr_b", ".PageB", "PageB"),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_h1",
+                "target_screen_id": "scr_a",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_h2",
+                "target_screen_id": "scr_b",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+        # Refinement must have produced a split (recorded in evolution_log).
+        actions = [e.get("action") for e in fsm.evolution_log]
+        assert "split" in actions, f"evolution_log={fsm.evolution_log}"
+
+    def test_split_fingerprints_disambiguate_state_locator_and_checker(
+        self, tmp_path: Path
+    ) -> None:
+        click_elem = {
+            "element_id": "e_go",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/btn_go",
+            "text": "Go",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        anchor_alpha = {
+            "element_id": "e_alpha",
+            "class_name": "android.widget.TextView",
+            "resource_id": "",
+            "text": "AnchorAlpha",
+            "depth": 1,
+            "is_clickable": False,
+        }
+        anchor_beta = {
+            "element_id": "e_beta",
+            "class_name": "android.widget.TextView",
+            "resource_id": "",
+            "text": "AnchorBeta",
+            "depth": 1,
+            "is_clickable": False,
+        }
+        screens = {
+            "scr_h1": _screen(
+                "scr_h1",
+                ".MainActivity",
+                "Home",
+                extra=[click_elem, anchor_alpha],
+            ),
+            "scr_h2": _screen(
+                "scr_h2",
+                ".MainActivity",
+                "Home",
+                extra=[click_elem, anchor_beta],
+            ),
+            "scr_a": _screen("scr_a", ".PageA", "PageA"),
+            "scr_b": _screen("scr_b", ".PageB", "PageB"),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_h1",
+                "target_screen_id": "scr_a",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_h2",
+                "target_screen_id": "scr_b",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+        h1_state = next(s for s in fsm.states.values() if "scr_h1" in s.raw_screens)
+        h2_state = next(s for s in fsm.states.values() if "scr_h2" in s.raw_screens)
+        base_fp = FsmBuilder._compute_functional_fingerprint(screens["scr_h1"])
+
+        assert h1_state.fingerprint != h2_state.fingerprint
+        assert h1_state.structural_fingerprint != h2_state.structural_fingerprint
+        assert h1_state.fingerprint != base_fp
+        assert h2_state.fingerprint != base_fp
+
+        locator = StateLocator(fsm)
+        h1_loc = locator.locate(_raw_screen_from_dict(screens["scr_h1"]))
+        h2_loc = locator.locate(_raw_screen_from_dict(screens["scr_h2"]))
+        assert h1_loc.result is LocateResult.EXACT
+        assert h1_loc.state_id == h1_state.state_id
+        assert h2_loc.result is LocateResult.EXACT
+        assert h2_loc.state_id == h2_state.state_id
+
+        action = {
+            "type": "click",
+            "target": "e_go",
+            "target_resource_id": "com.test:id/btn_go",
+            "target_text": "Go",
+            "target_class": "android.widget.Button",
+        }
+        checker = FsmChecker(fsm)
+        h1_out = checker.verify(_raw_screen_from_dict(screens["scr_h1"]), action)
+        h2_out = checker.verify(_raw_screen_from_dict(screens["scr_h2"]), action)
+        assert h1_out.result is VerifyResult.ALLOW
+        assert h1_out.current_state_id == h1_state.state_id
+        assert h1_out.target_state_id == next(
+            s.state_id for s in fsm.states.values() if "scr_a" in s.raw_screens
+        )
+        assert h2_out.result is VerifyResult.ALLOW
+        assert h2_out.current_state_id == h2_state.state_id
+        assert h2_out.target_state_id == next(
+            s.state_id for s in fsm.states.values() if "scr_b" in s.raw_screens
+        )
+
+    def test_non_conflicting_outgoing_edges_are_partitioned_by_source_screen(
+        self, tmp_path: Path
+    ) -> None:
+        go_elem = {
+            "element_id": "e_go",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/btn_go",
+            "text": "Go",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        help_elem = {
+            "element_id": "e_help",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/btn_help",
+            "text": "Help",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        anchor_alpha = {
+            "element_id": "e_alpha",
+            "class_name": "android.widget.TextView",
+            "resource_id": "",
+            "text": "AnchorAlpha",
+            "depth": 1,
+            "is_clickable": False,
+        }
+        anchor_beta = {
+            "element_id": "e_beta",
+            "class_name": "android.widget.TextView",
+            "resource_id": "",
+            "text": "AnchorBeta",
+            "depth": 1,
+            "is_clickable": False,
+        }
+        screens = {
+            "scr_h1": _screen(
+                "scr_h1",
+                ".MainActivity",
+                "Home",
+                extra=[go_elem, help_elem, anchor_alpha],
+            ),
+            "scr_h2": _screen(
+                "scr_h2",
+                ".MainActivity",
+                "Home",
+                extra=[go_elem, help_elem, anchor_beta],
+            ),
+            "scr_a": _screen("scr_a", ".PageA", "PageA"),
+            "scr_b": _screen("scr_b", ".PageB", "PageB"),
+            "scr_help": _screen("scr_help", ".Help", "Help"),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_h1",
+                "target_screen_id": "scr_a",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_h2",
+                "target_screen_id": "scr_b",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+            {
+                "step_number": 3,
+                "source_screen_id": "scr_h1",
+                "target_screen_id": "scr_help",
+                "action": {"action_type": "click", "target_element_id": "e_help"},
+            },
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+        h1_state = next(s for s in fsm.states.values() if "scr_h1" in s.raw_screens)
+        h2_state = next(s for s in fsm.states.values() if "scr_h2" in s.raw_screens)
+        help_edges_h1 = [
+            t
+            for t in fsm.transitions
+            if t.source == h1_state.state_id
+            and t.action.get("target_resource_id") == "com.test:id/btn_help"
+        ]
+        help_edges_h2 = [
+            t
+            for t in fsm.transitions
+            if t.source == h2_state.state_id
+            and t.action.get("target_resource_id") == "com.test:id/btn_help"
+        ]
+
+        assert len(help_edges_h1) == 1
+        assert help_edges_h1[0].confidence == 1.0
+        assert help_edges_h1[0].low_trust is False
+        assert not [t for t in help_edges_h2 if t.confidence > 0.5 and not t.low_trust]
+
+
+class TestApeRefinementDowngrade:
+    """Fully indistinguishable screens must keep both edges but lose trust."""
+
+    def test_indistinguishable_screens_downgrade(self, tmp_path: Path) -> None:
+        click_elem = {
+            "element_id": "e_go",
+            "class_name": "android.widget.Button",
+            "resource_id": "com.test:id/btn_go",
+            "text": "Go",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        # Both source screens have IDENTICAL secondary features.
+        screens = {
+            "scr_h1": _screen("scr_h1", ".MainActivity", "Home", extra=[click_elem]),
+            "scr_h2": _screen("scr_h2", ".MainActivity", "Home", extra=[click_elem]),
+            "scr_a": _screen("scr_a", ".PageA", "PageA"),
+            "scr_b": _screen("scr_b", ".PageB", "PageB"),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_h1",
+                "target_screen_id": "scr_a",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_h2",
+                "target_screen_id": "scr_b",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            },
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+
+        actions = [e.get("action") for e in fsm.evolution_log]
+        assert "downgrade" in actions, f"evolution_log={fsm.evolution_log}"
+        # Both edges remain; their confidence is capped at 0.5 and low_trust=True.
+        outgoing = [t for t in fsm.transitions if t.source == "s_001"]
+        # If they were merged into one ambiguous edge that would also be wrong.
+        # Two distinct targets must still be reachable.
+        targets = {t.target for t in outgoing}
+        assert len(targets) >= 2
+        for t in outgoing:
+            assert t.low_trust is True
+            assert t.confidence <= 0.5
+
+
+class TestProvenanceNonEmpty:
+    """Every transition (observed or inferred) must carry at least one provenance entry."""
+
+    def test_every_transition_has_provenance(self, tmp_path: Path) -> None:
+        screens = {
+            "scr_001": _screen(
+                "scr_001",
+                ".MainActivity",
+                "Home",
+                extra=[
+                    {
+                        "element_id": "e_go",
+                        "class_name": "android.widget.Button",
+                        "resource_id": "com.test:id/btn_go",
+                        "text": "Go",
+                        "depth": 2,
+                        "is_clickable": True,
+                    }
+                ],
+            ),
+            "scr_002": _screen("scr_002", ".PageA", "PageA"),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_001",
+                "target_screen_id": "scr_002",
+                "action": {"action_type": "click", "target_element_id": "e_go"},
+            }
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+        assert fsm.transitions
+        for t in fsm.transitions:
+            assert t.provenance, f"transition {t.source}→{t.target} missing provenance"
+            entry = t.provenance[0]
+            assert entry.confidence_source in {"observed", "inferred_dialog", "inferred_tab"}

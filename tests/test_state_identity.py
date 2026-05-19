@@ -365,3 +365,37 @@ def test_scroll_aware_fingerprint_excludes_scrollable_descendants() -> None:
     assert make(3).get_structural_fingerprint(scroll_aware=True) == make(
         10
     ).get_structural_fingerprint(scroll_aware=True)
+
+
+# ── Sanity guard: ui_compressor output is non-deterministic and must NEVER
+# enter the fingerprint pipeline. This is a structural check rather than a
+# semantic one — we assert (a) the compressor's docstring still flags the
+# rule, and (b) FsmBuilder's fingerprint helpers do not import or call any
+# compressor symbol.
+
+from vigil.core import ui_compressor  # noqa: E402
+from vigil.neuro import fsm_builder  # noqa: E402
+
+
+def test_compressor_flags_itself_as_non_deterministic() -> None:
+    assert ui_compressor.__doc__ is not None
+    doc_lower = ui_compressor.__doc__.lower()
+    assert any(
+        marker in doc_lower
+        for marker in (
+            "never be used for fingerprint",
+            "must never be used",
+            "lossy",
+        )
+    ), "ui_compressor module docstring must warn against fingerprint use"
+
+
+def test_fsm_builder_does_not_import_compressor() -> None:
+    builder_src = fsm_builder.__file__
+    assert builder_src is not None
+    text = Path(builder_src).read_text(encoding="utf-8")
+    assert "ui_compressor" not in text, (
+        "FsmBuilder must not import ui_compressor — compressed XML is LLM-only "
+        "and must not feed deterministic fingerprints."
+    )
+    assert "compact_ui_tree_text" not in text
