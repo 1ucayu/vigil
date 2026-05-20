@@ -1181,10 +1181,9 @@ class TestTemplateBasedValidation:
             entry_fingerprint="fp_detail",
             states={"s_detail": fsm.states["s_detail"]},
         )
-        # Bare click — no identity field — must NOT bind to the template.
-        assert fsm.is_valid_transition("s_list", {"type": "click"}) is None
-
-        # Click with identity that matches a concrete template edge resolves.
+        # A real template-entry edge must exist before bare-click is
+        # classified as a template-binding gap. Without it, the click is
+        # treated as chrome (toolbar / switch) and falls through to NO_MATCH.
         fsm.add_transition(
             Transition(
                 source="s_list",
@@ -1193,6 +1192,10 @@ class TestTemplateBasedValidation:
                 confidence=0.9,
             )
         )
+        # Bare click — no identity field — must NOT bind to the template.
+        assert fsm.is_valid_transition("s_list", {"type": "click"}) is None
+
+        # Click with identity that matches a concrete template edge resolves.
         assert fsm.is_valid_transition("s_list", {"type": "click", "target_text": "Item A"}) is True
 
         # Click with identity that does NOT match any concrete edge returns
@@ -2160,34 +2163,87 @@ class TestLosslessTemplateCollapse:
         assert rep.state_id in live_state_ids
 
     def test_post_collapse_conflicting_outgoing_edges_are_downgraded(self, tmp_path: Path) -> None:
+        """If collapsing siblings would introduce nondeterministic transitions
+        (two structurally-similar detail pages whose own outgoing click goes
+        to different targets), the collapse is rejected upfront. No template
+        is created; both detail states remain as distinct nodes; no high-trust
+        (source, canonical_action_key) maps to more than one target.
+        """
         trace = self._build_post_collapse_conflict_trace(tmp_path)
         fsm = FsmBuilder("com.test.app").build_from_trace(trace)
-        downgrade_entries = [
-            entry
-            for entry in fsm.evolution_log
-            if entry.get("action") == "downgrade"
-            and entry.get("reason") == "post_collapse_conflict"
-        ]
-        assert downgrade_entries, f"evolution_log={fsm.evolution_log}"
 
-        source_id = downgrade_entries[0]["source_state"]
-        conflict_groups: dict[tuple[tuple[str, object], ...], list[Transition]] = {}
+        # No template should have been created for the conflicting container.
+        assert not fsm.sub_fsm_templates, (
+            f"expected no templates after dry-run rejection, got "
+            f"{list(fsm.sub_fsm_templates.keys())}"
+        )
+
+        # The two semantically-different detail states must both still exist.
+        live_screens: set[str] = set()
+        for state in fsm.states.values():
+            live_screens.update(state.raw_screens)
+        assert "scr_a" in live_screens
+        assert "scr_b" in live_screens
+
+        # No state retains a stale sub_fsm_template_id.
+        for state in fsm.states.values():
+            assert state.sub_fsm_template_id is None
+
+        # Structural invariant: no (source, canonical_action_key) maps to
+        # more than one distinct target among high-trust transitions.
+        groups: dict[tuple[str, tuple[tuple[str, object], ...]], set[str]] = {}
         for t in fsm.transitions:
-            if t.source != source_id:
+            if t.low_trust:
                 continue
-            conflict_groups.setdefault(canonical_action_key(t.action), []).append(t)
-        post_collapse_conflicts = [
-            group for group in conflict_groups.values() if len({t.target for t in group}) > 1
-        ]
-        assert post_collapse_conflicts
-        for group in post_collapse_conflicts:
-            for transition in group:
-                assert transition.low_trust is True
-                assert transition.confidence <= 0.5
+            groups.setdefault((t.source, canonical_action_key(t.action)), set()).add(t.target)
+        for (src, key), targets in groups.items():
+            assert len(targets) <= 1, (
+                f"determinism invariant broken: source={src} key={key} "
+                f"targets={sorted(targets)}"
+            )
 
 
 class TestResolveTemplateBindingMissing:
     """resolve_transition must never return MATCH with no transition."""
+
+    def test_bare_click_on_non_template_state_with_multiple_clicks_is_uncertain(self) -> None:
+        fsm = AppFSM(app_package="com.test.app")
+        for state_id, name in (
+            ("s_source", "Source"),
+            ("s_bare", "Bare Target"),
+            ("s_keyed", "Keyed Target"),
+        ):
+            fsm.add_state(
+                AbstractState(
+                    state_id=state_id,
+                    name=name,
+                    fingerprint=f"fp_{state_id}",
+                    hierarchy_level=HierarchyLevel.ACTIVITY,
+                )
+            )
+        fsm.add_transition(
+            Transition(
+                source="s_source",
+                target="s_bare",
+                action={"type": "click"},
+                confidence=0.9,
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="s_source",
+                target="s_keyed",
+                action={"type": "click", "target_resource_id": "com.test:id/keyed"},
+                confidence=0.9,
+            )
+        )
+
+        lookup = fsm.resolve_transition("s_source", {"type": "click"})
+
+        assert lookup.status is TransitionLookupStatus.UNCERTAIN
+        assert lookup.transition is None
+        assert lookup.target_state_id is None
+        assert "lacks target identity" in lookup.details
 
     @staticmethod
     def _make_template_binding_fsm() -> AppFSM:
@@ -2266,6 +2322,16 @@ class TestResolveTemplateBindingMissing:
             source_state_id="s_list",
             entry_fingerprint="fp_detail",
             states={"s_detail": fsm.states["s_detail"]},
+        )
+        # A real template-entry edge is required before the bare-click gate
+        # treats the click as a template-binding attempt.
+        fsm.add_transition(
+            Transition(
+                source="s_list",
+                target="s_detail",
+                action={"type": "click", "target_text": "Item A"},
+                confidence=0.9,
+            )
         )
 
         # Bare click → UNCERTAIN, never MATCH-with-None.
@@ -2669,3 +2735,187 @@ class TestObservedTargetTextPreserved:
         assert (
             observed[0].action.get("target_text") == "Network & internet"
         ), f"target_text was wiped: {observed[0].action!r}"
+
+
+class TestConservativeTemplateCollapse:
+    """Regression: aggressive template collapse must not introduce
+    nondeterministic transitions. When two structurally-similar detail pages
+    have different Navigate-up targets, the collapse is rejected upfront.
+    """
+
+    def test_collapse_rejected_on_nondeterministic_navigate_up(self, tmp_path: Path) -> None:
+        navigate_up = {
+            "element_id": "e_nav_up",
+            "class_name": "android.widget.ImageButton",
+            "resource_id": "com.test:id/nav_up",
+            "content_description": "Navigate up",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        item_click_a = {
+            "element_id": "e_item_a",
+            "class_name": "android.widget.LinearLayout",
+            "resource_id": "com.test:id/row",
+            "text": "Item A",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        item_click_b = {
+            "element_id": "e_item_b",
+            "class_name": "android.widget.LinearLayout",
+            "resource_id": "com.test:id/row",
+            "text": "Item B",
+            "depth": 2,
+            "is_clickable": True,
+        }
+        screens = {
+            "scr_home": _screen(
+                "scr_home",
+                "com.test.app.HomeActivity",
+                "Home",
+                extra=[item_click_a, item_click_b],
+            ),
+            "scr_det_a": _screen(
+                "scr_det_a",
+                "com.test.app.SubActivity",
+                "Sub",
+                extra=[navigate_up],
+            ),
+            "scr_det_b": _screen(
+                "scr_det_b",
+                "com.test.app.SubActivity",
+                "Sub",
+                extra=[navigate_up],
+            ),
+            "scr_parent_a": _screen("scr_parent_a", "com.test.app.ParentAActivity", "Parent A"),
+            "scr_parent_b": _screen("scr_parent_b", "com.test.app.ParentBActivity", "Parent B"),
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_parent_a",
+                "target_screen_id": "scr_det_a",
+                "action": {"action_type": "click", "target_element_id": "e_item_a"},
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_det_a",
+                "target_screen_id": "scr_parent_a",
+                "action": {"action_type": "click", "target_element_id": "e_nav_up"},
+            },
+            {
+                "step_number": 3,
+                "source_screen_id": "scr_parent_b",
+                "target_screen_id": "scr_det_b",
+                "action": {"action_type": "click", "target_element_id": "e_item_b"},
+            },
+            {
+                "step_number": 4,
+                "source_screen_id": "scr_det_b",
+                "target_screen_id": "scr_parent_b",
+                "action": {"action_type": "click", "target_element_id": "e_nav_up"},
+            },
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+
+        # Collapsing det_a and det_b would create two outgoing Navigate-up
+        # edges from one collapsed source with different targets. The dry-run
+        # must reject any such template.
+        for tmpl in fsm.sub_fsm_templates.values():
+            # If any template was created, it must not include det_a and det_b
+            # in a way that introduces nondeterminism.
+            groups: dict[tuple[str, tuple[tuple[str, object], ...]], set[str]] = {}
+            for t in fsm.transitions:
+                if t.low_trust:
+                    continue
+                groups.setdefault((t.source, canonical_action_key(t.action)), set()).add(t.target)
+            for (src, key), targets in groups.items():
+                assert len(targets) <= 1, (
+                    f"template {tmpl.template_id} introduced nondeterminism: "
+                    f"source={src} key={key} targets={sorted(targets)}"
+                )
+
+        # The two semantically-different detail screens must each survive in
+        # some state's raw_screens (validator inverts raw_screens).
+        live_screens: set[str] = set()
+        for state in fsm.states.values():
+            live_screens.update(state.raw_screens)
+        assert "scr_det_a" in live_screens
+        assert "scr_det_b" in live_screens
+
+        # No state should retain a sub_fsm_template_id while not DYNAMIC.
+        for state in fsm.states.values():
+            if state.sub_fsm_template_id is not None:
+                assert state.container_type == ContainerType.DYNAMIC, (
+                    f"stale template id on state {state.state_id}: "
+                    f"container_type={state.container_type!r}"
+                )
+
+    def test_navigate_up_on_dynamic_state_resolves_normally(self) -> None:
+        """A DYNAMIC state with a real template-entry edge AND a toolbar
+        Navigate-up edge: the Navigate-up click must resolve normally to a
+        MATCH on the toolbar edge, NOT return template_binding_missing.
+        """
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_list",
+                name="List",
+                fingerprint="fp_list",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+                sub_fsm_template_id="tmpl_1",
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="s_detail",
+                name="Detail",
+                fingerprint="fp_detail",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="s_parent",
+                name="Parent",
+                fingerprint="fp_parent",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.sub_fsm_templates["tmpl_1"] = SubFsmTemplate(
+            template_id="tmpl_1",
+            source_state_id="s_list",
+            entry_fingerprint="fp_detail",
+            states={"s_detail": fsm.states["s_detail"]},
+        )
+        # Item click into template.
+        fsm.add_transition(
+            Transition(
+                source="s_list",
+                target="s_detail",
+                action={"type": "click", "target_text": "Item A"},
+                confidence=0.9,
+            )
+        )
+        # Toolbar Navigate-up click — same source, target OUTSIDE template.
+        navigate_up_action = {
+            "type": "click",
+            "target_content_desc": "Navigate up",
+            "target_class": "android.widget.ImageButton",
+        }
+        fsm.add_transition(
+            Transition(
+                source="s_list",
+                target="s_parent",
+                action=navigate_up_action,
+                confidence=0.9,
+            )
+        )
+
+        lookup = fsm.resolve_transition("s_list", navigate_up_action)
+        assert (
+            lookup.status is TransitionLookupStatus.MATCH
+        ), f"expected MATCH, got {lookup.status!r} details={lookup.details!r}"
+        assert lookup.target_state_id == "s_parent"

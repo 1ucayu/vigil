@@ -142,7 +142,13 @@ def _classify_deny(fsm: AppFSM, source_state_id: str, action: dict[str, Any]) ->
 def _template_binding_missing(fsm: AppFSM, source_state_id: str, action: dict[str, Any]) -> bool:
     """A dynamic container with a SubFsmTemplate needs at least one identity
     field on the click action (target_text / target_resource_id / target_selector)
-    to bind a specific item. Bare ``{'type': 'click'}`` is a template-binding gap."""
+    to bind a specific item. Bare ``{'type': 'click'}`` is a template-binding gap.
+
+    Additionally requires that the source has at least one outgoing click edge
+    whose target lies inside the template subgraph. Otherwise the click is
+    not a template-binding attempt (it is chrome — e.g. a toolbar Navigate up
+    or a switch) and must not be classified as ``template_binding_missing``.
+    """
     state = fsm.states.get(source_state_id)
     if (
         state is None
@@ -151,6 +157,18 @@ def _template_binding_missing(fsm: AppFSM, source_state_id: str, action: dict[st
     ):
         return False
     if (action.get("type") or action.get("action_type")) != "click":
+        return False
+    template = fsm.sub_fsm_templates.get(state.sub_fsm_template_id)
+    if template is None:
+        return False
+    template_state_ids = set(template.states)
+    has_template_entry_edge = any(
+        t.source == source_state_id
+        and t.target in template_state_ids
+        and (t.action.get("type") or t.action.get("action_type")) == "click"
+        for t in fsm.transitions
+    )
+    if not has_template_entry_edge:
         return False
     identity_fields = (
         "target",

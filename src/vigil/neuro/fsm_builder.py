@@ -699,6 +699,50 @@ class FsmBuilder:
                 # Defensive: never collapse the entry state away.
                 continue
 
+            # Conservative dry-run: simulate the redirect (every id in
+            # ``collapsed_others`` -> ``representative_target_id``) across the
+            # *entire* transition set and reject the collapse if it would
+            # introduce nondeterminism — i.e. any (source, canonical_action_key)
+            # mapping to more than one distinct target among high-trust
+            # transitions. Low-trust transitions are an intentional APE
+            # refinement marker; they are excluded from the check so the dry
+            # run does not flag pre-existing ambiguity as a collapse failure.
+            # Self-loops are not special-cased: a "self vs other-target"
+            # conflict still has two distinct targets and is correctly
+            # rejected. Only an actual single-target outcome (including a
+            # genuine self-loop alone) is accepted.
+            collapsed_others_preview = {tid for tid, _ in click_targets[1:]}
+
+            def _rewrite_id(
+                _x: str,
+                _others: set[str] = collapsed_others_preview,
+                _rep: str = representative_target_id,
+            ) -> str:
+                return _rep if _x in _others else _x
+
+            hypothetical: dict[tuple[str, tuple[tuple[str, Any], ...]], set[str]] = defaultdict(set)
+            for t in fsm.transitions:
+                if t.low_trust:
+                    continue
+                src_p = _rewrite_id(t.source)
+                tgt_p = _rewrite_id(t.target)
+                hypothetical[(src_p, canonical_action_key(t.action))].add(tgt_p)
+
+            conflicts = [
+                (src, key, sorted(tgts))
+                for (src, key), tgts in hypothetical.items()
+                if len(tgts) > 1
+            ]
+            if conflicts:
+                src, key, tgts = conflicts[0]
+                logger.info(
+                    "Rejecting Sub-FSM template collapse for container "
+                    f"{state_id}: nondeterministic post-collapse transitions "
+                    f"({len(conflicts)} conflict(s)). First: source={src} "
+                    f"action_key={key} targets={tgts}"
+                )
+                continue
+
             template_id = f"tmpl_{state_id}"
             rep_state = fsm.states.get(representative_target_id)
 
@@ -886,6 +930,37 @@ class FsmBuilder:
                     confidence=t.confidence,
                     low_trust=t.low_trust,
                     observed_count=t.observed_count,
+                )
+
+        # Stale template-id sweep: any state whose container_type is not
+        # DYNAMIC (perhaps because the state was absorbed/redirected, or
+        # the classifier downgraded it) must not retain a sub_fsm_template_id.
+        # Without this, ``resolve_transition`` would treat clicks on a
+        # non-dynamic state as template-binding attempts.
+        for state in fsm.states.values():
+            if (
+                state.sub_fsm_template_id is not None
+                and state.container_type != ContainerType.DYNAMIC
+            ):
+                state.sub_fsm_template_id = None
+
+        # Global determinism invariant: after all collapses, no
+        # (source, canonical_action_key) may map to more than one target
+        # *among high-trust transitions*. Low-trust transitions are an
+        # intentional APE-refinement marker for ambiguous evidence and may
+        # legitimately retain a (source, action_key) -> {target_a, target_b}
+        # pair. The dry-run guard above should prevent any high-trust
+        # violation; an assertion here surfaces builder bugs early.
+        det_groups: dict[tuple[str, tuple[tuple[str, Any], ...]], set[str]] = defaultdict(set)
+        for t in fsm.transitions:
+            if t.low_trust:
+                continue
+            det_groups[(t.source, canonical_action_key(t.action))].add(t.target)
+        for (src, key), tgts in det_groups.items():
+            if len(tgts) > 1:
+                raise RuntimeError(
+                    "Post-collapse determinism invariant violated: "
+                    f"source={src} action_key={key} targets={sorted(tgts)}"
                 )
 
         return templates_created

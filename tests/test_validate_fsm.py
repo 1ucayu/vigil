@@ -419,3 +419,75 @@ class TestTemplateBindingMissingPath:
         reasons = [s.reason for s in report.steps]
         assert ValidationReason.OK not in reasons
         assert ValidationReason.TEMPLATE_BINDING_MISSING in reasons
+
+
+_SETTINGS_TRACE = (
+    Path(__file__).parent.parent
+    / "data/apps/com_android_settings/traces/exploration_20260420_164556.json"
+)
+
+
+class TestSettingsTraceRegression:
+    """Hard-assert deterministic-topology invariants on the real Settings
+    trace; report OK count and reason counts as diagnostic output.
+    """
+
+    @pytest.mark.skipif(
+        not _SETTINGS_TRACE.exists(),
+        reason=f"Settings trace not present at {_SETTINGS_TRACE}",
+    )
+    def test_settings_trace_topology_invariants(self, capsys: pytest.CaptureFixture) -> None:
+        from collections import Counter
+
+        from vigil.models.fsm import ContainerType, canonical_action_key
+
+        fsm = FsmBuilder("com.android.settings").build_from_trace(_SETTINGS_TRACE)
+
+        # 1. Zero dangling state/template references.
+        live_state_ids = set(fsm.states.keys())
+        dangling = [
+            t
+            for t in fsm.transitions
+            if t.source not in live_state_ids or t.target not in live_state_ids
+        ]
+        assert not dangling, f"dangling transitions: {dangling[:3]}"
+        for tmpl in fsm.sub_fsm_templates.values():
+            assert (
+                tmpl.source_state_id in live_state_ids
+            ), f"template {tmpl.template_id} sources missing state"
+            for sid in tmpl.states:
+                assert (
+                    sid in live_state_ids
+                ), f"template {tmpl.template_id} references missing state {sid}"
+
+        # 2. No state has sub_fsm_template_id while container_type != DYNAMIC.
+        for state in fsm.states.values():
+            if state.sub_fsm_template_id is not None:
+                assert state.container_type == ContainerType.DYNAMIC, (
+                    f"stale template id on non-DYNAMIC state {state.state_id}: "
+                    f"container_type={state.container_type!r}, "
+                    f"sub_fsm_template_id={state.sub_fsm_template_id!r}"
+                )
+
+        # 3. Structural determinism: for every (source, canonical_action_key)
+        #    in high-trust transitions, at most one distinct target.
+        groups: dict[tuple[str, tuple[tuple[str, object], ...]], set[str]] = {}
+        for t in fsm.transitions:
+            if t.low_trust:
+                continue
+            groups.setdefault((t.source, canonical_action_key(t.action)), set()).add(t.target)
+        for (src, key), targets in groups.items():
+            assert len(targets) <= 1, (
+                f"non-deterministic transition: source={src} key={key} "
+                f"targets={sorted(targets)}"
+            )
+
+        # Diagnostic-only: report OK/reason counts; do not assert on the floor.
+        report = validate_fsm(fsm, _SETTINGS_TRACE)
+        reasons = Counter(s.reason for s in report.steps)
+        total = len(report.steps)
+        ok = reasons.get(ValidationReason.OK, 0)
+        with capsys.disabled():
+            print(
+                f"\n[settings regression] total={total} ok={ok} " f"reasons={reasons.most_common()}"
+            )

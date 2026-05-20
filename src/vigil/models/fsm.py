@@ -424,6 +424,7 @@ class AppFSM:
         template_state_ids: set[str] = set()
         is_template_click = False
         item_fields: set[str] = set()
+        has_template_entry_edge = False
         if (
             state
             and state.sub_fsm_template_id
@@ -433,8 +434,30 @@ class AppFSM:
             template = self.sub_fsm_templates.get(state.sub_fsm_template_id)
             if template is not None:
                 template_state_ids = set(template.states)
-                is_template_click = True
-                item_fields = self._item_specific_identity_fields(proposed_key)
+                # A click on this source is a template-binding attempt only if
+                # the source actually has at least one outgoing click edge
+                # whose target is inside the template subgraph. Otherwise
+                # the click is chrome (toolbar Navigate up, switch, etc.).
+                has_template_entry_edge = any(t.target in template_state_ids for t in same_type)
+                is_template_click = has_template_entry_edge
+                if is_template_click:
+                    item_fields = self._item_specific_identity_fields(proposed_key)
+
+        # On dynamic-template sources, resolve exact chrome clicks before
+        # template-binding fallback. On ordinary states, the no-identity
+        # ambiguity guard below must run first.
+        exact_matches = [
+            t for t in same_type if canonical_action_key(t.action) == canonical_action_key(action)
+        ]
+        if is_template_click or from_state in template_state_ids:
+            nontemplate_exact = [t for t in exact_matches if t.target not in template_state_ids]
+            if len(nontemplate_exact) == 1:
+                t = nontemplate_exact[0]
+                return TransitionLookup(
+                    status=TransitionLookupStatus.MATCH,
+                    transition=t,
+                    target_state_id=t.target,
+                )
 
         if is_template_click and not item_fields:
             return self._template_binding_missing_lookup()
@@ -448,9 +471,6 @@ class AppFSM:
                 ),
             )
 
-        exact_matches = [
-            t for t in same_type if canonical_action_key(t.action) == canonical_action_key(action)
-        ]
         if len(exact_matches) == 1:
             t = exact_matches[0]
             if is_template_click and t.target in template_state_ids and not item_fields:
