@@ -3,8 +3,12 @@
 Visualizes a constructed FSM as a graph image using Graphviz.
 
 Usage:
+    vigil-visualize --fsm <fsm.json>
+    vigil-visualize --fsm <fsm.json> --format html
     vigil-visualize --fsm <fsm.json> --output <output.png>
     vigil-visualize --fsm <fsm.json> --output <output.svg> --format svg
+
+When --output is omitted, generated files are written under output_docs/.
 """
 
 from __future__ import annotations
@@ -17,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+from vigil.core.paths import OUTPUT_DOCS_DIR, resolve_generated_output_path
 
 _ACTION_COLORS: dict[str, str] = {
     "click": "#4a4a4a",
@@ -195,9 +201,32 @@ def render_fsm(
             style=style,
         )
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     out_stem = str(output_path).removesuffix(f".{fmt}")
     dot.render(out_stem, cleanup=True)
     logger.info(f"FSM graph rendered to {output_path}")
+
+
+def default_output_path(fsm_path: Path, fmt: str) -> Path:
+    """Default generated visualization path under output_docs/."""
+    app_slug = _infer_app_slug(fsm_path)
+    if fmt == "html":
+        return OUTPUT_DOCS_DIR / app_slug / "fsm.html"
+    return OUTPUT_DOCS_DIR / f"{app_slug}_fsm.{fmt}"
+
+
+def _infer_app_slug(fsm_path: Path) -> str:
+    try:
+        payload = json.loads(fsm_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+
+    app_package = payload.get("app_package") if isinstance(payload, dict) else None
+    if isinstance(app_package, str) and app_package:
+        return app_package.replace(".", "_")
+    if fsm_path.stem == "fsm" and fsm_path.parent.name:
+        return fsm_path.parent.name
+    return fsm_path.stem or "fsm"
 
 
 def _fsm_to_view_dict(
@@ -1048,7 +1077,14 @@ def main() -> None:
         description="Visualize an FSM as a graph image.",
     )
     parser.add_argument("--fsm", required=True, help="Path to serialized FSM JSON file")
-    parser.add_argument("--output", required=True, help="Output image path")
+    parser.add_argument(
+        "--output",
+        default=None,
+        help=(
+            "Output path. Defaults to output_docs/<app>_fsm.<format>, or "
+            "output_docs/<app>/fsm.html for --format html."
+        ),
+    )
     parser.add_argument(
         "--format",
         choices=["png", "svg", "pdf", "html"],
@@ -1099,6 +1135,10 @@ def main() -> None:
         logger.error(f"FSM file not found: {fsm_path}")
         raise SystemExit(1)
 
+    output_path = resolve_generated_output_path(
+        args.output, default_output_path(fsm_path, args.format)
+    )
+
     if args.format == "html":
         screens_dir: Path | None = None
         if args.screens_dir:
@@ -1108,7 +1148,7 @@ def main() -> None:
                 raise SystemExit(1)
         render_fsm_html(
             fsm_path=fsm_path,
-            output_path=Path(args.output),
+            output_path=output_path,
             show_guards=args.show_guards,
             show_counts=args.show_counts,
             max_label_len=args.max_label_len,
@@ -1119,7 +1159,7 @@ def main() -> None:
 
     render_fsm(
         fsm_path=fsm_path,
-        output_path=Path(args.output),
+        output_path=output_path,
         fmt=args.format,
         layout=args.layout,
         show_guards=args.show_guards,

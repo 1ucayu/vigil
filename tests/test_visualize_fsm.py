@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from vigil.core.paths import OUTPUT_DOCS_DIR, resolve_generated_output_path
 from vigil.models.fsm import (
     AbstractState,
     AppFSM,
@@ -14,7 +15,7 @@ from vigil.models.fsm import (
     StateSemanticProfile,
     Transition,
 )
-from vigil.scripts.visualize_fsm import _fsm_to_view_dict, render_fsm_html
+from vigil.scripts.visualize_fsm import _fsm_to_view_dict, default_output_path, render_fsm_html
 
 _SAFE_STATE_FIELDS = {
     "state_id",
@@ -127,6 +128,21 @@ def test_render_fsm_html(sample_fsm: AppFSM, tmp_path: Path) -> None:
     assert 'id="sidebar"' in html
     assert "Click a state to view details" in html
     assert "const FSM_DATA =" in html
+
+
+def test_default_output_path_uses_output_docs(sample_fsm: AppFSM, tmp_path: Path) -> None:
+    fsm_path = tmp_path / "fsm.json"
+    sample_fsm.serialize(fsm_path)
+
+    assert default_output_path(fsm_path, "png") == OUTPUT_DOCS_DIR / "com_android_settings_fsm.png"
+    expected_html = OUTPUT_DOCS_DIR / "com_android_settings" / "fsm.html"
+    assert default_output_path(fsm_path, "html") == expected_html
+
+
+def test_explicit_docs_output_path_redirects_to_output_docs() -> None:
+    assert resolve_generated_output_path("docs/settings_fsm.png", "ignored.png") == (
+        OUTPUT_DOCS_DIR / "settings_fsm.png"
+    )
 
 
 def test_render_fsm_html_redacts_sensitive_fields_by_default(tmp_path: Path) -> None:

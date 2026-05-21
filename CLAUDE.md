@@ -7,7 +7,7 @@ This file is intentionally short so Claude Code starts quickly and focuses on th
 - Architecture notes: `docs/architecture.md`
 - Error taxonomy: `docs/error_taxonomy.md`
 - Paper outline: `docs/nsdi_paper_outline.md`
-- DSL grammar: `docs/dsl_grammar.lark`
+- DSL grammar: `output_docs/dsl_grammar.lark`
 - Literature/design survey: `docs/references/neuro_symbolic_architecture_survey.md`
 
 Read the full context only when the task needs paper positioning, complete research background, or detailed historical notes.
@@ -58,6 +58,7 @@ Existing Settings traces are sufficient for the next development pass. Do not re
 - Low-confidence or incomplete evidence should route to `UNCERTAIN`, not high-trust `ALLOW`.
 - Keep implementation scoped to the requested task and follow existing code patterns.
 - Do not revert unrelated user changes in the worktree.
+- Generated visualizations, exported FSM viewers, and code-produced documentation artifacts belong under `output_docs/`, not `docs/`.
 
 Recommended commands:
 

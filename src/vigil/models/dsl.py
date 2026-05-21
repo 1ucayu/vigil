@@ -35,7 +35,7 @@ class LogicalOp(StrEnum):
 
 
 class PredicateType(StrEnum):
-    """Types of DSL predicates (aligned with docs/dsl_grammar.lark)."""
+    """Types of DSL predicates (aligned with output_docs/dsl_grammar.lark)."""
 
     READ = "read"
     VALUE = "value"

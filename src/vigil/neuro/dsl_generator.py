@@ -1,8 +1,9 @@
 """Stage 4: DSL Semantic Guard Generation.
 
 Annotates FSM transitions with guard conditions using a constrained formal grammar
-(docs/dsl_grammar.lark). Uses LLM + multimodal input (screenshots + element tables)
-to generate syntactically correct guards.
+(`output_docs/dsl_grammar.lark`, falling back to the historical `docs/` path).
+Uses LLM + multimodal input (screenshots + element tables) to generate syntactically
+correct guards.
 
 Every click transition gets a guard via trace-guided LLM prompts showing the
 source → action → target triple. Back/home/scroll transitions are skipped.
@@ -20,9 +21,8 @@ from loguru import logger
 
 from vigil.core.config import VigilConfig
 from vigil.core.llm_client import LlmClient
+from vigil.core.paths import resolve_dsl_grammar_path
 from vigil.models.fsm import AbstractState, AppFSM, Transition
-
-_GRAMMAR_PATH = Path(__file__).parent.parent.parent.parent / "docs" / "dsl_grammar.lark"
 
 _MAX_ELEMENTS_PER_SCREEN = 30
 
@@ -126,8 +126,8 @@ class DslGenerator:
         self._config = config
         self._llm = LlmClient(config.llm)
         self._app_prior = app_prior
-        grammar_path = _GRAMMAR_PATH
-        self._grammar_text = grammar_path.read_text()
+        grammar_path = resolve_dsl_grammar_path()
+        self._grammar_text = grammar_path.read_text(encoding="utf-8")
         self._parser = Lark(self._grammar_text, parser="earley", start="start")
 
     # ------------------------------------------------------------------

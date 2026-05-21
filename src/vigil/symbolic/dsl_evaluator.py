@@ -1,8 +1,9 @@
 """Tier 2: DSL Semantic Verification (< 15 ms).
 
 Evaluates DSL guard expressions against the current screen state using the Lark
-parser (docs/dsl_grammar.lark). Guard templates are cached offline; parameters
-are bound at runtime from user intent.
+parser (`output_docs/dsl_grammar.lark`, falling back to the historical `docs/`
+path). Guard templates are cached offline; parameters are bound at runtime from
+user intent.
 
 Evaluation is three-valued (TRUE / FALSE / UNKNOWN) to match the paper model:
 proven-false predicates are distinguishable from those the verifier cannot
@@ -22,8 +23,7 @@ from lark import Lark, Token, Transformer
 from loguru import logger
 from pydantic import BaseModel, Field
 
-# Default grammar path (relative to project root)
-_DEFAULT_GRAMMAR = Path(__file__).parent.parent.parent.parent / "docs" / "dsl_grammar.lark"
+from vigil.core.paths import resolve_dsl_grammar_path
 
 
 class IntentContext(BaseModel):
@@ -356,16 +356,17 @@ class _GuardEvaluator(Transformer):
 class DSLEvaluator:
     """Evaluates DSL guard expressions against runtime context.
 
-    Uses the Lark grammar at docs/dsl_grammar.lark for parsing.
+    Uses the Lark grammar at output_docs/dsl_grammar.lark for parsing.
     Guard templates contain $intent.* placeholders resolved at runtime via
     INTENT_VAR tokens in the grammar.
 
     Args:
-        grammar_path: Path to the .lark grammar file. Defaults to docs/dsl_grammar.lark.
+        grammar_path: Path to the .lark grammar file. Defaults to output_docs/dsl_grammar.lark,
+            with fallback to the historical docs/dsl_grammar.lark location.
     """
 
     def __init__(self, grammar_path: str | Path | None = None) -> None:
-        path = Path(grammar_path) if grammar_path else _DEFAULT_GRAMMAR
+        path = resolve_dsl_grammar_path(grammar_path)
         grammar_text = path.read_text(encoding="utf-8")
         self._parser = Lark(grammar_text, parser="earley", start="start", keep_all_tokens=True)
 

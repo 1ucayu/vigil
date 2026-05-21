@@ -35,6 +35,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from vigil.core.paths import redirect_docs_output_path
 from vigil.models.action import Action
 from vigil.models.fsm import AppFSM, ContainerType
 from vigil.neuro.fsm_builder import FsmBuilder
@@ -415,8 +416,9 @@ def main(argv: list[str] | None = None) -> int:
 
     payload = report.to_dict()
     if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(payload, indent=2))
+        output_path = redirect_docs_output_path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(payload, indent=2))
     else:
         json.dump(payload, sys.stdout, indent=2)
         sys.stdout.write("\n")

@@ -20,6 +20,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from vigil.core.paths import redirect_docs_output_path
+
 
 def main() -> None:
     """Run the FSM construction pipeline."""
@@ -106,7 +108,11 @@ def main() -> None:
     app_package = args.app or trace_data.get("app_package", "unknown")
     app_name = app_package.replace(".", "_")
 
-    output_path = Path(args.output) if args.output else Path(f"models/bundles/{app_name}/fsm.json")
+    output_path = (
+        redirect_docs_output_path(args.output)
+        if args.output
+        else Path(f"models/bundles/{app_name}/fsm.json")
+    )
 
     # Stage 0: App prior extraction (optional)
     prior = None

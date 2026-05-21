@@ -271,7 +271,7 @@ If no similar state exists, the runtime returns `UNCERTAIN` and queues asynchron
 | Capture raw GUI evidence | `neuro/explorer.py`, `neuro/ape_explorer.py`, `core/ui_parser.py` |
 | Build stable state identity | `models/state.py`, `neuro/state_abstractor.py`, `neuro/semantic_grounder.py` |
 | Maintain hierarchical verifier graph | `models/fsm.py`, `neuro/fsm_builder.py` |
-| Generate and validate semantic guards | `neuro/dsl_generator.py`, `docs/dsl_grammar.lark`, `symbolic/dsl_evaluator.py` |
+| Generate and validate semantic guards | `neuro/dsl_generator.py`, `output_docs/dsl_grammar.lark`, `symbolic/dsl_evaluator.py` |
 | Replay and confidence estimation | `neuro/replay_verifier.py`, `symbolic/trajectory_verifier.py` |
 | Runtime structural checks | `symbolic/state_locator.py`, `symbolic/fsm_checker.py` |
 | Runtime verdict composition | `symbolic/decision_engine.py`, `symbolic/invariant_checker.py` |

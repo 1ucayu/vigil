@@ -20,7 +20,8 @@ The project is organized around three mobile GUI error families:
 - [docs/architecture.md](docs/architecture.md): system architecture and runtime decision flow.
 - [docs/error_taxonomy.md](docs/error_taxonomy.md): three-level error taxonomy, module mapping, and benchmark alignment.
 - [docs/nsdi_paper_outline.md](docs/nsdi_paper_outline.md): compact NSDI-style paper outline.
-- [docs/dsl_grammar.lark](docs/dsl_grammar.lark): formal grammar for semantic guards.
+- [output_docs/dsl_grammar.lark](output_docs/dsl_grammar.lark): formal grammar for semantic guards.
+- [output_docs/](output_docs/): generated visualizations, exported FSM viewers, and other code-produced documentation artifacts.
 
 ## Quick Start
 
