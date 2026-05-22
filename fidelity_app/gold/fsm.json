@@ -1,0 +1,140 @@
+{
+  "$comment": "Ground-truth FSM for VigilMarket. Evaluator-only; not consumed by the running app.",
+  "app_id": "edu.hku.vigil.fidelity",
+  "model": "M_A = <S, s0, Sigma, delta, Gamma, I, rho>",
+  "transition_kinds": ["nav", "dialog_open", "dialog_confirm", "dialog_cancel", "system_back", "terminal"],
+  "initial_state": "home",
+  "terminal_states": ["payment_success"],
+  "states": [
+    {"id": "home",            "screen_marker": "screen:home"},
+    {"id": "search",          "screen_marker": "screen:search"},
+    {"id": "catalog",         "screen_marker": "screen:catalog"},
+    {"id": "product_detail",  "screen_marker": "screen:product_detail", "template": true,
+     "template_params": ["product_id"]},
+    {"id": "cart_empty",      "screen_marker": "screen:cart_empty"},
+    {"id": "cart",            "screen_marker": "screen:cart"},
+    {"id": "address_select",  "screen_marker": "screen:address_select"},
+    {"id": "payment_confirm", "screen_marker": "screen:payment_confirm"},
+    {"id": "payment_success", "screen_marker": "screen:payment_success"},
+    {"id": "orders",          "screen_marker": "screen:orders"},
+    {"id": "settings",        "screen_marker": "screen:settings"},
+    {"id": "remove_dialog",   "screen_marker": "screen:cart",            "dialog": true, "anchor": "cart"},
+    {"id": "payment_dialog",  "screen_marker": "screen:payment_confirm", "dialog": true, "anchor": "payment_confirm"}
+  ],
+  "templates": {
+    "product_detail": ["espresso", "green_tea", "latte", "mocha", "oat_cookie"]
+  },
+  "actions": [
+    {"name": "home.open_search",            "type": "click", "query": "home.open_search"},
+    {"name": "home.open_catalog",           "type": "click", "query": "home.open_catalog"},
+    {"name": "home.open_cart",              "type": "click", "query": "home.open_cart"},
+    {"name": "home.open_orders",            "type": "click", "query": "home.open_orders"},
+    {"name": "home.open_settings",          "type": "click", "query": "home.open_settings"},
+    {"name": "search.query.input",          "type": "input", "query": "search.query"},
+    {"name": "search.result_row.<product>", "type": "click", "query": "search.result_row.<product>"},
+    {"name": "search.back_home",            "type": "click", "query": "search.back_home"},
+    {"name": "catalog.product_row.<product>.open", "type": "click", "query": "catalog.product_row.<product>.open"},
+    {"name": "product_detail.add_to_cart",  "type": "click", "query": "product_detail.add_to_cart"},
+    {"name": "cart.qty_plus",               "type": "click", "query": "cart.qty_plus"},
+    {"name": "cart.qty_minus",              "type": "click", "query": "cart.qty_minus"},
+    {"name": "cart.remove_item",            "type": "click", "query": "cart.remove_item"},
+    {"name": "cart.checkout",               "type": "click", "query": "cart.checkout"},
+    {"name": "cart_empty.go_catalog",       "type": "click", "query": "cart_empty.go_catalog"},
+    {"name": "cart_empty.back_home",        "type": "click", "query": "cart_empty.back_home"},
+    {"name": "remove_dialog.confirm",       "type": "click", "query": "remove_dialog.confirm"},
+    {"name": "remove_dialog.cancel",        "type": "click", "query": "remove_dialog.cancel"},
+    {"name": "address_select.address.<addr>", "type": "click", "query": "address_select.address.<addr>"},
+    {"name": "payment_confirm.cancel",      "type": "click", "query": "payment_confirm.cancel"},
+    {"name": "payment_confirm.pay",         "type": "click", "query": "payment_confirm.pay"},
+    {"name": "payment_dialog.confirm",      "type": "click", "query": "payment_dialog.confirm"},
+    {"name": "payment_dialog.cancel",       "type": "click", "query": "payment_dialog.cancel"},
+    {"name": "payment_success.back_home",   "type": "click", "query": "payment_success.back_home"},
+    {"name": "orders.back_home",            "type": "click", "query": "orders.back_home"},
+    {"name": "settings.high_contrast",      "type": "click", "query": "settings.high_contrast",   "inert": true},
+    {"name": "settings.confirm_payments",   "type": "click", "query": "settings.confirm_payments","inert": true},
+    {"name": "settings.reset_demo",         "type": "click", "query": "settings.reset_demo"},
+    {"name": "settings.back_home",          "type": "click", "query": "settings.back_home"},
+    {"name": "nav.open_home",               "type": "click", "query": "nav.open_home",     "global_nav": true},
+    {"name": "nav.open_search",             "type": "click", "query": "nav.open_search",   "global_nav": true},
+    {"name": "nav.open_catalog",            "type": "click", "query": "nav.open_catalog",  "global_nav": true},
+    {"name": "nav.open_cart",               "type": "click", "query": "nav.open_cart",     "global_nav": true},
+    {"name": "nav.open_orders",             "type": "click", "query": "nav.open_orders",   "global_nav": true},
+    {"name": "nav.open_settings",           "type": "click", "query": "nav.open_settings", "global_nav": true},
+    {"name": "system.back",                 "type": "system_back", "query": "system.back"}
+  ],
+  "global_navigation": {
+    "$comment": "The Material3 bottom navigation bar is visible on every non-dialog state. Dialogs remain anchored modal states and consume back/cancel before navigation.",
+    "visible_on": ["home", "search", "catalog", "product_detail", "cart_empty", "cart", "address_select", "payment_confirm", "payment_success", "orders", "settings"],
+    "actions": [
+      {"action": "nav.open_home",     "to": "home",       "kind": "nav"},
+      {"action": "nav.open_search",   "to": "search",     "kind": "nav"},
+      {"action": "nav.open_catalog",  "to": "catalog",    "kind": "nav"},
+      {"action": "nav.open_cart",     "to": "cart_empty", "kind": "nav", "guard": "selected_product == null"},
+      {"action": "nav.open_cart",     "to": "cart",       "kind": "nav", "guard": "selected_product != null"},
+      {"action": "nav.open_orders",   "to": "orders",     "kind": "nav"},
+      {"action": "nav.open_settings", "to": "settings",   "kind": "nav"}
+    ]
+  },
+  "transitions": [
+    {"from": "home", "action": "home.open_search",   "to": "search",   "kind": "nav"},
+    {"from": "home", "action": "home.open_catalog",  "to": "catalog",  "kind": "nav"},
+    {"from": "home", "action": "home.open_cart",     "to": "cart_empty","kind": "nav",
+      "guard": "selected_product == null"},
+    {"from": "home", "action": "home.open_cart",     "to": "cart",     "kind": "nav",
+      "guard": "selected_product != null"},
+    {"from": "home", "action": "home.open_orders",   "to": "orders",   "kind": "nav"},
+    {"from": "home", "action": "home.open_settings", "to": "settings", "kind": "nav"},
+
+    {"from": "search", "action": "search.query.input",          "to": "search", "kind": "nav"},
+    {"from": "search", "action": "search.result_row.<product>", "to": "product_detail", "kind": "nav",
+      "binds": {"product_id": "<product>"}},
+    {"from": "search", "action": "search.back_home",            "to": "home",   "kind": "nav"},
+    {"from": "search", "action": "system.back",                 "to": "home",   "kind": "system_back"},
+
+    {"from": "catalog", "action": "catalog.product_row.<product>.open", "to": "product_detail", "kind": "nav",
+      "binds": {"product_id": "<product>"}},
+    {"from": "catalog", "action": "system.back",                        "to": "home",            "kind": "system_back"},
+
+    {"from": "product_detail", "action": "product_detail.add_to_cart", "to": "cart",    "kind": "nav"},
+    {"from": "product_detail", "action": "system.back",                "to": "catalog", "kind": "system_back"},
+
+    {"from": "cart_empty", "action": "cart_empty.go_catalog", "to": "catalog", "kind": "nav"},
+    {"from": "cart_empty", "action": "cart_empty.back_home",  "to": "home",    "kind": "nav"},
+    {"from": "cart_empty", "action": "system.back",           "to": "home",    "kind": "system_back"},
+
+    {"from": "cart", "action": "cart.qty_plus",    "to": "cart",            "kind": "nav"},
+    {"from": "cart", "action": "cart.qty_minus",   "to": "cart",            "kind": "nav"},
+    {"from": "cart", "action": "cart.remove_item", "to": "remove_dialog",   "kind": "dialog_open"},
+    {"from": "cart", "action": "cart.checkout",    "to": "address_select",  "kind": "nav"},
+    {"from": "cart", "action": "system.back",      "to": "home",            "kind": "system_back"},
+
+    {"from": "remove_dialog", "action": "remove_dialog.confirm", "to": "cart_empty", "kind": "dialog_confirm"},
+    {"from": "remove_dialog", "action": "remove_dialog.cancel",  "to": "cart",       "kind": "dialog_cancel"},
+    {"from": "remove_dialog", "action": "system.back",           "to": "cart",       "kind": "system_back"},
+
+    {"from": "address_select", "action": "address_select.address.<addr>", "to": "payment_confirm", "kind": "nav",
+      "binds": {"address_id": "<addr>"}},
+    {"from": "address_select", "action": "system.back",                   "to": "cart",            "kind": "system_back"},
+
+    {"from": "payment_confirm", "action": "payment_confirm.cancel", "to": "address_select", "kind": "nav"},
+    {"from": "payment_confirm", "action": "payment_confirm.pay",    "to": "payment_dialog",  "kind": "dialog_open"},
+    {"from": "payment_confirm", "action": "system.back",            "to": "address_select", "kind": "system_back"},
+
+    {"from": "payment_dialog", "action": "payment_dialog.confirm", "to": "payment_success",  "kind": "dialog_confirm"},
+    {"from": "payment_dialog", "action": "payment_dialog.cancel",  "to": "payment_confirm",  "kind": "dialog_cancel"},
+    {"from": "payment_dialog", "action": "system.back",            "to": "payment_confirm",  "kind": "system_back"},
+
+    {"from": "payment_success", "action": "payment_success.back_home", "to": "home", "kind": "terminal"},
+    {"from": "payment_success", "action": "system.back",               "to": "home", "kind": "system_back"},
+
+    {"from": "orders", "action": "orders.back_home", "to": "home", "kind": "nav"},
+    {"from": "orders", "action": "system.back",      "to": "home", "kind": "system_back"},
+
+    {"from": "settings", "action": "settings.high_contrast",    "to": "settings", "kind": "nav", "inert": true},
+    {"from": "settings", "action": "settings.confirm_payments", "to": "settings", "kind": "nav", "inert": true},
+    {"from": "settings", "action": "settings.reset_demo",       "to": "home",     "kind": "nav",
+      "side_effect": "reset_all_state_including_inert_toggles"},
+    {"from": "settings", "action": "settings.back_home",        "to": "home",     "kind": "nav"},
+    {"from": "settings", "action": "system.back",               "to": "home",     "kind": "system_back"}
+  ]
+}

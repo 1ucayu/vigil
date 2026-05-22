@@ -23,7 +23,7 @@ uv.lock
 Thumbs.db
 
 # Project data (large, generated)
-data/
+/data/
 models/bundles/
 
 # Environment & secrets
@@ -49,3 +49,11 @@ mobile_agents/**/__pycache__/
 # allow commit-SHA receipts
 !mobile_agents/**/README_COMMIT.txt
 !mobile_agents/**/COMMIT.txt
+
+# Android / Gradle (fidelity_app)
+fidelity_app/.gradle/
+fidelity_app/**/build/
+fidelity_app/local.properties
+fidelity_app/.idea/
+fidelity_app/.cxx/
+fidelity_app/captures/
