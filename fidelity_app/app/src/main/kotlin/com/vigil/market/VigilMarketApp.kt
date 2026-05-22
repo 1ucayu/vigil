@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity
+package com.vigil.market
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
@@ -8,20 +8,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import edu.hku.vigil.fidelity.ui.AddressSelectScreen
-import edu.hku.vigil.fidelity.ui.CartScreen
-import edu.hku.vigil.fidelity.ui.CatalogScreen
-import edu.hku.vigil.fidelity.ui.HomeScreen
-import edu.hku.vigil.fidelity.ui.OrdersScreen
-import edu.hku.vigil.fidelity.ui.PaymentConfirmScreen
-import edu.hku.vigil.fidelity.ui.PaymentSuccessScreen
-import edu.hku.vigil.fidelity.ui.ProductDetailScreen
-import edu.hku.vigil.fidelity.ui.SearchScreen
-import edu.hku.vigil.fidelity.ui.SettingsScreen
-import edu.hku.vigil.fidelity.ui.components.AppChrome
-import edu.hku.vigil.fidelity.ui.dialogs.PaymentConfirmDialog
-import edu.hku.vigil.fidelity.ui.dialogs.RemoveItemDialog
-import edu.hku.vigil.fidelity.ui.theme.VigilMarketTheme
+import com.vigil.market.ui.AddressSelectScreen
+import com.vigil.market.ui.CartScreen
+import com.vigil.market.ui.CatalogScreen
+import com.vigil.market.ui.HomeScreen
+import com.vigil.market.ui.OrdersScreen
+import com.vigil.market.ui.PaymentConfirmScreen
+import com.vigil.market.ui.PaymentSuccessScreen
+import com.vigil.market.ui.ProductDetailScreen
+import com.vigil.market.ui.SearchScreen
+import com.vigil.market.ui.SettingsScreen
+import com.vigil.market.ui.components.AppChrome
+import com.vigil.market.ui.dialogs.PaymentConfirmDialog
+import com.vigil.market.ui.dialogs.RemoveItemDialog
+import com.vigil.market.ui.theme.VigilMarketTheme
 
 @Composable
 fun VigilMarketApp() {

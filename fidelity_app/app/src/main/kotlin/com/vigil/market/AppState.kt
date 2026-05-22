@@ -1,10 +1,10 @@
-package edu.hku.vigil.fidelity
+package com.vigil.market
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import edu.hku.vigil.fidelity.data.Address
-import edu.hku.vigil.fidelity.data.Product
+import com.vigil.market.data.Address
+import com.vigil.market.data.Product
 
 enum class Screen(val id: String) {
     HOME("home"),

@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity.ui
+package com.vigil.market.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,10 +19,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import edu.hku.vigil.fidelity.AppState
-import edu.hku.vigil.fidelity.Screen
-import edu.hku.vigil.fidelity.ui.components.ScreenMarker
-import edu.hku.vigil.fidelity.ui.components.cents
+import com.vigil.market.AppState
+import com.vigil.market.Screen
+import com.vigil.market.ui.components.ScreenMarker
+import com.vigil.market.ui.components.cents
 
 @Composable
 fun CartScreen(state: AppState, empty: Boolean) {

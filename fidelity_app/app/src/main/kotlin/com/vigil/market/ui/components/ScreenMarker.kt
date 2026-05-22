@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity.ui.components
+package com.vigil.market.ui.components
 
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding

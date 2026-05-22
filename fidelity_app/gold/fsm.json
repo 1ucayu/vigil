@@ -1,6 +1,6 @@
 {
   "$comment": "Ground-truth FSM for VigilMarket. Evaluator-only; not consumed by the running app.",
-  "app_id": "edu.hku.vigil.fidelity",
+  "app_id": "com.vigil.market",
   "model": "M_A = <S, s0, Sigma, delta, Gamma, I, rho>",
   "transition_kinds": ["nav", "dialog_open", "dialog_confirm", "dialog_cancel", "system_back", "terminal"],
   "initial_state": "home",

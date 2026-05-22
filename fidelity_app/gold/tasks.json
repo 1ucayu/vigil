@@ -1,7 +1,7 @@
 {
   "$comment": "Benchmark tasks. Each task carries an intent and a per-step expected verifier verdict.",
   "$verdicts": ["ALLOW", "DENY", "UNCERTAIN"],
-  "app_id": "edu.hku.vigil.fidelity",
+  "app_id": "com.vigil.market",
   "tasks": [
     {
       "id": "valid_purchase",

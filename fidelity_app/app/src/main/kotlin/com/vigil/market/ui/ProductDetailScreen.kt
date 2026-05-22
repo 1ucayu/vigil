@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity.ui
+package com.vigil.market.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,47 +14,62 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import edu.hku.vigil.fidelity.AppState
-import edu.hku.vigil.fidelity.Screen
-import edu.hku.vigil.fidelity.ui.components.ScreenMarker
+import com.vigil.market.AppState
+import com.vigil.market.ui.components.ScreenMarker
+import com.vigil.market.ui.components.cents
 
 @Composable
-fun PaymentSuccessScreen(state: AppState) {
+fun ProductDetailScreen(state: AppState) {
+    val product = state.selectedProduct ?: return
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        ScreenMarker("payment_success")
+        ScreenMarker("product_detail")
+
         ElevatedCard(
             modifier = Modifier
                 .fillMaxWidth()
-                .testTag("payment_success.card"),
+                .testTag("product_detail.card"),
         ) {
             Column(
                 modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    "Payment successful",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.testTag("payment_success.title"),
+                    "Selected item",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.testTag("product_detail.title"),
                 )
                 Text(
-                    "Thanks for your order.",
+                    product.name,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.testTag("product_detail.name"),
+                )
+                Text(
+                    cents(product.priceCents),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.testTag("product_detail.price"),
+                )
+                Text(
+                    product.description,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag("payment_success.message"),
+                    modifier = Modifier.testTag("product_detail.description"),
                 )
             }
         }
+
         Button(
-            onClick = { state.navigate(Screen.HOME) },
+            onClick = { state.addToCart() },
             modifier = Modifier
                 .fillMaxWidth()
-                .testTag("payment_success.back_home"),
-        ) { Text("Home") }
+                .testTag("product_detail.add_to_cart"),
+        ) { Text("Add to cart") }
     }
 }

@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity.ui
+package com.vigil.market.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,10 +17,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import edu.hku.vigil.fidelity.AppState
-import edu.hku.vigil.fidelity.data.Catalog
-import edu.hku.vigil.fidelity.ui.components.ScreenMarker
-import edu.hku.vigil.fidelity.ui.components.cents
+import com.vigil.market.AppState
+import com.vigil.market.data.Catalog
+import com.vigil.market.ui.components.ScreenMarker
+import com.vigil.market.ui.components.cents
 
 @Composable
 fun CatalogScreen(state: AppState) {

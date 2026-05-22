@@ -1,5 +1,5 @@
 {
-  "app_package": "edu.hku.vigil.fidelity",
+  "app_package": "com.vigil.market",
   "version": "gold-0.1.0",
   "initial_state": "home",
   "states": {
@@ -10,7 +10,7 @@
       "structural_fingerprint": "screen:home",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "home"
@@ -35,7 +35,7 @@
       "structural_fingerprint": "screen:search",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "search"
@@ -60,7 +60,7 @@
       "structural_fingerprint": "screen:catalog",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "catalog"
@@ -85,7 +85,7 @@
       "structural_fingerprint": "screen:product_detail",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "product_detail"
@@ -110,7 +110,7 @@
       "structural_fingerprint": "screen:cart_empty",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "cart_empty"
@@ -135,7 +135,7 @@
       "structural_fingerprint": "screen:cart",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "cart"
@@ -160,7 +160,7 @@
       "structural_fingerprint": "screen:address_select",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "address_select"
@@ -185,7 +185,7 @@
       "structural_fingerprint": "screen:payment_confirm",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "payment_confirm"
@@ -210,7 +210,7 @@
       "structural_fingerprint": "screen:payment_success",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "payment_success"
@@ -235,7 +235,7 @@
       "structural_fingerprint": "screen:orders",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "orders"
@@ -260,7 +260,7 @@
       "structural_fingerprint": "screen:settings",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "settings"
@@ -285,7 +285,7 @@
       "structural_fingerprint": "screen:cart",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "remove_dialog"
@@ -310,7 +310,7 @@
       "structural_fingerprint": "screen:payment_confirm",
       "hierarchy_level": "activity",
       "parent_state": null,
-      "activity_name": "edu.hku.vigil.fidelity.MainActivity",
+      "activity_name": "com.vigil.market.MainActivity",
       "invariants": [],
       "raw_screens": [
         "payment_dialog"

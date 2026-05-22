@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity
+package com.vigil.market
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity

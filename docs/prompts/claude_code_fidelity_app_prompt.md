@@ -36,7 +36,7 @@ Use command-line Android tooling when possible. The expected workflow should be:
 cd fidelity_app
 ./gradlew assembleDebug
 ./gradlew installDebug
-adb -s emulator-5554 shell monkey -p edu.hku.vigil.fidelity 1
+adb -s emulator-5554 shell monkey -p com.vigil.market 1
 ```
 
 If the exact package name differs, document the actual launch command in `fidelity_app/README.md`.

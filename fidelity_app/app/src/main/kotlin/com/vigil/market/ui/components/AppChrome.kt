@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity.ui.components
+package com.vigil.market.ui.components
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.Icons
@@ -23,8 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
-import edu.hku.vigil.fidelity.AppState
-import edu.hku.vigil.fidelity.Screen
+import com.vigil.market.AppState
+import com.vigil.market.Screen
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable

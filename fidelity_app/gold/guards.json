@@ -1,6 +1,6 @@
 {
   "$comment": "Ground-truth DSL guards for high-risk transitions. Evaluator-only.",
-  "app_id": "edu.hku.vigil.fidelity",
+  "app_id": "com.vigil.market",
   "guards": [
     {
       "transition": "product_detail.add_to_cart",

@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity.ui.theme
+package com.vigil.market.ui.theme
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme

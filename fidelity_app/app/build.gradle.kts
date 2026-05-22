@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "edu.hku.vigil.fidelity"
+    namespace = "com.vigil.market"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "edu.hku.vigil.fidelity"
+        applicationId = "com.vigil.market"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

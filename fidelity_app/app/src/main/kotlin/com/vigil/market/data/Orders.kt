@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity.data
+package com.vigil.market.data
 
 data class PastOrder(
     val id: String,

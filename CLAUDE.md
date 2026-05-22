@@ -158,7 +158,7 @@ Recommended app commands:
 cd fidelity_app
 ./gradlew assembleDebug
 ./gradlew installDebug
-adb -s emulator-5554 shell monkey -p edu.hku.vigil.fidelity 1
+adb -s emulator-5554 shell monkey -p com.vigil.market 1
 ```
 
 ---

@@ -58,13 +58,13 @@ future invocations of `./gradlew` re-verify the distribution.
 cd fidelity_app
 ./gradlew assembleDebug
 ./gradlew installDebug
-adb -s emulator-5554 shell monkey -p edu.hku.vigil.fidelity -c android.intent.category.LAUNCHER 1
+adb -s emulator-5554 shell monkey -p com.vigil.market -c android.intent.category.LAUNCHER 1
 ```
 
 ### Deterministic clean-launch flow (recommended between replay runs)
 
 ```bash
-adb -s emulator-5554 shell am start -S -n edu.hku.vigil.fidelity/.MainActivity
+adb -s emulator-5554 shell am start -S -n com.vigil.market/.MainActivity
 ```
 
 Or, in-app: open `Settings → Reset demo` (`testTag = settings.reset_demo`),

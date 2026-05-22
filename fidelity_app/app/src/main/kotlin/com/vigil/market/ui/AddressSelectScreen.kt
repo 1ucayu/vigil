@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity.ui
+package com.vigil.market.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,9 +14,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import edu.hku.vigil.fidelity.AppState
-import edu.hku.vigil.fidelity.data.Addresses
-import edu.hku.vigil.fidelity.ui.components.ScreenMarker
+import com.vigil.market.AppState
+import com.vigil.market.data.Addresses
+import com.vigil.market.ui.components.ScreenMarker
 
 @Composable
 fun AddressSelectScreen(state: AppState) {

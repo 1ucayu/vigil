@@ -1,4 +1,4 @@
-package edu.hku.vigil.fidelity.ui.dialogs
+package com.vigil.market.ui.dialogs
 
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -8,7 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
-import edu.hku.vigil.fidelity.AppState
+import com.vigil.market.AppState
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
