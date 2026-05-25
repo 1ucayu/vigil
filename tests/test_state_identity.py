@@ -399,3 +399,47 @@ def test_fsm_builder_does_not_import_compressor() -> None:
         "and must not feed deterministic fingerprints."
     )
     assert "compact_ui_tree_text" not in text
+
+
+def test_edittext_typed_value_does_not_split_structural_fingerprint() -> None:
+    """Typed text in an ``android.widget.EditText`` (e.g. a search query) must
+    not affect the ``structural_fingerprint``. The structural layer is the one
+    the FSM builder uses to dedupe screens that share interactable layout but
+    differ only in user input.
+
+    Note: text-anchored ``get_state_id`` currently *does* split on EditText
+    text, which is documented as a known abstraction gap vs gold (see the
+    final report). This test pins only the structural-layer property.
+    """
+
+    def _screen(query: str) -> RawScreen:
+        title = UIElement(
+            element_id="e_title",
+            class_name="android.widget.TextView",
+            resource_id="com.test:id/search_title",
+            text="Search",
+            content_description="",
+            depth=1,
+            is_clickable=False,
+            package="com.test",
+        )
+        edit = UIElement(
+            element_id="e_query",
+            class_name="android.widget.EditText",
+            resource_id="search.query",
+            text=query,
+            content_description="",
+            depth=2,
+            is_clickable=True,
+            is_editable=True,
+            package="com.test",
+        )
+        return RawScreen(screen_id=f"scr_{query or 'empty'}", elements=[title, edit])
+
+    a = _screen("espresso")
+    b = _screen("latte")
+    fa = a.get_structural_fingerprint()
+    fb = b.get_structural_fingerprint()
+    assert fa == fb, (
+        f"typed EditText value must not affect structural_fingerprint: " f"{fa} vs {fb}"
+    )

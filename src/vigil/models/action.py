@@ -82,6 +82,7 @@ class Action(BaseModel):
             result["bounds"] = self.target_bounds
         if self.target_resource_id:
             result["resource_id"] = self.target_resource_id
+            result["target_resource_id"] = self.target_resource_id
         if self.target_text:
             result["target_text"] = self.target_text
         if self.target_content_desc:

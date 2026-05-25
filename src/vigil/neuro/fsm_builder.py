@@ -32,6 +32,33 @@ from vigil.neuro.app_prior import AppPrior
 _REFINED_SECONDARY_MARKER = "::secondary:"
 
 
+# Identity fields strong enough to make a click self-loop a meaningful,
+# verifiable affordance (Settings list rows, switches/checkboxes/radios,
+# buttons, parameterised list rows). Used in both _build_transitions and
+# _merge_scroll_duplicates so identity-bearing self-loops survive end-to-end.
+# Note: ``target`` (the explorer's element_id handle) is intentionally
+# excluded — element ids are volatile per-capture and do not bind a stable
+# affordance across screens. Stable identity comes from text / resource_id /
+# content-desc. Class-only or selector-only identity is too weak for preserved
+# click self-loops.
+_CLICK_SELF_LOOP_IDENTITY_FIELDS = (
+    "target_text",
+    "resource_id",
+    "target_resource_id",
+    "target_content_desc",
+)
+
+
+def _click_action_has_identity(action: dict[str, Any]) -> bool:
+    """A click action carries enough identity to act as a verifiable self-loop
+    when at least one stable identity field is populated."""
+    for field in _CLICK_SELF_LOOP_IDENTITY_FIELDS:
+        value = action.get(field)
+        if value:
+            return True
+    return False
+
+
 class FsmBuilder:
     """Build an AppFSM from an exploration trace JSON file.
 
@@ -298,9 +325,18 @@ class FsmBuilder:
                         atype = (
                             action_dict.get("type") or action_dict.get("action_type") or ""
                         ).lower()
-                        if atype not in _MEANINGFUL_SELF_LOOPS:
-                            # Drop ordinary CLICK no-op self-loops. Keep
-                            # scroll / input / toggle self-loops below.
+                        # Keep meaningful self-loops (scroll / input / toggle)
+                        # and observed click self-loops that carry stable
+                        # element identity (Settings list rows, switches).
+                        is_identity_click = atype == "click" and _click_action_has_identity(
+                            action_dict
+                        )
+                        is_observed = bool(t.provenance) or t.observed_count > 0
+                        keep_self_loop = atype in _MEANINGFUL_SELF_LOOPS or (
+                            is_identity_click and is_observed
+                        )
+                        if not keep_self_loop:
+                            # Drop synthetic / unidentified click no-op self-loops.
                             continue
                     key = (source, target, canonical_action_key(t.action))
                     if key in seen_keys:
@@ -943,6 +979,21 @@ class FsmBuilder:
                 and state.container_type != ContainerType.DYNAMIC
             ):
                 state.sub_fsm_template_id = None
+
+        # Drop orphan templates that no live state references via
+        # ``sub_fsm_template_id``. After redirects, a previously-built
+        # template may no longer be reachable from any state and should
+        # not linger in the bundle.
+        referenced_template_ids = {
+            s.sub_fsm_template_id for s in fsm.states.values() if s.sub_fsm_template_id is not None
+        }
+        orphan_template_ids = [
+            tid for tid in list(fsm.sub_fsm_templates.keys()) if tid not in referenced_template_ids
+        ]
+        for tid in orphan_template_ids:
+            del fsm.sub_fsm_templates[tid]
+        if orphan_template_ids:
+            logger.debug(f"Removed {len(orphan_template_ids)} orphan Sub-FSM template(s)")
 
         # Global determinism invariant: after all collapses, no
         # (source, canonical_action_key) may map to more than one target
@@ -1740,10 +1791,27 @@ class FsmBuilder:
             action_type = (action_data.get("action_type") or action_data.get("type") or "").lower()
             is_meaningful_self_loop = action_type in _MEANINGFUL_SELF_LOOPS
 
+            # An observed click self-loop with stable element identity
+            # (target_text / resource_id / content-desc) is a verifiable
+            # affordance — e.g. Settings list rows like "Airplane mode" or
+            # "USB tethering" that stay in the same abstract state after a
+            # click. Preserve them. The action dict has not yet been enriched
+            # at this point, so we also peek at the source-screen element for
+            # identity.
+            is_identity_click_self_loop = (
+                action_type == "click"
+                and source_state == target_state
+                and (
+                    _click_action_has_identity(action_data)
+                    or (raw_screens is not None and self._element_has_identity(trace, raw_screens))
+                )
+            )
+
             if (
                 not include_self_loops
                 and source_state == target_state
                 and not is_meaningful_self_loop
+                and not is_identity_click_self_loop
                 and not (raw_screens and self._is_toggle_action(trace, raw_screens))
             ):
                 skipped_self_loops += 1
@@ -1752,42 +1820,160 @@ class FsmBuilder:
             action = Action(**action_data)
             fsm_action = action.to_fsm_dict()
 
-            # Enrich action dict with target element metadata. Fill-only-when-missing:
-            # never overwrite a populated identity field from Action.to_fsm_dict()
-            # with an empty or weaker element-derived value. Action carries the raw
-            # trace identity; the element row is a best-effort supplement.
+            # Enrich action dict with target element metadata.
+            #
+            # The trace's ``target_element_id`` is volatile per the Action
+            # docstring: the explorer re-indexes element ids per capture, and
+            # the id recorded at click time may not point to the same DOM node
+            # in the source-screen XML that survived in ``screens``. Prefer
+            # matching the source element by the trace's stable selector
+            # resource_id (or the action's resource_id) over the volatile
+            # element_id. If neither resource_id is available, fall back to
+            # element_id lookup. If the resolved element's resource_id
+            # disagrees with the trace's claimed identity, treat it as
+            # "no match" and skip identity-field enrichment entirely.
+            identity_inconsistent = False
             if raw_screens and action.target_element_id:
                 source_screen = raw_screens.get(source_sid, {})
                 elements = source_screen.get(
                     "interactable_elements", source_screen.get("elements", [])
                 )
-                for el in elements:
-                    if el.get("element_id") == action.target_element_id:
-                        text = el.get("text") or ""
-                        desc = el.get("content_description") or ""
-                        rid = el.get("resource_id") or ""
-                        cls = el.get("class_name") or ""
-                        candidates = {
-                            "target_text": text or desc,
-                            "target_content_desc": desc,
-                            "target_resource_id": rid,
-                            "resource_id": rid,
-                            "target_class": cls,
-                            "target_class_name": cls,
-                        }
-                        for field, candidate in candidates.items():
-                            if candidate and not (fsm_action.get(field) or ""):
-                                fsm_action[field] = candidate
-                        # target_selector: only fill if the element provides a
-                        # structured selector and the action dict has none.
-                        el_selector = el.get("target_selector") or el.get("selector")
-                        if el_selector and not fsm_action.get("target_selector"):
-                            fsm_action["target_selector"] = el_selector
-                        break
+                claimed_rid = (
+                    (fsm_action.get("target_selector") or {}).get("resource_id")
+                    or fsm_action.get("target_resource_id")
+                    or fsm_action.get("resource_id")
+                    or ""
+                )
+                resolved_el = None
+                if claimed_rid:
+                    for el in elements:
+                        if (el.get("resource_id") or "") == claimed_rid:
+                            resolved_el = el
+                            break
+                if resolved_el is None:
+                    for el in elements:
+                        if el.get("element_id") == action.target_element_id:
+                            el_rid = el.get("resource_id") or ""
+                            if claimed_rid and el_rid and el_rid != claimed_rid:
+                                # Stale element_id resolves to a different
+                                # widget than the trace's selector identifies.
+                                # Skip identity enrichment from this element.
+                                identity_inconsistent = True
+                                logger.warning(
+                                    "stale target_element_id at step %s: "
+                                    "id=%s in screen=%s resolves to rid=%s but "
+                                    "trace selector/action rid=%s; skipping "
+                                    "identity enrichment",
+                                    trace.get("step_number"),
+                                    action.target_element_id,
+                                    source_sid,
+                                    el_rid,
+                                    claimed_rid,
+                                )
+                                resolved_el = None
+                            else:
+                                resolved_el = el
+                            break
+                if resolved_el is not None:
+                    el = resolved_el
+                    text = el.get("text") or ""
+                    desc = el.get("content_description") or ""
+                    rid = el.get("resource_id") or ""
+                    cls = el.get("class_name") or ""
+                    candidates = {
+                        "target_text": text or desc,
+                        "target_content_desc": desc,
+                        "target_resource_id": rid,
+                        "resource_id": rid,
+                        "target_class": cls,
+                        "target_class_name": cls,
+                    }
+                    for field, candidate in candidates.items():
+                        if candidate and not (fsm_action.get(field) or ""):
+                            fsm_action[field] = candidate
+                    el_selector = el.get("target_selector") or el.get("selector")
+                    if el_selector and not fsm_action.get("target_selector"):
+                        fsm_action["target_selector"] = el_selector
+
+            # Post-enrichment identity consistency guard. The serialized FSM
+            # must never carry `resource_id != target_resource_id` for any
+            # transition. ``canonical_action_key`` reads both keys
+            # independently and would otherwise produce diverging signatures
+            # for the same physical click.
+            sel_rid = (fsm_action.get("target_selector") or {}).get("resource_id") or ""
+            rid_v = fsm_action.get("resource_id") or ""
+            trid_v = fsm_action.get("target_resource_id") or ""
+            trace_rid = (
+                action_data.get("target_resource_id") or action_data.get("resource_id") or ""
+            )
+            chosen_rid: str | None = None
+            if sel_rid:
+                if (rid_v and rid_v != sel_rid) or (trid_v and trid_v != sel_rid):
+                    identity_inconsistent = True
+                chosen_rid = sel_rid
+            elif rid_v and trid_v and rid_v != trid_v:
+                identity_inconsistent = True
+                if trace_rid and trace_rid == rid_v:
+                    chosen_rid = rid_v
+                elif trace_rid and trace_rid == trid_v:
+                    chosen_rid = trid_v
+                else:
+                    chosen_rid = trid_v
+            elif rid_v:
+                chosen_rid = rid_v
+            elif trid_v:
+                chosen_rid = trid_v
+
+            if chosen_rid:
+                fsm_action["resource_id"] = chosen_rid
+                fsm_action["target_resource_id"] = chosen_rid
+            else:
+                fsm_action.pop("resource_id", None)
+                fsm_action.pop("target_resource_id", None)
+
+            if identity_inconsistent:
+                logger.warning(
+                    "identity_inconsistent transition at step %s: "
+                    "source=%s target=%s rid=%s trid=%s sel_rid=%s -> kept=%s",
+                    trace.get("step_number"),
+                    source_state,
+                    target_state,
+                    rid_v,
+                    trid_v,
+                    sel_rid,
+                    chosen_rid,
+                )
+                low_trust = True
+
+            if (
+                action_type == "click"
+                and source_state == target_state
+                and _click_action_has_identity(fsm_action)
+            ):
+                # element_id is capture-local; stable text/resource binds across captures.
+                fsm_action.pop("target", None)
 
             step_index = trace.get("step_number")
             if not isinstance(step_index, int):
                 step_index = loop_index
+
+            provenance_entries = [
+                ProvenanceEntry(
+                    trace_step_index=step_index,
+                    source_screen_id=source_sid or None,
+                    target_screen_id=target_sid or None,
+                    confidence_source="observed",
+                )
+            ]
+            if identity_inconsistent:
+                provenance_entries.append(
+                    ProvenanceEntry(
+                        trace_step_index=step_index,
+                        source_screen_id=source_sid or None,
+                        target_screen_id=target_sid or None,
+                        confidence_source="identity_inconsistent",
+                    )
+                )
 
             transitions.append(
                 Transition(
@@ -1800,14 +1986,7 @@ class FsmBuilder:
                     confidence=confidence,
                     low_trust=low_trust,
                     observed_count=1,
-                    provenance=[
-                        ProvenanceEntry(
-                            trace_step_index=step_index,
-                            source_screen_id=source_sid or None,
-                            target_screen_id=target_sid or None,
-                            confidence_source="observed",
-                        )
-                    ],
+                    provenance=provenance_entries,
                 )
             )
 
@@ -1835,6 +2014,30 @@ class FsmBuilder:
             if el.get("element_id") == target_eid:
                 return el.get("is_checkable", False)
 
+        return False
+
+    @staticmethod
+    def _element_has_identity(trace: dict[str, Any], raw_screens: dict[str, Any]) -> bool:
+        """True iff the trace's source-screen element carries stable identity
+        (text / resource_id / content-description). Used pre-enrichment so an
+        identity-bearing click self-loop is not dropped by ``_build_transitions``
+        before the action dict is enriched with element metadata."""
+        action_data = trace.get("action", {})
+        target_eid = action_data.get("target_element_id")
+        if not target_eid:
+            return False
+
+        source_sid = trace.get("source_screen_id", "")
+        screen = raw_screens.get(source_sid, {})
+        elements = screen.get("interactable_elements", screen.get("elements", []))
+
+        for el in elements:
+            if el.get("element_id") == target_eid:
+                return bool(
+                    (el.get("text") or "").strip()
+                    or (el.get("content_description") or "").strip()
+                    or (el.get("resource_id") or "").strip()
+                )
         return False
 
     def _merge_transitions(self, transitions: list[Transition]) -> list[Transition]:

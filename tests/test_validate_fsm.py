@@ -469,6 +469,16 @@ class TestSettingsTraceRegression:
                     f"sub_fsm_template_id={state.sub_fsm_template_id!r}"
                 )
 
+        # 2b. No orphan templates — every template_id in sub_fsm_templates
+        #     must be referenced by at least one state's sub_fsm_template_id.
+        referenced_template_ids = {
+            s.sub_fsm_template_id for s in fsm.states.values() if s.sub_fsm_template_id is not None
+        }
+        for tid in fsm.sub_fsm_templates:
+            assert (
+                tid in referenced_template_ids
+            ), f"orphan Sub-FSM template {tid!r} not referenced by any state"
+
         # 3. Structural determinism: for every (source, canonical_action_key)
         #    in high-trust transitions, at most one distinct target.
         groups: dict[tuple[str, tuple[tuple[str, object], ...]], set[str]] = {}
@@ -491,3 +501,42 @@ class TestSettingsTraceRegression:
             print(
                 f"\n[settings regression] total={total} ok={ok} " f"reasons={reasons.most_common()}"
             )
+
+
+_FIDELITY_TRACE = (
+    Path(__file__).parent.parent
+    / "data/apps/com_vigil_market_fidelity/traces/exploration_20260525_034917.json"
+)
+
+
+@pytest.mark.skipif(
+    not _FIDELITY_TRACE.exists(),
+    reason="fidelity trace not present in this checkout",
+)
+class TestFidelityTraceRoundTrip:
+    """The fidelity-app trace is the calibration target for action identity.
+    Building the FSM from it and validating against the same trace must
+    classify every step as OK — no action_signature_mismatch, no
+    contradictory stable identity fields in the serialized transitions.
+    """
+
+    def test_fidelity_trace_validates_107_of_107(self) -> None:
+        report = validate_trace_against_built_fsm(_FIDELITY_TRACE, app_package="com.vigil.market")
+        from collections import Counter
+
+        reasons = Counter(s.reason for s in report.steps)
+        assert reasons == Counter({ValidationReason.OK: 107}), reasons
+
+    def test_fidelity_fsm_has_no_identity_contradictions(self) -> None:
+        builder = FsmBuilder("com.vigil.market")
+        fsm = builder.build_from_trace(_FIDELITY_TRACE)
+        contradictions = []
+        for t in fsm.transitions:
+            rid = t.action.get("resource_id") or ""
+            trid = t.action.get("target_resource_id") or ""
+            if rid and trid and rid != trid:
+                contradictions.append((t.source, t.target, rid, trid))
+        assert contradictions == [], (
+            f"serialized transitions contradict on resource_id vs "
+            f"target_resource_id: {contradictions}"
+        )

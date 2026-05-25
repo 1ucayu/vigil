@@ -166,6 +166,7 @@ def _template_binding_missing(fsm: AppFSM, source_state_id: str, action: dict[st
     has_template_entry_edge = any(
         t.source == source_state_id
         and t.target in template_state_ids
+        and t.target != source_state_id
         and (t.action.get("type") or t.action.get("action_type")) == "click"
         for t in fsm.transitions
     )

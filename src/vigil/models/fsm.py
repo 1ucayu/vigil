@@ -71,6 +71,14 @@ _ACTION_KEY_FIELDS = (
     "value",
 )
 _ACTION_IDENTITY_FIELDS = tuple(k for k in _ACTION_KEY_FIELDS if k != "type")
+_STABLE_TARGET_IDENTITY_FIELDS = frozenset(
+    {
+        "resource_id",
+        "target_resource_id",
+        "target_text",
+        "target_content_desc",
+    }
+)
 _TEMPLATE_ITEM_IDENTITY_FIELDS = frozenset(
     {
         "target",
@@ -364,7 +372,14 @@ class AppFSM:
         proposed_fields: set[str],
     ) -> bool:
         """True when all identity fields supplied by the proposal agree."""
-        return all(stored_key.get(field) == proposed_key.get(field) for field in proposed_fields)
+        fields = proposed_fields
+        stable_fields = fields & _STABLE_TARGET_IDENTITY_FIELDS
+        if "target" in fields and stable_fields:
+            # ``target`` is the capture-local element_id. Ignore churn in that
+            # handle only when stable text/resource/content-desc identity also
+            # binds the proposal to the stored action.
+            fields = fields - {"target"}
+        return all(stored_key.get(field) == proposed_key.get(field) for field in fields)
 
     @staticmethod
     def _item_specific_identity_fields(proposed_key: dict[str, Hashable | None]) -> set[str]:
@@ -436,9 +451,13 @@ class AppFSM:
                 template_state_ids = set(template.states)
                 # A click on this source is a template-binding attempt only if
                 # the source actually has at least one outgoing click edge
-                # whose target is inside the template subgraph. Otherwise
-                # the click is chrome (toolbar Navigate up, switch, etc.).
-                has_template_entry_edge = any(t.target in template_state_ids for t in same_type)
+                # *that is not a self-loop* whose target is inside the template
+                # subgraph. Otherwise the click is chrome (toolbar Navigate up,
+                # switch, etc.). Self-loops never count as template-entry
+                # edges — entering a template item means leaving the source.
+                has_template_entry_edge = any(
+                    t.target in template_state_ids and t.target != from_state for t in same_type
+                )
                 is_template_click = has_template_entry_edge
                 if is_template_click:
                     item_fields = self._item_specific_identity_fields(proposed_key)

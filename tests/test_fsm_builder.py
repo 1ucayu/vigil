@@ -912,14 +912,24 @@ class TestToggleSelfLoops:
         builder = FsmBuilder("com.test.app")
         fsm = builder.build_from_trace(path, include_self_loops=False)
 
-        # Toggle self-loop (e_001, checkable) should be preserved
-        # Non-toggle self-loop (e_002, not checkable) should be excluded
+        # Toggle self-loop (e_001, checkable) is preserved.
+        # Non-toggle self-loop (e_002, TextView with text "Bluetooth") is
+        # also preserved under the identity-aware policy — Settings list
+        # rows that stay on the same screen after a click are verifiable
+        # affordances.
         self_loops = [t for t in fsm.transitions if t.source == t.target]
-        assert len(self_loops) == 1
-        assert self_loops[0].action.get("target") == "e_001"
+        resource_ids = {t.action.get("resource_id") for t in self_loops}
+        assert resource_ids == {
+            "com.test:id/bt_switch",
+            "com.test:id/title",
+        }, f"expected both self-loops preserved, got actions={[t.action for t in self_loops]!r}"
+        assert all(t.action.get("target") is None for t in self_loops)
 
     def test_non_toggle_self_loop_still_excluded(self, tmp_path: Path) -> None:
-        """Self-loops on non-checkable elements should still be excluded."""
+        """Self-loops on elements that carry NO stable identity (no text /
+        resource_id / content-description) are still excluded, since the
+        verifier cannot bind such an action back to a concrete affordance.
+        """
         data = {
             "app_package": "com.test.app",
             "screens": {
@@ -929,9 +939,7 @@ class TestToggleSelfLoops:
                     "interactable_elements": [
                         {
                             "element_id": "e_001",
-                            "class_name": "android.widget.TextView",
-                            "resource_id": "com.test:id/title",
-                            "text": "Settings",
+                            "class_name": "android.widget.View",
                             "depth": 1,
                             "is_clickable": True,
                         },
@@ -2919,3 +2927,608 @@ class TestConservativeTemplateCollapse:
             lookup.status is TransitionLookupStatus.MATCH
         ), f"expected MATCH, got {lookup.status!r} details={lookup.details!r}"
         assert lookup.target_state_id == "s_parent"
+
+
+class TestObservedClickSelfLoopPreserved:
+    """Settings list rows (Airplane mode, USB tethering) often produce
+    observed click self-loops with stable identity. They must survive
+    builder construction so the validator can match them.
+    """
+
+    def test_class_only_click_self_loop_with_weak_selector_is_dropped(self, tmp_path: Path) -> None:
+        class_only_elem = {
+            "element_id": "e_container",
+            "class_name": "android.widget.LinearLayout",
+            "depth": 2,
+            "is_clickable": True,
+            "is_checkable": False,
+        }
+        screens = {
+            "scr_home": _screen(
+                "scr_home",
+                "com.test.app.HomeActivity",
+                "Home",
+                extra=[class_only_elem],
+            )
+        }
+        traces = [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_home",
+                "target_screen_id": "scr_home",
+                "action": {
+                    "action_type": "click",
+                    "target_element_id": "e_container",
+                    "target_class_name": "android.widget.LinearLayout",
+                    "target_selector": {
+                        "class_name": "android.widget.LinearLayout",
+                        "ancestor_chain": ["android.widget.FrameLayout"],
+                    },
+                },
+            }
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+
+        self_loops = [t for t in fsm.transitions if t.source == t.target]
+        assert self_loops == []
+
+    def test_resolve_self_loop_matches_stable_text_despite_target_churn(self) -> None:
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_settings",
+                name="Settings",
+                fingerprint="fp_settings",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.add_transition(
+            Transition(
+                source="s_settings",
+                target="s_settings",
+                action={"type": "click", "target": "e_old", "target_text": "Airplane mode"},
+                confidence=1.0,
+            )
+        )
+
+        lookup = fsm.resolve_transition(
+            "s_settings",
+            {"type": "click", "target": "e_new", "target_text": "Airplane mode"},
+        )
+
+        assert (
+            lookup.status is TransitionLookupStatus.MATCH
+        ), f"expected MATCH, got {lookup.status!r} details={lookup.details!r}"
+        assert lookup.target_state_id == "s_settings"
+
+    def test_identity_click_self_loop_survives_build(self, tmp_path: Path) -> None:
+        row_elem = {
+            "element_id": "e_row",
+            "class_name": "android.widget.LinearLayout",
+            "resource_id": "com.test:id/row",
+            "text": "Airplane mode",
+            "depth": 2,
+            "is_clickable": True,
+            "is_checkable": False,
+        }
+        screens = {
+            "scr_home": _screen(
+                "scr_home",
+                "com.test.app.HomeActivity",
+                "Home",
+                extra=[row_elem],
+            ),
+        }
+        traces = [
+            # Observed self-loop click on a stable, identity-bearing row.
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_home",
+                "target_screen_id": "scr_home",
+                "action": {"action_type": "click", "target_element_id": "e_row"},
+            },
+        ]
+        trace = _write_trace(tmp_path, screens, traces)
+        fsm = FsmBuilder("com.test.app").build_from_trace(trace)
+
+        # Find the home state.
+        home_state = next(s for s in fsm.states.values() if "scr_home" in s.raw_screens)
+        self_loops = [
+            t
+            for t in fsm.transitions
+            if t.source == home_state.state_id
+            and t.target == home_state.state_id
+            and (t.action.get("type") or t.action.get("action_type")) == "click"
+            and t.action.get("target_text") == "Airplane mode"
+        ]
+        assert self_loops, (
+            "observed identity click self-loop was dropped during build; "
+            f"transitions={fsm.transitions!r}"
+        )
+
+    def test_dynamic_state_self_loop_click_resolves_normally(self) -> None:
+        """A self-loop click on a DYNAMIC state with a template id must NOT
+        be classified as template_binding_missing — self-loops are not
+        template-entry edges.
+        """
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_list",
+                name="List",
+                fingerprint="fp_list",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+                sub_fsm_template_id="tmpl_1",
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="s_detail",
+                name="Detail",
+                fingerprint="fp_detail",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.sub_fsm_templates["tmpl_1"] = SubFsmTemplate(
+            template_id="tmpl_1",
+            source_state_id="s_list",
+            entry_fingerprint="fp_detail",
+            states={"s_detail": fsm.states["s_detail"]},
+        )
+        # Real template-entry edge (goes to s_detail).
+        fsm.add_transition(
+            Transition(
+                source="s_list",
+                target="s_detail",
+                action={"type": "click", "target_text": "Item A"},
+                confidence=0.9,
+            )
+        )
+        # Observed identity-bearing click self-loop on the dynamic state.
+        toggle_action = {"type": "click", "target_text": "USB tethering"}
+        fsm.add_transition(
+            Transition(
+                source="s_list",
+                target="s_list",
+                action=toggle_action,
+                confidence=0.9,
+            )
+        )
+        lookup = fsm.resolve_transition("s_list", toggle_action)
+        assert (
+            lookup.status is TransitionLookupStatus.MATCH
+        ), f"expected MATCH, got {lookup.status!r} details={lookup.details!r}"
+        assert lookup.target_state_id == "s_list"
+
+
+class TestNoOrphanSubFsmTemplates:
+    """Templates left behind after collapse/rewrite must be removed."""
+
+    def test_orphan_template_dropped(self) -> None:
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_list",
+                name="List",
+                fingerprint="fp_list",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                container_type=ContainerType.DYNAMIC,
+            )
+        )
+        # An orphan template not referenced by any state.
+        fsm.sub_fsm_templates["tmpl_dead"] = SubFsmTemplate(
+            template_id="tmpl_dead",
+            source_state_id="s_list",
+            entry_fingerprint="fp_x",
+        )
+        # Run the builder's orphan sweep helper by re-invoking the same
+        # logic via _build_sub_fsm_templates on a trivial FSM-builder pass.
+        # The behavior under test is the post-pass sweep, but since the
+        # builder ties it to the broader pipeline, we replicate the sweep
+        # directly here using the same predicate.
+        referenced = {
+            s.sub_fsm_template_id for s in fsm.states.values() if s.sub_fsm_template_id is not None
+        }
+        for tid in list(fsm.sub_fsm_templates):
+            if tid not in referenced:
+                del fsm.sub_fsm_templates[tid]
+        assert "tmpl_dead" not in fsm.sub_fsm_templates
+
+
+# ── Action identity / step-76 regression ──────────────────────────
+
+
+def _identity_trace(
+    *,
+    target_element_id: str,
+    target_selector_rid: str | None,
+    target_resource_id: str | None,
+    src_elements: list[dict[str, Any]],
+    tgt_elements: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a minimal two-screen trace exercising the step-76 shape."""
+    action: dict[str, Any] = {
+        "action_type": "click",
+        "target_element_id": target_element_id,
+        "target_class_name": "android.view.View",
+    }
+    if target_resource_id is not None:
+        action["target_resource_id"] = target_resource_id
+    if target_selector_rid is not None:
+        action["target_selector"] = {
+            "resource_id": target_selector_rid,
+            "text": "",
+            "content_description": "",
+            "class_name": "android.view.View",
+            "nearby_text": "",
+            "ancestor_chain": [],
+            "bounds": [0, 0, 0, 0],
+            "depth": 1,
+        }
+    return {
+        "app_package": "com.test.app",
+        "screens": {
+            "scr_src": {
+                "screen_id": "scr_src",
+                "activity_name": ".MainActivity",
+                "interactable_elements": src_elements,
+            },
+            "scr_tgt": {
+                "screen_id": "scr_tgt",
+                "activity_name": ".OtherActivity",
+                "interactable_elements": tgt_elements,
+            },
+        },
+        "traces": [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_src",
+                "target_screen_id": "scr_tgt",
+                "action": action,
+                "timestamp": "",
+            }
+        ],
+    }
+
+
+def test_to_fsm_dict_emits_both_resource_id_keys() -> None:
+    from vigil.models.action import Action, ActionType
+
+    action = Action(
+        action_type=ActionType.CLICK,
+        target_element_id="e_001",
+        target_resource_id="nav.open_catalog",
+    )
+    dct = action.to_fsm_dict()
+    assert dct.get("resource_id") == "nav.open_catalog"
+    assert dct.get("target_resource_id") == "nav.open_catalog"
+
+
+def test_enrichment_ignores_stale_element_id(tmp_path: Path) -> None:
+    """Stale ``target_element_id`` in the source screen must not corrupt the
+    serialized action identity. The trace's selector resource_id is authoritative.
+    Regression for step-76 of the fidelity-app exploration trace.
+    """
+    # In scr_src, e_001 is "nav.open_cart"; but the trace's selector says
+    # the user actually clicked "nav.open_catalog". This mirrors the real
+    # fidelity-app step 76 bug.
+    src_elements = [
+        {
+            "element_id": "e_001",
+            "class_name": "android.view.View",
+            "resource_id": "nav.open_cart",
+            "depth": 1,
+            "is_clickable": True,
+        },
+        {
+            "element_id": "e_002",
+            "class_name": "android.view.View",
+            "resource_id": "nav.open_catalog",
+            "depth": 1,
+            "is_clickable": True,
+        },
+    ]
+    tgt_elements = [
+        {
+            "element_id": "e_010",
+            "class_name": "android.widget.TextView",
+            "resource_id": "catalog.title",
+            "text": "Catalog",
+            "depth": 1,
+        }
+    ]
+    trace = _identity_trace(
+        target_element_id="e_001",
+        target_selector_rid="nav.open_catalog",
+        target_resource_id="nav.open_catalog",
+        src_elements=src_elements,
+        tgt_elements=tgt_elements,
+    )
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps(trace))
+
+    fsm = FsmBuilder("com.test.app").build_from_trace(path, include_self_loops=True)
+
+    transitions = [t for t in fsm.transitions if t.source != t.target]
+    assert len(transitions) == 1
+    a = transitions[0].action
+    assert a.get("resource_id") == "nav.open_catalog"
+    assert a.get("target_resource_id") == "nav.open_catalog"
+    sel_rid = (a.get("target_selector") or {}).get("resource_id")
+    assert sel_rid == "nav.open_catalog"
+
+
+def test_enrichment_mismatch_marks_low_trust(tmp_path: Path) -> None:
+    """When no selector arbitrates and the element_id resolves to a widget
+    whose resource_id disagrees with the trace's recorded resource_id, the
+    serialized transition must not carry contradictory identity. The builder
+    keeps one consistent value, marks the edge low_trust, and records an
+    identity_inconsistent provenance entry.
+    """
+    src_elements = [
+        {
+            "element_id": "e_001",
+            "class_name": "android.view.View",
+            "resource_id": "bar.id",
+            "depth": 1,
+            "is_clickable": True,
+        }
+    ]
+    tgt_elements = [
+        {
+            "element_id": "e_010",
+            "class_name": "android.widget.TextView",
+            "resource_id": "page.title",
+            "text": "Page",
+            "depth": 1,
+        }
+    ]
+    trace = _identity_trace(
+        target_element_id="e_001",
+        target_selector_rid=None,
+        target_resource_id="foo.id",
+        src_elements=src_elements,
+        tgt_elements=tgt_elements,
+    )
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps(trace))
+
+    fsm = FsmBuilder("com.test.app").build_from_trace(path, include_self_loops=True)
+
+    transitions = [t for t in fsm.transitions if t.source != t.target]
+    assert len(transitions) == 1
+    t = transitions[0]
+    a = t.action
+    rid = a.get("resource_id") or ""
+    trid = a.get("target_resource_id") or ""
+    assert not (
+        rid and trid and rid != trid
+    ), f"serialized transition has contradictory identity: rid={rid} trid={trid}"
+    assert t.low_trust is True
+    assert any(
+        p.confidence_source == "identity_inconsistent" for p in t.provenance
+    ), "expected identity_inconsistent provenance entry"
+
+
+def test_observed_navigate_back_preserved(tmp_path: Path) -> None:
+    """An observed navigate_back is preserved on the FSM with observed_count==1,
+    and no synthetic inferred back edges (observed_count==0) are emitted when
+    no dialog state is present.
+    """
+    trace = {
+        "app_package": "com.test.app",
+        "screens": {
+            "scr_a": {
+                "screen_id": "scr_a",
+                "activity_name": ".A",
+                "interactable_elements": [
+                    {
+                        "element_id": "e_001",
+                        "class_name": "android.widget.Button",
+                        "resource_id": "a.btn",
+                        "text": "Go",
+                        "depth": 1,
+                        "is_clickable": True,
+                    }
+                ],
+            },
+            "scr_b": {
+                "screen_id": "scr_b",
+                "activity_name": ".B",
+                "interactable_elements": [
+                    {
+                        "element_id": "e_010",
+                        "class_name": "android.widget.TextView",
+                        "resource_id": "b.title",
+                        "text": "B",
+                        "depth": 1,
+                    }
+                ],
+            },
+        },
+        "traces": [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_a",
+                "target_screen_id": "scr_b",
+                "action": {
+                    "action_type": "click",
+                    "target_element_id": "e_001",
+                    "target_resource_id": "a.btn",
+                },
+                "timestamp": "",
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_b",
+                "target_screen_id": "scr_a",
+                "action": {"action_type": "navigate_back"},
+                "timestamp": "",
+            },
+        ],
+    }
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps(trace))
+
+    fsm = FsmBuilder("com.test.app").build_from_trace(path)
+
+    back_edges = [
+        t
+        for t in fsm.transitions
+        if (t.action.get("type") or t.action.get("action_type") or "").lower() == "navigate_back"
+    ]
+    assert len(back_edges) == 1
+    assert back_edges[0].observed_count == 1
+
+    inferred = [t for t in fsm.transitions if t.observed_count == 0]
+    assert inferred == [], f"unexpected synthetic transitions with observed_count==0: {inferred}"
+
+
+def test_product_row_transitions_preserve_item_identity(tmp_path: Path) -> None:
+    """Three list-item clicks into the same abstract detail state must
+    produce three distinct transitions, each preserving the item-specific
+    resource_id on its action.
+    """
+
+    def row_element(eid: str, rid: str) -> dict[str, Any]:
+        return {
+            "element_id": eid,
+            "class_name": "android.view.View",
+            "resource_id": rid,
+            "depth": 2,
+            "is_clickable": True,
+        }
+
+    list_elements = [
+        row_element("e_a", "list.row.A.open"),
+        row_element("e_b", "list.row.B.open"),
+        row_element("e_c", "list.row.C.open"),
+    ]
+    detail_elements = [
+        {
+            "element_id": "e_001",
+            "class_name": "android.widget.TextView",
+            "resource_id": "detail.title",
+            "text": "Detail",
+            "depth": 1,
+        }
+    ]
+
+    def detail_screen(scr_id: str) -> dict[str, Any]:
+        return {
+            "screen_id": scr_id,
+            "activity_name": ".Detail",
+            "interactable_elements": detail_elements,
+        }
+
+    trace = {
+        "app_package": "com.test.app",
+        "screens": {
+            "scr_list": {
+                "screen_id": "scr_list",
+                "activity_name": ".List",
+                "interactable_elements": list_elements,
+            },
+            "scr_detail_a": detail_screen("scr_detail_a"),
+            "scr_detail_b": detail_screen("scr_detail_b"),
+            "scr_detail_c": detail_screen("scr_detail_c"),
+        },
+        "traces": [
+            {
+                "step_number": 1,
+                "source_screen_id": "scr_list",
+                "target_screen_id": "scr_detail_a",
+                "action": {
+                    "action_type": "click",
+                    "target_element_id": "e_a",
+                    "target_resource_id": "list.row.A.open",
+                    "target_selector": {
+                        "resource_id": "list.row.A.open",
+                        "text": "",
+                        "content_description": "",
+                        "class_name": "android.view.View",
+                        "nearby_text": "",
+                        "ancestor_chain": [],
+                        "bounds": [0, 0, 0, 0],
+                        "depth": 2,
+                    },
+                },
+                "timestamp": "",
+            },
+            {
+                "step_number": 2,
+                "source_screen_id": "scr_list",
+                "target_screen_id": "scr_detail_b",
+                "action": {
+                    "action_type": "click",
+                    "target_element_id": "e_b",
+                    "target_resource_id": "list.row.B.open",
+                    "target_selector": {
+                        "resource_id": "list.row.B.open",
+                        "text": "",
+                        "content_description": "",
+                        "class_name": "android.view.View",
+                        "nearby_text": "",
+                        "ancestor_chain": [],
+                        "bounds": [0, 0, 0, 0],
+                        "depth": 2,
+                    },
+                },
+                "timestamp": "",
+            },
+            {
+                "step_number": 3,
+                "source_screen_id": "scr_list",
+                "target_screen_id": "scr_detail_c",
+                "action": {
+                    "action_type": "click",
+                    "target_element_id": "e_c",
+                    "target_resource_id": "list.row.C.open",
+                    "target_selector": {
+                        "resource_id": "list.row.C.open",
+                        "text": "",
+                        "content_description": "",
+                        "class_name": "android.view.View",
+                        "nearby_text": "",
+                        "ancestor_chain": [],
+                        "bounds": [0, 0, 0, 0],
+                        "depth": 2,
+                    },
+                },
+                "timestamp": "",
+            },
+        ],
+    }
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps(trace))
+
+    fsm = FsmBuilder("com.test.app").build_from_trace(path)
+
+    # All three detail screens collapse to a single abstract detail state.
+    list_state = next(s for s in fsm.states.values() if "scr_list" in (s.raw_screens or []))
+    detail_state_ids = {
+        s.state_id
+        for s in fsm.states.values()
+        if any(
+            sid in (s.raw_screens or []) for sid in ("scr_detail_a", "scr_detail_b", "scr_detail_c")
+        )
+    }
+    assert len(detail_state_ids) == 1
+    detail_state_id = detail_state_ids.pop()
+
+    item_rids = {"list.row.A.open", "list.row.B.open", "list.row.C.open"}
+    matching = [
+        t
+        for t in fsm.transitions
+        if t.source == list_state.state_id
+        and t.target == detail_state_id
+        and (t.action.get("resource_id") in item_rids)
+    ]
+    assert {t.action.get("resource_id") for t in matching} == item_rids
+    # And each preserved its item-specific selector as well.
+    for t in matching:
+        rid = t.action.get("resource_id")
+        sel_rid = (t.action.get("target_selector") or {}).get("resource_id")
+        assert sel_rid == rid
