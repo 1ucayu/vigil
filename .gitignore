@@ -37,6 +37,9 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
+# Local one-off render artifacts
+/html
+
 # mobile agents: keep our scaffolding, ignore upstream clones + venvs + weights
 mobile_agents/m3a/android_world/
 mobile_agents/mobile-agent-v2/MobileAgent/
