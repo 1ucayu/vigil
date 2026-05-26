@@ -69,6 +69,12 @@ uv run pytest tests/test_app_prior.py tests/test_fsm_builder.py tests/test_seman
 uv run vigil-explore --app com.android.settings --steps 20
 ```
 
+FSM JSON schema versions:
+`schema_version` 2 = flat-only (legacy).
+`schema_version` 3 = nested + flat mirrors (transitional).
+`schema_version` 4 = nested-only canonical (current).
+Reader accepts 2/3/4.
+
 ---
 
 ## Paper Model

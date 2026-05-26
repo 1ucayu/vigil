@@ -46,6 +46,43 @@ def _make_state(state_id: str = "s_001", **overrides) -> AbstractState:
     return AbstractState(**defaults)
 
 
+_NESTED_STATE_KEYS = (
+    "identity",
+    "android_context",
+    "evidence",
+    "abstraction",
+    "invariant_specs",
+    "annotations",
+    "legacy_invariants",
+)
+
+_LEGACY_FLAT_STATE_KEYS = (
+    "fingerprint",
+    "structural_fingerprint",
+    "activity_name",
+    "raw_screens",
+    "container_type",
+    "container_resource_id",
+    "sub_fsm_template_id",
+    "semantic_profile",
+    "state_invariants",
+    "invariant_confidence",
+    "invariants",
+)
+
+
+def _assert_state_payload_is_nested_only(state_payload: dict) -> None:
+    """Schema v4 contract: nested submodels present, legacy flat keys absent.
+
+    Use on any serialized AbstractState dict, including nested template
+    states inside ``sub_fsm_templates[*].states``.
+    """
+    for nested in _NESTED_STATE_KEYS:
+        assert nested in state_payload, f"missing nested key: {nested}"
+    for flat in _LEGACY_FLAT_STATE_KEYS:
+        assert flat not in state_payload, f"unexpected legacy flat key: {flat}"
+
+
 # --- UIElement.get_skeleton ---
 
 
@@ -485,9 +522,9 @@ class TestSubFsmTemplate:
 
         payload = json.loads(path.read_text())
         template_state = payload["sub_fsm_templates"]["tmpl_1"]["states"]["tmpl_s1"]
+        # Template states honour the same nested-only schema-v4 contract.
+        _assert_state_payload_is_nested_only(template_state)
         assert template_state["identity"]["functional_hash"] == "fp_tmpl_s1"
-        assert template_state["fingerprint"] == "fp_tmpl_s1"
-        assert template_state["raw_screens"] == template_state["evidence"]["raw_screen_ids"]
 
         restored = AppFSM.deserialize(path)
         assert restored.states["s_list"].abstraction.template_id == "tmpl_1"
@@ -974,7 +1011,7 @@ class TestNestedStateSchema:
                 evidence={"raw_screen_ids": ["a"], "observation_count": 7},
             )
 
-    def test_serialized_json_includes_nested_fields_and_flat_mirrors(self, tmp_path):
+    def test_serialized_json_is_nested_only(self, tmp_path):
         fsm = AppFSM("com.test.app")
         fsm.add_state(
             _make_state(
@@ -1002,58 +1039,28 @@ class TestNestedStateSchema:
         fsm.serialize(path)
 
         payload = json.loads(path.read_text())
-        assert payload["schema_version"] == "3"
+        assert payload["schema_version"] == "4"
         state_payload = payload["states"]["s1"]
-        # Nested canonical keys present.
-        for nested in ("identity", "android_context", "evidence", "abstraction", "annotations"):
-            assert nested in state_payload
-        # Transitional flat mirrors are computed from nested canonical fields
-        # during schema v3 serialization; they are not separate in-memory
-        # storage.
-        for flat in (
-            "fingerprint",
-            "structural_fingerprint",
-            "activity_name",
-            "raw_screens",
-            "container_type",
-            "container_resource_id",
-            "sub_fsm_template_id",
-            "semantic_profile",
-            "state_invariants",
-            "invariant_confidence",
-            "invariants",
-        ):
-            assert flat in state_payload
-        assert state_payload["fingerprint"] == "fp_s1"
-        assert state_payload["fingerprint"] == state_payload["identity"]["functional_hash"]
-        assert state_payload["structural_fingerprint"] == "struct_s1"
-        assert (
-            state_payload["structural_fingerprint"] == state_payload["identity"]["structural_hash"]
-        )
-        assert state_payload["activity_name"] == "com.test.MainActivity"
-        assert state_payload["activity_name"] == state_payload["android_context"]["activity_name"]
-        assert state_payload["raw_screens"] == ["raw_a", "raw_b"]
-        assert state_payload["raw_screens"] == state_payload["evidence"]["raw_screen_ids"]
-        assert state_payload["container_type"] == "dynamic"
-        assert state_payload["container_type"] == state_payload["abstraction"]["container_type"]
-        assert state_payload["container_resource_id"] == "id/list"
-        assert (
-            state_payload["container_resource_id"]
-            == state_payload["abstraction"]["container_selector"]["resource_id"]
-        )
-        assert state_payload["sub_fsm_template_id"] == "tmpl"
-        assert state_payload["sub_fsm_template_id"] == state_payload["abstraction"]["template_id"]
-        assert state_payload["semantic_profile"]["alt_text"] == "alt"
-        assert state_payload["semantic_profile"]["page_function"] == "home"
-        assert state_payload["semantic_profile"]["expected_actions"] == ["tap"]
-        assert state_payload["semantic_profile"]["icon_labels"] == {"e1": "gear"}
-        assert state_payload["state_invariants"] == ["e1", "e2"]
-        assert state_payload["state_invariants"] == [
-            spec["expr"] for spec in state_payload["invariant_specs"]
-        ]
-        assert state_payload["invariant_confidence"] == 0.6
-        assert state_payload["invariants"] == ["legacy e"]
-        # ``legacy_invariants`` is the one intentional non-runtime survivor.
+
+        _assert_state_payload_is_nested_only(state_payload)
+
+        # Nested submodel contents are correct.
+        assert state_payload["identity"]["functional_hash"] == "fp_s1"
+        assert state_payload["identity"]["structural_hash"] == "struct_s1"
+        assert state_payload["android_context"]["activity_name"] == "com.test.MainActivity"
+        assert state_payload["evidence"]["raw_screen_ids"] == ["raw_a", "raw_b"]
+        assert state_payload["abstraction"]["container_type"] == "dynamic"
+        assert state_payload["abstraction"]["container_selector"] == {"resource_id": "id/list"}
+        assert state_payload["abstraction"]["template_id"] == "tmpl"
+        assert [spec["expr"] for spec in state_payload["invariant_specs"]] == ["e1", "e2"]
+        assert max(spec["confidence"] for spec in state_payload["invariant_specs"]) == 0.6
+        # icon_labels round-trips into annotations.widget_aliases.
+        widget_labels = {a["label"] for a in state_payload["annotations"]["widget_aliases"]}
+        assert "gear" in widget_labels
+        assert state_payload["annotations"]["alt_text"] == "alt"
+        assert state_payload["annotations"]["page_function"] == "home"
+        assert state_payload["annotations"]["expected_actions"] == ["tap"]
+        # legacy_invariants stays as the one intentional non-runtime survivor.
         assert state_payload["legacy_invariants"] == ["legacy e"]
 
     def test_serialize_round_trip_preserves_aliases(self, tmp_path):
@@ -1093,3 +1100,182 @@ class TestNestedStateSchema:
         assert inv.confidence == 0.8
         assert inv.source == "manual"
         assert inv.evidence_count == 0
+
+
+class TestSchemaVersionCompatibility:
+    def test_loads_schema_v2_flat_bundle(self, tmp_path):
+        data = {
+            "app_package": "com.test.app",
+            "version": "0.1.0",
+            "schema_version": "2",
+            "initial_state": "s1",
+            "states": {
+                "s1": {
+                    "state_id": "s1",
+                    "name": "Home",
+                    "fingerprint": "fp_home",
+                    "structural_fingerprint": "struct_home",
+                    "hierarchy_level": "activity",
+                    "activity_name": "com.example.HomeActivity",
+                    "raw_screens": ["raw_001"],
+                    "container_type": "dynamic",
+                    "container_resource_id": "com.app:id/list",
+                    "sub_fsm_template_id": "tmpl_detail",
+                    "state_invariants": ['read(title, text) != ""'],
+                    "invariant_confidence": 0.85,
+                    "invariants": ["legacy expr"],
+                    "semantic_profile": {
+                        "alt_text": "alt",
+                        "page_function": "home",
+                        "expected_actions": ["go"],
+                        "icon_labels": {"e1": "gear"},
+                        "generation_confidence": 0.9,
+                    },
+                }
+            },
+            "transitions": [],
+        }
+        path = tmp_path / "schema_v2_fsm.json"
+        path.write_text(json.dumps(data))
+
+        restored = AppFSM.deserialize(path)
+
+        s = restored.states["s1"]
+        assert s.identity.functional_hash == "fp_home"
+        assert s.identity.structural_hash == "struct_home"
+        assert s.android_context.activity_name == "com.example.HomeActivity"
+        assert s.evidence.raw_screen_ids == ["raw_001"]
+        assert s.abstraction.container_type == ContainerType.DYNAMIC
+        assert s.abstraction.container_selector == {"resource_id": "com.app:id/list"}
+        assert s.abstraction.template_id == "tmpl_detail"
+        assert s.state_invariants == ['read(title, text) != ""']
+        assert s.invariant_confidence == 0.85
+        assert s.legacy_invariants == ["legacy expr"]
+        assert s.annotations.page_function == "home"
+
+    def test_loads_schema_v3_mixed_bundle(self, tmp_path):
+        data = {
+            "app_package": "com.test.app",
+            "version": "0.1.0",
+            "schema_version": "3",
+            "initial_state": "s1",
+            "states": {
+                "s1": {
+                    "state_id": "s1",
+                    "name": "Home",
+                    "hierarchy_level": "activity",
+                    "identity": {
+                        "functional_hash": "fp_home",
+                        "structural_hash": "struct_home",
+                    },
+                    "android_context": {"activity_name": "com.example.HomeActivity"},
+                    "evidence": {"raw_screen_ids": ["raw_001"], "observation_count": 1},
+                    "abstraction": {
+                        "container_type": "dynamic",
+                        "container_selector": {"resource_id": "com.app:id/list"},
+                        "template_id": "tmpl_detail",
+                    },
+                    "invariant_specs": [
+                        {
+                            "expr": 'read(title, text) != ""',
+                            "confidence": 0.85,
+                            "source": "mined_multivisit",
+                        }
+                    ],
+                    "annotations": {
+                        "alt_text": "alt",
+                        "page_function": "home",
+                        "expected_actions": ["go"],
+                        "widget_aliases": [{"element_id": "e1", "label": "gear"}],
+                        "generation_confidence": 0.9,
+                    },
+                    "legacy_invariants": ["legacy expr"],
+                    "fingerprint": "fp_home",
+                    "structural_fingerprint": "struct_home",
+                    "activity_name": "com.example.HomeActivity",
+                    "raw_screens": ["raw_001"],
+                    "container_type": "dynamic",
+                    "container_resource_id": "com.app:id/list",
+                    "sub_fsm_template_id": "tmpl_detail",
+                    "state_invariants": ['read(title, text) != ""'],
+                    "invariant_confidence": 0.85,
+                    "invariants": ["legacy expr"],
+                    "semantic_profile": {
+                        "alt_text": "alt",
+                        "page_function": "home",
+                        "expected_actions": ["go"],
+                        "icon_labels": {"e1": "gear"},
+                        "generation_confidence": 0.9,
+                    },
+                }
+            },
+            "transitions": [],
+        }
+        path = tmp_path / "schema_v3_fsm.json"
+        path.write_text(json.dumps(data))
+
+        restored = AppFSM.deserialize(path)
+
+        s = restored.states["s1"]
+        assert s.identity.functional_hash == "fp_home"
+        assert s.identity.structural_hash == "struct_home"
+        assert s.android_context.activity_name == "com.example.HomeActivity"
+        assert s.evidence.raw_screen_ids == ["raw_001"]
+        assert s.abstraction.container_type == ContainerType.DYNAMIC
+        assert s.abstraction.template_id == "tmpl_detail"
+        assert s.state_invariants == ['read(title, text) != ""']
+        assert s.invariants == ["legacy expr"]
+
+    def test_loads_schema_v4_nested_only_bundle(self, tmp_path):
+        fsm = AppFSM("com.test.app")
+        fsm.add_state(
+            _make_state(
+                "s1",
+                structural_fingerprint="struct_s1",
+                activity_name="com.test.MainActivity",
+                raw_screens=["raw_a"],
+                state_invariants=["read(title, text) != ''"],
+                invariant_confidence=0.7,
+            )
+        )
+        fsm.initial_state = "s1"
+        path = tmp_path / "schema_v4_fsm.json"
+
+        fsm.serialize(path)
+
+        payload = json.loads(path.read_text())
+        assert payload["schema_version"] == "4"
+        _assert_state_payload_is_nested_only(payload["states"]["s1"])
+
+        restored = AppFSM.deserialize(path)
+        assert restored.initial_state == "s1"
+        assert restored.states["s1"].identity.functional_hash == "fp_s1"
+        assert restored.states["s1"].android_context.activity_name == "com.test.MainActivity"
+
+    def test_unknown_schema_version_raises(self, tmp_path):
+        data = {
+            "app_package": "com.test.app",
+            "version": "0.1.0",
+            "schema_version": "99",
+            "states": {},
+            "transitions": [],
+        }
+        path = tmp_path / "unknown_schema_fsm.json"
+        path.write_text(json.dumps(data))
+
+        with pytest.raises(ValueError, match="schema_version '99'"):
+            AppFSM.deserialize(path)
+
+    def test_raw_json_consumers_see_nested_state_keys(self, tmp_path):
+        fsm = AppFSM("com.test.app")
+        fsm.add_state(_make_state("s1"))
+        fsm.add_state(_make_state("s2", raw_screens=["raw_002"]))
+        path = tmp_path / "fsm.json"
+
+        fsm.serialize(path)
+
+        payload = json.loads(path.read_text())
+        assert payload["schema_version"] == "4"
+        for state_payload in payload["states"].values():
+            for key in _NESTED_STATE_KEYS:
+                assert key in state_payload

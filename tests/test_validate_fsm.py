@@ -543,9 +543,9 @@ class TestFidelityTraceRoundTrip:
     def test_fidelity_trace_survives_serialize_deserialize(self, tmp_path) -> None:
         """Behavior preservation across the nested schema migration.
 
-        Build the FSM from the fidelity trace, serialize via the migrated
-        ``model_dump_compat`` path, deserialize, and re-validate the same
-        trace. The 107/107 OK count must not change.
+        Build the FSM from the fidelity trace, serialize it (nested-only
+        schema v4 output), deserialize via the legacy-compatible reader,
+        and re-validate the same trace. The 107/107 OK count must not change.
         """
         from collections import Counter
 

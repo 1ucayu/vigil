@@ -786,37 +786,6 @@ class AbstractState(BaseModel):
     def invariants(self, value: list[str]) -> None:
         object.__setattr__(self, "legacy_invariants", [str(expr) for expr in value])
 
-    def model_dump_with_legacy_mirrors(self) -> dict[str, Any]:
-        """Dump schema v3 plus transitional flat compatibility mirrors.
-
-        Schema v3 canonical storage remains the nested submodels above. For one
-        migration window, serialized FSM JSON also includes legacy flat fields
-        computed from those nested fields so raw-JSON consumers can migrate
-        without reading stale duplicate state.
-        """
-        data = self.model_dump(mode="json")
-        semantic_profile = self.semantic_profile
-        data.update(
-            {
-                "fingerprint": self.fingerprint,
-                "structural_fingerprint": self.structural_fingerprint,
-                "activity_name": self.activity_name,
-                "raw_screens": list(self.raw_screens),
-                "container_type": self.container_type.value,
-                "container_resource_id": self.container_resource_id,
-                "sub_fsm_template_id": self.sub_fsm_template_id,
-                "semantic_profile": (
-                    semantic_profile.model_dump(mode="json")
-                    if semantic_profile is not None
-                    else None
-                ),
-                "state_invariants": list(self.state_invariants),
-                "invariant_confidence": self.invariant_confidence,
-                "invariants": list(self.invariants),
-            }
-        )
-        return data
-
 
 class ProvenanceEntry(BaseModel):
     """Single evidence record explaining how a transition entered the FSM.
@@ -888,14 +857,6 @@ class SubFsmTemplate(BaseModel):
     transitions: list[Transition] = Field(default_factory=list)
     parameter_schema: dict[str, str] = Field(default_factory=dict)
     item_skeleton: str = ""
-
-    def model_dump_with_legacy_mirrors(self) -> dict[str, Any]:
-        data = self.model_dump(mode="json")
-        data["states"] = {
-            sid: state.model_dump_with_legacy_mirrors() for sid, state in self.states.items()
-        }
-        data["transitions"] = [t.model_dump(mode="json") for t in self.transitions]
-        return data
 
 
 class AppFSM:
@@ -1204,18 +1165,27 @@ class AppFSM:
         return None
 
     def serialize(self, path: str | Path) -> None:
-        """Serialize the FSM to schema v3 JSON with migration-window flat mirrors."""
+        """Serialize the FSM to schema v4 JSON (nested-only canonical shape).
+
+        Schema v4 writes each state as its canonical nested submodels (``identity``,
+        ``android_context``, ``evidence``, ``abstraction``, ``invariant_specs``,
+        ``annotations``, ``legacy_invariants``) with no flat mirrors. The reader
+        side (``AppFSM.deserialize``) still accepts v2 flat bundles and v3
+        nested-plus-flat-mirror bundles via ``AbstractState``'s
+        ``model_validator(mode="before")`` for backward compatibility. New
+        writes are always v4.
+        """
         path = Path(path)
         data = {
             "app_package": self.app_package,
             "version": self.version,
-            "schema_version": "3",
+            "schema_version": "4",
             "initial_state": self.initial_state,
-            "states": {sid: s.model_dump_with_legacy_mirrors() for sid, s in self.states.items()},
+            "states": {sid: s.model_dump(mode="json") for sid, s in self.states.items()},
             "transitions": [t.model_dump() for t in self.transitions],
             "evolution_log": self.evolution_log,
             "sub_fsm_templates": {
-                tid: t.model_dump_with_legacy_mirrors() for tid, t in self.sub_fsm_templates.items()
+                tid: t.model_dump(mode="json") for tid, t in self.sub_fsm_templates.items()
             },
         }
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1226,6 +1196,12 @@ class AppFSM:
         """Deserialize an FSM from a JSON file."""
         path = Path(path)
         data = json.loads(path.read_text())
+        schema_version = data.get("schema_version", "2")
+        if schema_version not in {"2", "3", "4"}:
+            raise ValueError(
+                f"Unsupported FSM schema_version {schema_version!r}; "
+                "expected one of {'2', '3', '4'}"
+            )
         fsm = cls(app_package=data["app_package"])
         fsm.version = data.get("version", "0.1.0")
         fsm.initial_state = data.get("initial_state")
