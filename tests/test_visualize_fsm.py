@@ -181,7 +181,11 @@ def test_render_fsm_html_can_opt_into_sensitive_details(tmp_path: Path) -> None:
 
     assert state["raw_screens"] == ["raw_screen_secret"]
     assert state["semantic_profile"]["icon_labels"] == {"secret_icon": "secret icon label"}
+    # Legacy invariants remain printable metadata; state_invariants are the
+    # canonical runtime-enforced mirror.
     assert state["invariants"] == ["secret invariant"]
+    assert state["legacy_invariants"] == ["secret invariant"]
+    assert state["state_invariants"] == ["secret state invariant"]
     assert transition["action"]["target"] == "wifi_entry"
     assert transition["action"]["target_text"] == "private network"
     assert "guard" not in transition

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import networkx as nx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class HierarchyLevel(StrEnum):
@@ -46,6 +46,22 @@ class ContainerType(StrEnum):
     STATIC = "static"
     DYNAMIC = "dynamic"
     NONE = "none"
+
+
+class StateKind(StrEnum):
+    """Policy-relevant category of an abstract state.
+
+    Derived passively from ``HierarchyLevel`` for now: ``COMPONENT`` maps to
+    ``DIALOG``, everything else defaults to ``NORMAL``. Verifier policy is not
+    routed off of ``StateKind`` in this phase.
+    """
+
+    NORMAL = "normal"
+    DIALOG = "dialog"
+    TERMINAL = "terminal"
+    ERROR = "error"
+    SYSTEM = "system"
+    EXTERNAL = "external"
 
 
 class TransitionLookupStatus(StrEnum):
@@ -218,25 +234,175 @@ class StateSemanticProfile(BaseModel):
     generation_confidence: float = 0.0
 
 
+class StateIdentity(BaseModel):
+    """Deterministic identity for an abstract state.
+
+    Replaces the ambiguous flat ``fingerprint`` field with explicit functional
+    vs. structural hashes plus algorithm/version provenance so future identity
+    algorithm changes do not silently break stored FSMs.
+    """
+
+    functional_hash: str
+    structural_hash: str | None = None
+    secondary_hash: str | None = None
+    identity_version: str = "v1"
+    algorithm: str = "hybrid_ui_identity"
+
+
+class AndroidStateContext(BaseModel):
+    """Android-specific observation context, kept separate from abstract identity."""
+
+    activity_name: str | None = None
+    package_name: str | None = None
+    window_type: str | None = None
+
+
+class StateEvidence(BaseModel):
+    """Trace-derived evidence supporting that this state exists.
+
+    XML/runtime traces are the deterministic source of truth — this is where
+    the supporting screen ids live.
+    """
+
+    raw_screen_ids: list[str] = Field(default_factory=list)
+    observation_count: int = 0
+    construction_source: str = "observed_trace"
+    first_seen_trace: str | None = None
+    trust_level: str = "observed"
+
+    @model_validator(mode="after")
+    def _default_observation_count(self) -> StateEvidence:
+        if self.observation_count == 0 and self.raw_screen_ids:
+            object.__setattr__(self, "observation_count", len(self.raw_screen_ids))
+        return self
+
+
+class StateAbstraction(BaseModel):
+    """Dynamic container / template metadata for this state."""
+
+    container_type: ContainerType = ContainerType.NONE
+    container_selector: dict[str, Any] = Field(default_factory=dict)
+    template_id: str | None = None
+    template_role: str = "normal"
+    parameter_schema: dict[str, str] = Field(default_factory=dict)
+    parameter_bindings: dict[str, str] = Field(default_factory=dict)
+
+
+class StateInvariant(BaseModel):
+    """A single runtime-checkable invariant with its own confidence + provenance.
+
+    Replaces the coarse per-state scalar ``invariant_confidence`` so each
+    predicate carries its own evidence.
+    """
+
+    expr: str
+    confidence: float = 0.0
+    source: str = "unknown"
+    evidence_count: int = 0
+
+
+def _model_dump_for_compare(model: BaseModel) -> dict[str, Any]:
+    return model.model_dump(mode="json")
+
+
+def _nested_metadata_differs(model: BaseModel, default_model: BaseModel) -> bool:
+    return _model_dump_for_compare(model) != _model_dump_for_compare(default_model)
+
+
+def _invariant_expr(value: Any) -> str:
+    if isinstance(value, StateInvariant):
+        return value.expr
+    if isinstance(value, BaseModel):
+        value = value.model_dump()
+    if isinstance(value, dict):
+        return str(value.get("expr", ""))
+    return str(value)
+
+
+def _as_invariant_items(values: Any) -> list[Any]:
+    if values is None:
+        return []
+    if isinstance(values, str | dict | BaseModel):
+        return [values]
+    return list(values)
+
+
+def _invariant_expr_set(values: Any) -> set[str]:
+    return {_invariant_expr(value) for value in _as_invariant_items(values)}
+
+
+def _dedupe_invariant_texts(values: Any) -> list[str]:
+    texts: list[str] = []
+    seen: set[str] = set()
+    for value in _as_invariant_items(values):
+        text = _invariant_expr(value)
+        if text in seen:
+            continue
+        seen.add(text)
+        texts.append(text)
+    return texts
+
+
+def _state_invariant_specs(values: Any, confidence: float, source: str) -> list[Any]:
+    specs: list[Any] = []
+    seen_exprs: set[str] = set()
+    for value in _as_invariant_items(values):
+        expr = _invariant_expr(value)
+        if expr in seen_exprs:
+            continue
+        seen_exprs.add(expr)
+        if isinstance(value, StateInvariant | dict):
+            specs.append(value)
+        else:
+            specs.append(
+                {
+                    "expr": expr,
+                    "confidence": confidence,
+                    "source": source,
+                    "evidence_count": 0,
+                }
+            )
+    return specs
+
+
+class StateAnnotations(BaseModel):
+    """LLM-derived, non-authoritative annotations.
+
+    Per project rules these never decide state equality, edges, replay
+    confidence, or runtime verdicts. They are kept distinct from identity and
+    evidence on purpose.
+    """
+
+    display_name: str = ""
+    alt_text: str = ""
+    page_function: str = ""
+    expected_actions: list[str] = Field(default_factory=list)
+    widget_aliases: list[dict[str, Any]] = Field(default_factory=list)
+    generation_confidence: float = 0.0
+
+
 class AbstractState(BaseModel):
     """An abstract UI state in the FSM.
 
-    Attributes:
-        state_id: Unique identifier for this state.
-        name: Human-readable name (e.g., "PaymentConfirm", "WiFiListPage").
-        fingerprint: Structural fingerprint hash (class_name, resource_id, depth, interactability).
-        hierarchy_level: Position in the App > Activity > Fragment > Component hierarchy.
-        parent_state: Parent state ID in the hierarchy (None for APP-level).
-        activity_name: Android Activity class name (from accessibility tree).
-        invariants: List of invariant expressions that must hold in this state.
-        raw_screens: List of raw screen IDs that map to this abstract state.
-        container_type: Scrollable container classification (Stage 2.5 invariant mining).
-        container_resource_id: Resource ID of the classified scrollable container.
-        semantic_profile: LLM-generated semantic annotation (Stage 2.5).
-        state_invariants: Goal-agnostic DSL expressions that must ALWAYS hold in this state.
-        invariant_confidence: Confidence in mined invariants (from multi-visit observation).
-        sub_fsm_template_id: Reference to a SubFsmTemplate for dynamic container detail pages.
+    The schema is logically partitioned into:
+    - Deterministic identity (``identity`` view over ``fingerprint`` /
+      ``structural_fingerprint``).
+    - Android observation context (``android_context`` view over
+      ``activity_name``).
+    - Trace evidence (``evidence`` view over ``raw_screens``).
+    - Dynamic abstraction (``abstraction`` view over ``container_type``,
+      ``container_resource_id``, ``sub_fsm_template_id``).
+    - Runtime-checkable invariants (``invariant_specs`` is canonical; the
+      flat ``state_invariants`` + ``invariant_confidence`` aliases are kept
+      for backward compatibility).
+    - LLM annotations (``annotations`` view; legacy ``semantic_profile`` is
+      preserved verbatim).
+
+    Old flat kwargs and old serialized JSON continue to construct cleanly via
+    ``model_validator(mode="before")``.
     """
+
+    model_config = ConfigDict(extra="ignore")
 
     state_id: str
     name: str
@@ -245,14 +411,265 @@ class AbstractState(BaseModel):
     hierarchy_level: HierarchyLevel
     parent_state: str | None = None
     activity_name: str | None = None
-    invariants: list[str] = Field(default_factory=list)
     raw_screens: list[str] = Field(default_factory=list)
     container_type: ContainerType = ContainerType.NONE
     container_resource_id: str | None = None
     semantic_profile: StateSemanticProfile | None = None
-    state_invariants: list[str] = Field(default_factory=list)
-    invariant_confidence: float = 0.0
     sub_fsm_template_id: str | None = None
+    invariant_specs: list[StateInvariant] = Field(default_factory=list)
+    legacy_invariants: list[str] = Field(default_factory=list)
+    identity_meta: StateIdentity | None = Field(default=None, exclude=True, repr=False)
+    evidence_meta: StateEvidence | None = Field(default=None, exclude=True, repr=False)
+    abstraction_meta: StateAbstraction | None = Field(default=None, exclude=True, repr=False)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_and_nested(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+
+        # Nested → flat (new schema input)
+        identity = data.pop("identity", None)
+        if identity is not None:
+            if isinstance(identity, BaseModel):
+                identity = identity.model_dump()
+            identity_payload = dict(identity)
+            if (
+                identity_payload.get("functional_hash") is None
+                and data.get("fingerprint") is not None
+            ):
+                identity_payload["functional_hash"] = data.get("fingerprint")
+            if (
+                identity_payload.get("structural_hash") is None
+                and data.get("structural_fingerprint") is not None
+            ):
+                identity_payload["structural_hash"] = data.get("structural_fingerprint")
+            identity_model = StateIdentity(**identity_payload)
+            data.setdefault("fingerprint", identity_model.functional_hash)
+            data.setdefault("structural_fingerprint", identity_model.structural_hash)
+            default_identity = StateIdentity(
+                functional_hash=data["fingerprint"],
+                structural_hash=data.get("structural_fingerprint"),
+            )
+            if _nested_metadata_differs(identity_model, default_identity):
+                data["identity_meta"] = identity_model
+
+        android_context = data.pop("android_context", None)
+        if android_context is not None:
+            if isinstance(android_context, BaseModel):
+                android_context = android_context.model_dump()
+            data.setdefault("activity_name", android_context.get("activity_name"))
+
+        evidence = data.pop("evidence", None)
+        if evidence is not None:
+            if isinstance(evidence, BaseModel):
+                evidence = evidence.model_dump()
+            evidence_model = StateEvidence(**dict(evidence))
+            data.setdefault("raw_screens", list(evidence_model.raw_screen_ids))
+            raw_screens = list(data.get("raw_screens", []))
+            default_evidence = StateEvidence(
+                raw_screen_ids=raw_screens,
+                observation_count=len(raw_screens),
+            )
+            if _nested_metadata_differs(evidence_model, default_evidence):
+                data["evidence_meta"] = evidence_model
+
+        abstraction = data.pop("abstraction", None)
+        if abstraction is not None:
+            if isinstance(abstraction, BaseModel):
+                abstraction = abstraction.model_dump()
+            abstraction_model = StateAbstraction(**dict(abstraction))
+            data.setdefault("container_type", abstraction_model.container_type)
+            selector = abstraction_model.container_selector or {}
+            if isinstance(selector, dict) and selector.get("resource_id") is not None:
+                data.setdefault("container_resource_id", selector.get("resource_id"))
+            data.setdefault("sub_fsm_template_id", abstraction_model.template_id)
+            default_selector: dict[str, Any] = {}
+            if data.get("container_resource_id") is not None:
+                default_selector["resource_id"] = data.get("container_resource_id")
+            default_abstraction = StateAbstraction(
+                container_type=data.get("container_type", ContainerType.NONE),
+                container_selector=default_selector,
+                template_id=data.get("sub_fsm_template_id"),
+            )
+            if _nested_metadata_differs(abstraction_model, default_abstraction):
+                data["abstraction_meta"] = abstraction_model
+
+        annotations = data.pop("annotations", None)
+        if annotations is not None and data.get("semantic_profile") is None:
+            if isinstance(annotations, BaseModel):
+                annotations = annotations.model_dump()
+            data["semantic_profile"] = StateSemanticProfile(
+                alt_text=annotations.get("alt_text", ""),
+                page_function=annotations.get("page_function", ""),
+                expected_actions=list(annotations.get("expected_actions", [])),
+                generation_confidence=float(annotations.get("generation_confidence", 0.0)),
+            )
+
+        # ``kind`` is computed; ignore an explicit value on input.
+        data.pop("kind", None)
+
+        # Invariant handling. Three possible input keys:
+        #   - ``invariant_specs`` (new canonical form, list[StateInvariant|dict])
+        #   - ``state_invariants`` (list[str]) + ``invariant_confidence`` (float)
+        #   - ``invariants`` (legacy list[str]; deprecated and kept separate
+        #     from runtime-enforced invariant_specs)
+        legacy_state_invariants = data.pop("state_invariants", None)
+        legacy_confidence = data.pop("invariant_confidence", None)
+        legacy_invariants = data.pop("invariants", None)
+        if legacy_invariants is not None or data.get("legacy_invariants") is not None:
+            combined_legacy: list[str] = []
+            combined_legacy.extend(_dedupe_invariant_texts(data.get("legacy_invariants")))
+            combined_legacy.extend(_dedupe_invariant_texts(legacy_invariants))
+            data["legacy_invariants"] = _dedupe_invariant_texts(combined_legacy)
+
+        if "invariant_specs" in data:
+            if legacy_state_invariants is not None:
+                spec_exprs = _invariant_expr_set(data.get("invariant_specs"))
+                flat_exprs = _invariant_expr_set(legacy_state_invariants)
+                if spec_exprs != flat_exprs:
+                    raise ValueError(
+                        "Conflicting invariant_specs and state_invariants: "
+                        f"spec exprs={sorted(spec_exprs)!r}, "
+                        f"state_invariants={sorted(flat_exprs)!r}"
+                    )
+        else:
+            confidence = float(legacy_confidence) if legacy_confidence is not None else 0.0
+            source = "mined_multivisit" if legacy_confidence is not None else "unknown"
+            specs = _state_invariant_specs(legacy_state_invariants, confidence, source)
+            if specs:
+                data["invariant_specs"] = specs
+        return data
+
+    # --- Computed nested views (deterministic over flat fields) ---
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def identity(self) -> StateIdentity:
+        if self.identity_meta is not None:
+            return self.identity_meta
+        return StateIdentity(
+            functional_hash=self.fingerprint,
+            structural_hash=self.structural_fingerprint,
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def kind(self) -> StateKind:
+        if self.hierarchy_level == HierarchyLevel.COMPONENT:
+            return StateKind.DIALOG
+        return StateKind.NORMAL
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def android_context(self) -> AndroidStateContext:
+        return AndroidStateContext(activity_name=self.activity_name)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def evidence(self) -> StateEvidence:
+        if self.evidence_meta is not None:
+            return self.evidence_meta
+        return StateEvidence(
+            raw_screen_ids=list(self.raw_screens),
+            observation_count=len(self.raw_screens),
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def abstraction(self) -> StateAbstraction:
+        if self.abstraction_meta is not None:
+            return self.abstraction_meta
+        selector: dict[str, Any] = {}
+        if self.container_resource_id is not None:
+            selector["resource_id"] = self.container_resource_id
+        return StateAbstraction(
+            container_type=self.container_type,
+            container_selector=selector,
+            template_id=self.sub_fsm_template_id,
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def annotations(self) -> StateAnnotations:
+        sp = self.semantic_profile
+        widget_aliases: list[dict[str, Any]] = []
+        if sp is not None:
+            # Mirror icon_labels (keyed by element id) into widget_aliases without
+            # removing the original — icon_labels stays canonical on
+            # ``semantic_profile`` for this migration phase.
+            for element_id, label in sp.icon_labels.items():
+                widget_aliases.append({"element_id": element_id, "label": label})
+        return StateAnnotations(
+            display_name=self.name,
+            alt_text=sp.alt_text if sp else "",
+            page_function=sp.page_function if sp else "",
+            expected_actions=list(sp.expected_actions) if sp else [],
+            widget_aliases=widget_aliases,
+            generation_confidence=sp.generation_confidence if sp else 0.0,
+        )
+
+    # --- Backward-compatible flat aliases for invariant storage ---
+
+    @property
+    def state_invariants(self) -> list[str]:
+        return [spec.expr for spec in self.invariant_specs]
+
+    @state_invariants.setter
+    def state_invariants(self, value: list[str]) -> None:
+        confidence = self.invariant_confidence
+        new_specs = [
+            StateInvariant(
+                expr=str(expr),
+                confidence=confidence,
+                source="mined_multivisit" if confidence > 0.0 else "unknown",
+            )
+            for expr in value
+        ]
+        object.__setattr__(self, "invariant_specs", new_specs)
+
+    @property
+    def invariant_confidence(self) -> float:
+        if not self.invariant_specs:
+            return 0.0
+        return max(spec.confidence for spec in self.invariant_specs)
+
+    @invariant_confidence.setter
+    def invariant_confidence(self, value: float) -> None:
+        value = float(value)
+        for spec in self.invariant_specs:
+            object.__setattr__(spec, "confidence", value)
+            if spec.source == "unknown" and value > 0.0:
+                object.__setattr__(spec, "source", "mined_multivisit")
+
+    @property
+    def invariants(self) -> list[str]:
+        """Deprecated legacy alias kept out of runtime-enforced invariants."""
+        return list(self.legacy_invariants)
+
+    @invariants.setter
+    def invariants(self, value: list[str]) -> None:
+        object.__setattr__(self, "legacy_invariants", [str(expr) for expr in value])
+
+    # --- Serialization helpers ---
+
+    def model_dump_compat(self, **kwargs: Any) -> dict[str, Any]:
+        """Dump in the new nested shape plus flat compatibility mirrors.
+
+        Existing tooling and on-disk FSM JSON consumers still see the flat
+        keys ``fingerprint``, ``structural_fingerprint``, ``activity_name``,
+        ``raw_screens``, ``container_type``, ``container_resource_id``,
+        ``sub_fsm_template_id``, ``state_invariants``, ``invariant_confidence``,
+        and ``semantic_profile``. The new ``identity`` / ``android_context`` /
+        ``evidence`` / ``abstraction`` / ``annotations`` / ``invariant_specs``
+        / ``kind`` keys are emitted alongside.
+        """
+        dumped = self.model_dump(**kwargs)
+        dumped["state_invariants"] = list(self.state_invariants)
+        dumped["invariant_confidence"] = self.invariant_confidence
+        dumped["invariants"] = list(self.legacy_invariants)
+        return dumped
 
 
 class ProvenanceEntry(BaseModel):
@@ -638,8 +1055,9 @@ class AppFSM:
         data = {
             "app_package": self.app_package,
             "version": self.version,
+            "schema_version": "2",
             "initial_state": self.initial_state,
-            "states": {sid: s.model_dump() for sid, s in self.states.items()},
+            "states": {sid: s.model_dump_compat() for sid, s in self.states.items()},
             "transitions": [t.model_dump() for t in self.transitions],
             "evolution_log": self.evolution_log,
             "sub_fsm_templates": {tid: t.model_dump() for tid, t in self.sub_fsm_templates.items()},

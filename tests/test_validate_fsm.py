@@ -540,3 +540,24 @@ class TestFidelityTraceRoundTrip:
             f"serialized transitions contradict on resource_id vs "
             f"target_resource_id: {contradictions}"
         )
+
+    def test_fidelity_trace_survives_serialize_deserialize(self, tmp_path) -> None:
+        """Behavior preservation across the nested schema migration.
+
+        Build the FSM from the fidelity trace, serialize via the migrated
+        ``model_dump_compat`` path, deserialize, and re-validate the same
+        trace. The 107/107 OK count must not change.
+        """
+        from collections import Counter
+
+        from vigil.models.fsm import AppFSM
+        from vigil.scripts.validate_fsm import validate_fsm
+
+        builder = FsmBuilder("com.vigil.market")
+        fsm = builder.build_from_trace(_FIDELITY_TRACE)
+        path = tmp_path / "fidelity_fsm.json"
+        fsm.serialize(path)
+        restored = AppFSM.deserialize(path)
+        report = validate_fsm(restored, _FIDELITY_TRACE)
+        reasons = Counter(s.reason for s in report.steps)
+        assert reasons == Counter({ValidationReason.OK: 107}), reasons

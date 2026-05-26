@@ -281,7 +281,7 @@ def _state_to_view_dict(
     screens_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Convert a state to the HTML view schema."""
-    state_dict = state.model_dump(mode="json")
+    state_dict = state.model_dump_compat(mode="json")
     if include_sensitive_details:
         if screens_dir is not None:
             images = _load_screen_images(state_dict.get("raw_screens", []), screens_dir)
