@@ -153,7 +153,8 @@ class LlmFallback:
         state_id = uncertain_result.current_state_id
         if state_id and state_id in self._fsm.states:
             s = self._fsm.states[state_id]
-            activity = f" @ {s.activity_name}" if s.activity_name else ""
+            activity_name = s.android_context.activity_name
+            activity = f" @ {activity_name}" if activity_name else ""
             lines.append(f"Current state: {s.name} ({state_id}){activity}")
         else:
             lines.append("Current state: UNKNOWN (no FSM state match)")

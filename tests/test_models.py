@@ -1,5 +1,7 @@
 """Tests for data models: UIElement skeleton, AbstractState, AppFSM."""
 
+import json
+
 import pytest
 
 from vigil.models.fsm import (
@@ -264,8 +266,8 @@ class TestContainerType:
 
     def test_default_container_type(self):
         state = _make_state("s_001")
-        assert state.container_type == ContainerType.NONE
-        assert state.container_resource_id is None
+        assert state.abstraction.container_type == ContainerType.NONE
+        assert state.abstraction.container_selector.get("resource_id") is None
 
     def test_explicit_container_type(self):
         state = _make_state(
@@ -273,8 +275,8 @@ class TestContainerType:
             container_type=ContainerType.DYNAMIC,
             container_resource_id="com.app:id/wifi_list",
         )
-        assert state.container_type == ContainerType.DYNAMIC
-        assert state.container_resource_id == "com.app:id/wifi_list"
+        assert state.abstraction.container_type == ContainerType.DYNAMIC
+        assert state.abstraction.container_selector.get("resource_id") == "com.app:id/wifi_list"
 
     def test_serialization_roundtrip(self, tmp_path):
         fsm = AppFSM("com.test.app")
@@ -292,10 +294,13 @@ class TestContainerType:
         fsm.serialize(path)
 
         restored = AppFSM.deserialize(path)
-        assert restored.states["s_001"].container_type == ContainerType.DYNAMIC
-        assert restored.states["s_001"].container_resource_id == "com.app:id/list"
-        assert restored.states["s_002"].container_type == ContainerType.STATIC
-        assert restored.states["s_002"].container_resource_id is None
+        assert restored.states["s_001"].abstraction.container_type == ContainerType.DYNAMIC
+        assert (
+            restored.states["s_001"].abstraction.container_selector.get("resource_id")
+            == "com.app:id/list"
+        )
+        assert restored.states["s_002"].abstraction.container_type == ContainerType.STATIC
+        assert restored.states["s_002"].abstraction.container_selector.get("resource_id") is None
 
     def test_backward_compat_missing_fields(self, tmp_path):
         """FSM JSON without container fields still deserializes (fields get defaults)."""
@@ -319,8 +324,8 @@ class TestContainerType:
         path.write_text(json.dumps(data))
 
         restored = AppFSM.deserialize(path)
-        assert restored.states["s1"].container_type == ContainerType.NONE
-        assert restored.states["s1"].container_resource_id is None
+        assert restored.states["s1"].abstraction.container_type == ContainerType.NONE
+        assert restored.states["s1"].abstraction.container_selector.get("resource_id") is None
 
 
 # --- StateSemanticProfile ---
@@ -353,15 +358,14 @@ class TestStateSemanticProfile:
             page_function="settings/wifi",
         )
         state = _make_state("s_001", semantic_profile=profile)
-        assert state.semantic_profile is not None
-        assert state.semantic_profile.page_function == "settings/wifi"
+        assert state.annotations.page_function == "settings/wifi"
 
     def test_abstract_state_defaults_none(self):
         state = _make_state("s_001")
-        assert state.semantic_profile is None
-        assert state.state_invariants == []
-        assert state.invariant_confidence == 0.0
-        assert state.sub_fsm_template_id is None
+        assert state.annotations.alt_text == "" and state.annotations.page_function == ""
+        assert state.invariant_specs == []
+        assert max((s.confidence for s in state.invariant_specs), default=0.0) == 0.0
+        assert state.abstraction.template_id is None
 
 
 # --- State invariants on AbstractState ---
@@ -377,8 +381,8 @@ class TestStateInvariants:
             ],
             invariant_confidence=0.85,
         )
-        assert len(state.state_invariants) == 2
-        assert state.invariant_confidence == 0.85
+        assert len(state.invariant_specs) == 2
+        assert max((s.confidence for s in state.invariant_specs), default=0.0) == 0.85
 
     def test_serialization_roundtrip_with_invariants(self, tmp_path):
         fsm = AppFSM("com.test.app")
@@ -401,11 +405,10 @@ class TestStateInvariants:
 
         restored = AppFSM.deserialize(path)
         s = restored.states["s_001"]
-        assert s.semantic_profile is not None
-        assert s.semantic_profile.alt_text == "Home screen"
-        assert s.semantic_profile.generation_confidence == 0.9
-        assert s.state_invariants == ['read(title, text) != ""']
-        assert s.invariant_confidence == 0.9
+        assert s.annotations.alt_text == "Home screen"
+        assert s.annotations.generation_confidence == 0.9
+        assert [spec.expr for spec in s.invariant_specs] == ['read(title, text) != ""']
+        assert max((spec.confidence for spec in s.invariant_specs), default=0.0) == 0.9
 
 
 # --- SubFsmTemplate ---
@@ -480,8 +483,14 @@ class TestSubFsmTemplate:
         path = tmp_path / "fsm.json"
         fsm.serialize(path)
 
+        payload = json.loads(path.read_text())
+        template_state = payload["sub_fsm_templates"]["tmpl_1"]["states"]["tmpl_s1"]
+        assert template_state["identity"]["functional_hash"] == "fp_tmpl_s1"
+        assert template_state["fingerprint"] == "fp_tmpl_s1"
+        assert template_state["raw_screens"] == template_state["evidence"]["raw_screen_ids"]
+
         restored = AppFSM.deserialize(path)
-        assert restored.states["s_list"].sub_fsm_template_id == "tmpl_1"
+        assert restored.states["s_list"].abstraction.template_id == "tmpl_1"
         assert "tmpl_1" in restored.sub_fsm_templates
         rt = restored.sub_fsm_templates["tmpl_1"]
         assert rt.source_state_id == "s_list"
@@ -515,8 +524,8 @@ class TestSubFsmTemplate:
 
         restored = AppFSM.deserialize(path)
         assert restored.sub_fsm_templates == {}
-        assert restored.states["s1"].semantic_profile is None
-        assert restored.states["s1"].state_invariants == []
+        assert restored.states["s1"].annotations.alt_text == ""
+        assert restored.states["s1"].invariant_specs == []
 
 
 # --- Nested schema migration ---
@@ -524,7 +533,12 @@ class TestSubFsmTemplate:
 
 class TestNestedStateSchema:
     def test_old_flat_kwargs_populate_nested_views(self):
-        profile = StateSemanticProfile(alt_text="alt", page_function="home")
+        profile = StateSemanticProfile(
+            alt_text="alt",
+            page_function="home",
+            icon_labels={"e1": "gear"},
+            generation_confidence=0.9,
+        )
         state = AbstractState(
             state_id="s1",
             name="Home",
@@ -541,7 +555,7 @@ class TestNestedStateSchema:
             semantic_profile=profile,
         )
 
-        # Flat aliases still work.
+        # Flat aliases route to the same nested storage.
         assert state.fingerprint == "fp_home"
         assert state.structural_fingerprint == "struct_home"
         assert state.raw_screens == ["raw_001", "raw_002"]
@@ -550,9 +564,8 @@ class TestNestedStateSchema:
         assert state.sub_fsm_template_id == "tmpl_detail"
         assert state.state_invariants == ['read(title, text) != ""']
         assert state.invariant_confidence == 0.9
-        assert state.semantic_profile is profile
 
-        # Nested views are populated and reflect the same data.
+        # Nested canonical fields hold the data exactly once.
         assert isinstance(state.identity, StateIdentity)
         assert state.identity.functional_hash == "fp_home"
         assert state.identity.structural_hash == "struct_home"
@@ -567,16 +580,67 @@ class TestNestedStateSchema:
         assert state.abstraction.container_selector == {"resource_id": "com.app:id/list"}
         assert state.abstraction.template_id == "tmpl_detail"
         assert isinstance(state.annotations, StateAnnotations)
-        assert state.annotations.display_name == "Home"
+        # ``display_name`` is annotation-only and must not mirror state.name.
+        assert state.annotations.display_name == ""
         assert state.annotations.alt_text == "alt"
         assert state.annotations.page_function == "home"
+        # icon_labels is rebuilt as widget_aliases with element_id/label keys.
+        assert state.annotations.widget_aliases == [{"element_id": "e1", "label": "gear"}]
         assert len(state.invariant_specs) == 1
         assert state.invariant_specs[0].expr == 'read(title, text) != ""'
         assert state.invariant_specs[0].confidence == 0.9
+        assert state.invariant_specs[0].source == "mined_multivisit"
 
     def test_dialog_kind_from_hierarchy_level(self):
         state = _make_state("s_dlg", hierarchy_level=HierarchyLevel.COMPONENT)
         assert state.kind == StateKind.DIALOG
+        state2 = _make_state("s_act", hierarchy_level=HierarchyLevel.ACTIVITY)
+        assert state2.kind == StateKind.NORMAL
+
+    def test_explicit_kind_is_preserved(self):
+        state = AbstractState(
+            state_id="s1",
+            name="x",
+            fingerprint="fp",
+            hierarchy_level=HierarchyLevel.COMPONENT,
+            kind=StateKind.ERROR,
+        )
+        assert state.kind == StateKind.ERROR
+        # Round-trip via dump
+        restored = AbstractState(**state.model_dump())
+        assert restored.kind == StateKind.ERROR
+
+    def test_kind_syncs_with_hierarchy_level(self):
+        state = AbstractState(
+            state_id="s1",
+            name="x",
+            fingerprint="fp",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            kind=StateKind.NORMAL,
+        )
+        state.hierarchy_level = HierarchyLevel.COMPONENT
+        assert state.model_dump(mode="json")["kind"] == StateKind.DIALOG.value
+
+        explicit = AbstractState(
+            state_id="s2",
+            name="dialog override",
+            fingerprint="fp2",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            kind=StateKind.DIALOG,
+        )
+        explicit.hierarchy_level = HierarchyLevel.FRAGMENT
+        assert explicit.model_dump(mode="json")["kind"] == StateKind.DIALOG.value
+
+    def test_annotations_display_name_does_not_override_state_name(self):
+        state = AbstractState(
+            state_id="s1",
+            name="CanonicalName",
+            fingerprint="fp",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            annotations={"display_name": "PrettyName"},
+        )
+        assert state.name == "CanonicalName"
+        assert state.annotations.display_name == "PrettyName"
 
     def test_legacy_invariants_kwarg_stays_out_of_canonical_store(self):
         state = AbstractState(
@@ -586,8 +650,9 @@ class TestNestedStateSchema:
             hierarchy_level=HierarchyLevel.ACTIVITY,
             invariants=["legacy_expr"],
         )
-        # Legacy invariants are preserved for readers like verify_action, but
-        # must not become runtime-enforced state_invariants.
+        # Legacy invariants are preserved for readers, but must not become
+        # runtime-enforced state_invariants — otherwise verifier verdicts
+        # would silently change for old FSMs.
         assert state.legacy_invariants == ["legacy_expr"]
         assert state.invariants == ["legacy_expr"]
         assert state.state_invariants == []
@@ -619,8 +684,53 @@ class TestNestedStateSchema:
         assert state.legacy_invariants == ["c"]
         assert {s.expr for s in state.invariant_specs} == {"a", "b"}
 
+    def test_state_invariants_source_with_and_without_confidence(self):
+        without = AbstractState(
+            state_id="s1",
+            name="x",
+            fingerprint="fp",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            state_invariants=["a"],
+        )
+        assert without.invariant_specs[0].source == "unknown"
+        assert without.invariant_specs[0].confidence == 0.0
+
+        withc = AbstractState(
+            state_id="s2",
+            name="x",
+            fingerprint="fp",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            state_invariants=["a"],
+            invariant_confidence=0.42,
+        )
+        assert withc.invariant_specs[0].source == "mined_multivisit"
+        assert withc.invariant_specs[0].confidence == 0.42
+
+    def test_no_legacy_flat_source_string(self):
+        # No code path should ever stamp 'legacy_flat' as the spec source.
+        states = [
+            AbstractState(
+                state_id="s1",
+                name="x",
+                fingerprint="fp",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                state_invariants=["a"],
+            ),
+            AbstractState(
+                state_id="s2",
+                name="x",
+                fingerprint="fp",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                state_invariants=["a"],
+                invariant_confidence=0.3,
+            ),
+        ]
+        for state in states:
+            for spec in state.invariant_specs:
+                assert spec.source != "legacy_flat"
+
     def test_conflicting_invariant_specs_and_flat_mirror_raise(self):
-        with pytest.raises(ValueError, match="Conflicting invariant_specs and state_invariants"):
+        with pytest.raises(ValueError, match="invariant_specs"):
             AbstractState(
                 state_id="s1",
                 name="x",
@@ -643,6 +753,23 @@ class TestNestedStateSchema:
         assert state.state_invariants == ["a"]
         assert len(state.invariant_specs) == 1
         assert state.invariant_specs[0].confidence == 0.6
+
+    def test_invariant_confidence_agreement_compares_against_max(self):
+        # Brief constraint #2: invariant_confidence agreement is checked
+        # against max(spec.confidence), not every spec's confidence.
+        state = AbstractState(
+            state_id="s1",
+            name="x",
+            fingerprint="fp",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            invariant_specs=[
+                {"expr": "a", "confidence": 0.6},
+                {"expr": "b", "confidence": 0.9},
+            ],
+            invariant_confidence=0.9,
+        )
+        assert state.invariant_confidence == 0.9
+        assert {s.confidence for s in state.invariant_specs} == {0.6, 0.9}
 
     def test_construct_from_nested_kwargs(self):
         state = AbstractState(
@@ -678,7 +805,6 @@ class TestNestedStateSchema:
             },
             evidence={
                 "raw_screen_ids": ["raw_a"],
-                "observation_count": 3,
                 "trust_level": "inferred",
             },
             abstraction={
@@ -693,17 +819,63 @@ class TestNestedStateSchema:
         restored = AbstractState(**dumped)
 
         assert restored.identity.algorithm == "custom_identity_v2"
-        assert restored.evidence.observation_count == 3
+        assert restored.evidence.observation_count == 1
         assert restored.evidence.trust_level == "inferred"
         assert restored.abstraction.template_role == "template_member"
 
+    def test_alias_mutation_propagates_to_nested(self):
+        state = _make_state("s1", raw_screens=["a"])
+        state.fingerprint = "fp_new"
+        state.structural_fingerprint = "struct_new"
+        state.activity_name = "Activity2"
+        state.container_type = ContainerType.STATIC
+        state.container_resource_id = "id/cont"
+        state.sub_fsm_template_id = "tmpl2"
+        # Aliases should hit the nested canonical fields.
+        assert state.identity.functional_hash == "fp_new"
+        assert state.identity.structural_hash == "struct_new"
+        assert state.android_context.activity_name == "Activity2"
+        assert state.abstraction.container_type == ContainerType.STATIC
+        assert state.abstraction.container_selector["resource_id"] == "id/cont"
+        assert state.abstraction.template_id == "tmpl2"
+
+    def test_nested_mutation_visible_via_alias(self):
+        state = _make_state("s1")
+        state.identity.functional_hash = "fp_via_nested"
+        state.android_context.activity_name = "AnotherActivity"
+        state.abstraction.container_type = ContainerType.DYNAMIC
+        state.abstraction.container_selector["resource_id"] = "id/cont"
+        state.abstraction.template_id = "tmpl_via_nested"
+        state.evidence.raw_screen_ids.append("r1")
+        assert state.fingerprint == "fp_via_nested"
+        assert state.activity_name == "AnotherActivity"
+        assert state.container_type == ContainerType.DYNAMIC
+        assert state.container_resource_id == "id/cont"
+        assert state.sub_fsm_template_id == "tmpl_via_nested"
+        assert state.raw_screens == ["r1"]
+
+    def test_raw_screens_extend_updates_observation_count(self):
+        state = _make_state("s1", raw_screens=["a"])
+        assert state.evidence.observation_count == 1
+        state.raw_screens.extend(["b", "c"])
+        assert state.raw_screens == ["a", "b", "c"]
+        # observation_count is derived: never stale after raw_screens mutation.
+        assert state.evidence.observation_count == 3
+
+    def test_container_resource_id_setter_to_none_removes_key(self):
+        state = _make_state("s1", container_resource_id="id/old")
+        assert state.abstraction.container_selector == {"resource_id": "id/old"}
+        state.container_resource_id = None
+        assert "resource_id" not in state.abstraction.container_selector
+
     def test_old_flat_fsm_json_deserializes(self, tmp_path):
-        """A pre-refactor FSM JSON file still loads cleanly."""
+        """A pre-refactor FSM JSON file (schema v2 flat keys) still loads."""
         import json
 
         data = {
             "app_package": "com.test.app",
             "version": "0.1.0",
+            "schema_version": "2",
             "initial_state": "s1",
             "states": {
                 "s1": {
@@ -743,33 +915,102 @@ class TestNestedStateSchema:
         assert s.evidence.raw_screen_ids == ["raw_001"]
         assert s.abstraction.container_type == ContainerType.DYNAMIC
         assert s.abstraction.template_id == "tmpl_detail"
-        # icon_labels preserved on semantic_profile (no first-phase migration).
+        # icon_labels round-trips via widget_aliases (element_id/label).
+        assert {a["label"] for a in s.annotations.widget_aliases} == {"gear"}
         assert s.semantic_profile is not None
         assert s.semantic_profile.icon_labels == {"e1": "gear"}
-        # widget_aliases mirrors icon_labels.
-        labels = {alias["label"] for alias in s.annotations.widget_aliases}
-        assert "gear" in labels
         # Canonical and legacy invariant lists are preserved separately.
         assert s.state_invariants == ['read(title, text) != ""']
         assert s.invariants == ["legacy expr"]
         assert s.legacy_invariants == ["legacy expr"]
 
-    def test_model_dump_compat_emits_flat_mirror_keys(self):
+    def test_mixed_flat_and_nested_agreeing_values_load(self):
+        state = AbstractState(
+            state_id="s1",
+            name="x",
+            fingerprint="fp_x",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+            identity={"functional_hash": "fp_x", "structural_hash": "struct_x"},
+            structural_fingerprint="struct_x",
+            raw_screens=["r1"],
+            evidence={"raw_screen_ids": ["r1"]},
+            container_type=ContainerType.DYNAMIC,
+            abstraction={"container_type": "dynamic", "template_id": "tmpl"},
+            sub_fsm_template_id="tmpl",
+        )
+        assert state.fingerprint == "fp_x"
+        assert state.structural_fingerprint == "struct_x"
+        assert state.raw_screens == ["r1"]
+        assert state.container_type == ContainerType.DYNAMIC
+        assert state.sub_fsm_template_id == "tmpl"
+
+    def test_mixed_flat_and_nested_conflict_raises(self):
+        with pytest.raises(ValueError, match="fingerprint"):
+            AbstractState(
+                state_id="s1",
+                name="x",
+                fingerprint="fp_A",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                identity={"functional_hash": "fp_B"},
+            )
+
+    def test_explicit_matching_observation_count_loads(self):
         state = AbstractState(
             state_id="s1",
             name="x",
             fingerprint="fp",
             hierarchy_level=HierarchyLevel.ACTIVITY,
-            raw_screens=["r1"],
-            container_type=ContainerType.DYNAMIC,
-            container_resource_id="id/list",
-            sub_fsm_template_id="tmpl",
-            state_invariants=["a"],
-            invariants=["legacy a"],
-            invariant_confidence=0.5,
+            evidence={"raw_screen_ids": ["a", "b"], "observation_count": 2},
         )
-        dumped = state.model_dump_compat()
-        for key in (
+        assert state.evidence.observation_count == 2
+
+    def test_explicit_mismatching_observation_count_raises(self):
+        with pytest.raises(ValueError, match="observation_count"):
+            AbstractState(
+                state_id="s1",
+                name="x",
+                fingerprint="fp",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+                evidence={"raw_screen_ids": ["a"], "observation_count": 7},
+            )
+
+    def test_serialized_json_includes_nested_fields_and_flat_mirrors(self, tmp_path):
+        fsm = AppFSM("com.test.app")
+        fsm.add_state(
+            _make_state(
+                "s1",
+                structural_fingerprint="struct_s1",
+                activity_name="com.test.MainActivity",
+                raw_screens=["raw_a", "raw_b"],
+                container_type=ContainerType.DYNAMIC,
+                container_resource_id="id/list",
+                sub_fsm_template_id="tmpl",
+                semantic_profile=StateSemanticProfile(
+                    alt_text="alt",
+                    page_function="home",
+                    expected_actions=["tap"],
+                    icon_labels={"e1": "gear"},
+                    generation_confidence=0.8,
+                ),
+                state_invariants=["e1", "e2"],
+                invariants=["legacy e"],
+                invariant_confidence=0.6,
+            )
+        )
+        fsm.initial_state = "s1"
+        path = tmp_path / "fsm.json"
+        fsm.serialize(path)
+
+        payload = json.loads(path.read_text())
+        assert payload["schema_version"] == "3"
+        state_payload = payload["states"]["s1"]
+        # Nested canonical keys present.
+        for nested in ("identity", "android_context", "evidence", "abstraction", "annotations"):
+            assert nested in state_payload
+        # Transitional flat mirrors are computed from nested canonical fields
+        # during schema v3 serialization; they are not separate in-memory
+        # storage.
+        for flat in (
             "fingerprint",
             "structural_fingerprint",
             "activity_name",
@@ -777,22 +1018,43 @@ class TestNestedStateSchema:
             "container_type",
             "container_resource_id",
             "sub_fsm_template_id",
+            "semantic_profile",
             "state_invariants",
             "invariant_confidence",
             "invariants",
-            "semantic_profile",
-            "identity",
-            "android_context",
-            "evidence",
-            "abstraction",
-            "annotations",
-            "invariant_specs",
-            "kind",
         ):
-            assert key in dumped, f"missing key in compat dump: {key}"
-        assert dumped["state_invariants"] == ["a"]
-        assert dumped["invariants"] == ["legacy a"]
-        assert dumped["invariant_confidence"] == 0.5
+            assert flat in state_payload
+        assert state_payload["fingerprint"] == "fp_s1"
+        assert state_payload["fingerprint"] == state_payload["identity"]["functional_hash"]
+        assert state_payload["structural_fingerprint"] == "struct_s1"
+        assert (
+            state_payload["structural_fingerprint"] == state_payload["identity"]["structural_hash"]
+        )
+        assert state_payload["activity_name"] == "com.test.MainActivity"
+        assert state_payload["activity_name"] == state_payload["android_context"]["activity_name"]
+        assert state_payload["raw_screens"] == ["raw_a", "raw_b"]
+        assert state_payload["raw_screens"] == state_payload["evidence"]["raw_screen_ids"]
+        assert state_payload["container_type"] == "dynamic"
+        assert state_payload["container_type"] == state_payload["abstraction"]["container_type"]
+        assert state_payload["container_resource_id"] == "id/list"
+        assert (
+            state_payload["container_resource_id"]
+            == state_payload["abstraction"]["container_selector"]["resource_id"]
+        )
+        assert state_payload["sub_fsm_template_id"] == "tmpl"
+        assert state_payload["sub_fsm_template_id"] == state_payload["abstraction"]["template_id"]
+        assert state_payload["semantic_profile"]["alt_text"] == "alt"
+        assert state_payload["semantic_profile"]["page_function"] == "home"
+        assert state_payload["semantic_profile"]["expected_actions"] == ["tap"]
+        assert state_payload["semantic_profile"]["icon_labels"] == {"e1": "gear"}
+        assert state_payload["state_invariants"] == ["e1", "e2"]
+        assert state_payload["state_invariants"] == [
+            spec["expr"] for spec in state_payload["invariant_specs"]
+        ]
+        assert state_payload["invariant_confidence"] == 0.6
+        assert state_payload["invariants"] == ["legacy e"]
+        # ``legacy_invariants`` is the one intentional non-runtime survivor.
+        assert state_payload["legacy_invariants"] == ["legacy e"]
 
     def test_serialize_round_trip_preserves_aliases(self, tmp_path):
         fsm = AppFSM("com.test.app")

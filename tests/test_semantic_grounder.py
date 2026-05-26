@@ -346,10 +346,9 @@ class TestGroundAllStates:
         result = grounder.ground_all_states(fsm, raw_screens)
 
         s = result.states["s1"]
-        assert s.semantic_profile is not None
-        assert s.semantic_profile.alt_text == "Main page"
-        assert len(s.state_invariants) == 1
-        assert s.invariant_confidence == 0.5
+        assert s.annotations.alt_text == "Main page"
+        assert len(s.invariant_specs) == 1
+        assert max((spec.confidence for spec in s.invariant_specs), default=0.0) == 0.5
 
     def test_skips_state_with_no_screens(self) -> None:
         llm = _mock_llm([])

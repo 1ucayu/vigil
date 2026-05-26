@@ -235,9 +235,16 @@ class DslGenerator:
             Guard expression string, or None if no guard needed.
         """
         # Build element reference table with stable aliases
-        icon_labels = None
-        if source_state.semantic_profile:
-            icon_labels = source_state.semantic_profile.icon_labels or None
+        icon_labels: dict[str, str] | None = None
+        if source_state.annotations.widget_aliases:
+            icon_labels = {}
+            for alias in source_state.annotations.widget_aliases:
+                eid = alias.get("element_id")
+                label = alias.get("label")
+                if eid is not None and label is not None:
+                    icon_labels[str(eid)] = str(label)
+            if not icon_labels:
+                icon_labels = None
         source_with_aliases = self._build_element_reference_table(
             source_elements, icon_labels=icon_labels
         )
@@ -480,17 +487,18 @@ class DslGenerator:
         source_expected_actions = ""
         target_description = ""
 
-        if source_state.semantic_profile:
-            sp = source_state.semantic_profile
-            if sp.alt_text:
-                source_description = f"Description: {sp.alt_text}\n"
-            if sp.page_function:
-                source_page_function = f"Page function: {sp.page_function}\n"
-            if sp.expected_actions:
-                source_expected_actions = f"Expected actions: {', '.join(sp.expected_actions)}\n"
+        source_ann = source_state.annotations
+        if source_ann.alt_text:
+            source_description = f"Description: {source_ann.alt_text}\n"
+        if source_ann.page_function:
+            source_page_function = f"Page function: {source_ann.page_function}\n"
+        if source_ann.expected_actions:
+            source_expected_actions = (
+                f"Expected actions: {', '.join(source_ann.expected_actions)}\n"
+            )
 
-        if target_state.semantic_profile and target_state.semantic_profile.alt_text:
-            target_description = f"Description: {target_state.semantic_profile.alt_text}\n"
+        if target_state.annotations.alt_text:
+            target_description = f"Description: {target_state.annotations.alt_text}\n"
 
         # Widget template hint
         widget_hint = ""
@@ -691,10 +699,10 @@ class DslGenerator:
     # ------------------------------------------------------------------
 
     def _resolve_screenshot(self, state: AbstractState, trace_data: dict[str, Any]) -> Path | None:
-        """Find the screenshot file for a state's first raw_screen."""
-        if not state.raw_screens:
+        """Find the screenshot file for a state's first raw screen."""
+        if not state.evidence.raw_screen_ids:
             return None
-        screen_id = state.raw_screens[0]
+        screen_id = state.evidence.raw_screen_ids[0]
         screens = trace_data.get("screens", {})
         screen = screens.get(screen_id, {})
         rel_path = screen.get("screenshot_path")
@@ -713,9 +721,9 @@ class DslGenerator:
         If elements aren't stored inline in the trace JSON, falls back to
         parsing the XML tree file (xml_tree_path) via ui_parser.
         """
-        if not state.raw_screens:
+        if not state.evidence.raw_screen_ids:
             return []
-        screen_id = state.raw_screens[0]
+        screen_id = state.evidence.raw_screen_ids[0]
         screen = raw_screens.get(screen_id, {})
         elements = screen.get("elements", [])
 

@@ -183,7 +183,7 @@ class TestFsmBuilderSynthetic:
         fsm = builder.build_from_trace(synthetic_trace)
         # scr_001 and scr_004 share the same structure → merged into one state
         home_state = [s for s in fsm.states.values() if "Home" in s.name][0]
-        assert set(home_state.raw_screens) == {"scr_001", "scr_004"}
+        assert set(home_state.evidence.raw_screen_ids) == {"scr_001", "scr_004"}
 
     def test_self_loop_excluded_by_default(self, synthetic_trace: Path) -> None:
         # Section B: SCROLL_UP / SCROLL_DOWN / INPUT_TEXT self-loops are
@@ -359,12 +359,16 @@ class TestFsmBuilderSynthetic:
         builder = FsmBuilder("com.test.app")
         fsm = builder.build_from_trace(synthetic_trace)
         # .MainActivity has 2 structurally distinct states → should be FRAGMENT level
-        main_states = [s for s in fsm.states.values() if s.activity_name == ".MainActivity"]
+        main_states = [
+            s for s in fsm.states.values() if s.android_context.activity_name == ".MainActivity"
+        ]
         assert len(main_states) == 2  # Home and Settings (scr_004 merged with scr_001)
         for s in main_states:
             assert s.hierarchy_level == HierarchyLevel.FRAGMENT
         # .DetailActivity has 1 state → stays ACTIVITY
-        detail_states = [s for s in fsm.states.values() if s.activity_name == ".DetailActivity"]
+        detail_states = [
+            s for s in fsm.states.values() if s.android_context.activity_name == ".DetailActivity"
+        ]
         for s in detail_states:
             assert s.hierarchy_level == HierarchyLevel.ACTIVITY
 
@@ -466,7 +470,7 @@ class TestFsmBuilderSynthetic:
         # Both screens should merge into 1 state (same skeleton, different scroll content)
         assert len(fsm.states) == 1
         state = list(fsm.states.values())[0]
-        assert set(state.raw_screens) == {"scr_a", "scr_b"}
+        assert set(state.evidence.raw_screen_ids) == {"scr_a", "scr_b"}
         assert state.name == "My List"
 
 
@@ -635,7 +639,7 @@ class TestMergeScrollDuplicates:
         assert "s1" in fsm.states  # canonical
         assert "s2" not in fsm.states  # merged away
         assert fsm.states["s1"].name == "Sound"  # "#N" stripped
-        assert set(fsm.states["s1"].raw_screens) == {"scr_01", "scr_02"}
+        assert set(fsm.states["s1"].evidence.raw_screen_ids) == {"scr_01", "scr_02"}
 
     def test_merge_preserves_transitions(self) -> None:
         """Merged state gets the union of both states' transitions."""
@@ -1082,7 +1086,7 @@ class TestBuildSubFsmTemplates:
         fsm = self._make_dynamic_fsm()
         builder = FsmBuilder("com.test.app")
         builder._build_sub_fsm_templates(fsm)
-        assert fsm.states["s_list"].sub_fsm_template_id == "tmpl_s_list"
+        assert fsm.states["s_list"].abstraction.template_id == "tmpl_s_list"
 
     def test_collapses_duplicate_targets(self) -> None:
         fsm = self._make_dynamic_fsm()
@@ -1155,7 +1159,7 @@ class TestBuildSubFsmTemplates:
         tmpl = restored.sub_fsm_templates["tmpl_s_list"]
         assert tmpl.source_state_id == "s_list"
         assert tmpl.entry_fingerprint == "sfp_detail"
-        assert restored.states["s_list"].sub_fsm_template_id == "tmpl_s_list"
+        assert restored.states["s_list"].abstraction.template_id == "tmpl_s_list"
 
 
 class TestTemplateBasedValidation:
@@ -1294,7 +1298,7 @@ class TestClassifyContainersStructural:
         }
         count = builder._classify_containers_structural(fsm)
         assert count == 1
-        assert fsm.states["s_list"].container_type == ContainerType.DYNAMIC
+        assert fsm.states["s_list"].abstraction.container_type == ContainerType.DYNAMIC
 
     def test_no_scrollable_not_labeled(self) -> None:
         fsm = self._fsm_with_list_page()
@@ -1308,11 +1312,11 @@ class TestClassifyContainersStructural:
         }
         count = builder._classify_containers_structural(fsm)
         assert count == 0
-        assert fsm.states["s_list"].container_type == ContainerType.NONE
+        assert fsm.states["s_list"].abstraction.container_type == ContainerType.NONE
 
     def test_preserves_existing_label(self) -> None:
         fsm = self._fsm_with_list_page()
-        fsm.states["s_list"].container_type = ContainerType.STATIC
+        fsm.states["s_list"].abstraction.container_type = ContainerType.STATIC
         builder = FsmBuilder("com.test.app")
         builder._raw_screens = {
             "rs_list": {
@@ -1323,7 +1327,7 @@ class TestClassifyContainersStructural:
         }
         count = builder._classify_containers_structural(fsm)
         assert count == 0
-        assert fsm.states["s_list"].container_type == ContainerType.STATIC
+        assert fsm.states["s_list"].abstraction.container_type == ContainerType.STATIC
 
     def test_template_built_without_grounder(self) -> None:
         """Classifier + template builder together produce a template on raw FSM."""
@@ -1513,7 +1517,7 @@ class TestAppPriorInitialState:
         builder = FsmBuilder("com.test.app")
         fsm = builder.build_from_trace(trace, app_prior=prior)
         initial = fsm.states[fsm.initial_state]
-        assert initial.activity_name == "com.test.app.MainActivity"
+        assert initial.android_context.activity_name == "com.test.app.MainActivity"
 
 
 class TestApePriorOnlyProducesNoEdges:
@@ -1715,14 +1719,14 @@ class TestApeRefinementSplit:
         trace = _write_trace(tmp_path, screens, traces)
 
         fsm = FsmBuilder("com.test.app").build_from_trace(trace)
-        h1_state = next(s for s in fsm.states.values() if "scr_h1" in s.raw_screens)
-        h2_state = next(s for s in fsm.states.values() if "scr_h2" in s.raw_screens)
+        h1_state = next(s for s in fsm.states.values() if "scr_h1" in s.evidence.raw_screen_ids)
+        h2_state = next(s for s in fsm.states.values() if "scr_h2" in s.evidence.raw_screen_ids)
         base_fp = FsmBuilder._compute_functional_fingerprint(screens["scr_h1"])
 
-        assert h1_state.fingerprint != h2_state.fingerprint
-        assert h1_state.structural_fingerprint != h2_state.structural_fingerprint
-        assert h1_state.fingerprint != base_fp
-        assert h2_state.fingerprint != base_fp
+        assert h1_state.identity.functional_hash != h2_state.identity.functional_hash
+        assert h1_state.identity.structural_hash != h2_state.identity.structural_hash
+        assert h1_state.identity.functional_hash != base_fp
+        assert h2_state.identity.functional_hash != base_fp
 
         locator = StateLocator(fsm)
         h1_loc = locator.locate(_raw_screen_from_dict(screens["scr_h1"]))
@@ -1745,12 +1749,12 @@ class TestApeRefinementSplit:
         assert h1_out.result is VerifyResult.ALLOW
         assert h1_out.current_state_id == h1_state.state_id
         assert h1_out.target_state_id == next(
-            s.state_id for s in fsm.states.values() if "scr_a" in s.raw_screens
+            s.state_id for s in fsm.states.values() if "scr_a" in s.evidence.raw_screen_ids
         )
         assert h2_out.result is VerifyResult.ALLOW
         assert h2_out.current_state_id == h2_state.state_id
         assert h2_out.target_state_id == next(
-            s.state_id for s in fsm.states.values() if "scr_b" in s.raw_screens
+            s.state_id for s in fsm.states.values() if "scr_b" in s.evidence.raw_screen_ids
         )
 
     def test_non_conflicting_outgoing_edges_are_partitioned_by_source_screen(
@@ -1828,8 +1832,8 @@ class TestApeRefinementSplit:
         trace = _write_trace(tmp_path, screens, traces)
 
         fsm = FsmBuilder("com.test.app").build_from_trace(trace)
-        h1_state = next(s for s in fsm.states.values() if "scr_h1" in s.raw_screens)
-        h2_state = next(s for s in fsm.states.values() if "scr_h2" in s.raw_screens)
+        h1_state = next(s for s in fsm.states.values() if "scr_h1" in s.evidence.raw_screen_ids)
+        h2_state = next(s for s in fsm.states.values() if "scr_h2" in s.evidence.raw_screen_ids)
         help_edges_h1 = [
             t
             for t in fsm.transitions
@@ -2157,7 +2161,7 @@ class TestLosslessTemplateCollapse:
         # state_not_found).
         rep_screens: set[str] = set()
         for state in fsm.states.values():
-            rep_screens.update(state.raw_screens)
+            rep_screens.update(state.evidence.raw_screen_ids)
         # Every detail screen the trace observed must be reachable through
         # raw_screens of some surviving state.
         for sid in ("scr_a", "scr_b", "scr_c"):
@@ -2189,13 +2193,13 @@ class TestLosslessTemplateCollapse:
         # The two semantically-different detail states must both still exist.
         live_screens: set[str] = set()
         for state in fsm.states.values():
-            live_screens.update(state.raw_screens)
+            live_screens.update(state.evidence.raw_screen_ids)
         assert "scr_a" in live_screens
         assert "scr_b" in live_screens
 
         # No state retains a stale sub_fsm_template_id.
         for state in fsm.states.values():
-            assert state.sub_fsm_template_id is None
+            assert state.abstraction.template_id is None
 
         # Structural invariant: no (source, canonical_action_key) maps to
         # more than one distinct target among high-trust transitions.
@@ -2205,10 +2209,9 @@ class TestLosslessTemplateCollapse:
                 continue
             groups.setdefault((t.source, canonical_action_key(t.action)), set()).add(t.target)
         for (src, key), targets in groups.items():
-            assert len(targets) <= 1, (
-                f"determinism invariant broken: source={src} key={key} "
-                f"targets={sorted(targets)}"
-            )
+            assert (
+                len(targets) <= 1
+            ), f"determinism invariant broken: source={src} key={key} targets={sorted(targets)}"
 
 
 class TestResolveTemplateBindingMissing:
@@ -2848,16 +2851,16 @@ class TestConservativeTemplateCollapse:
         # some state's raw_screens (validator inverts raw_screens).
         live_screens: set[str] = set()
         for state in fsm.states.values():
-            live_screens.update(state.raw_screens)
+            live_screens.update(state.evidence.raw_screen_ids)
         assert "scr_det_a" in live_screens
         assert "scr_det_b" in live_screens
 
         # No state should retain a sub_fsm_template_id while not DYNAMIC.
         for state in fsm.states.values():
-            if state.sub_fsm_template_id is not None:
-                assert state.container_type == ContainerType.DYNAMIC, (
+            if state.abstraction.template_id is not None:
+                assert state.abstraction.container_type == ContainerType.DYNAMIC, (
                     f"stale template id on state {state.state_id}: "
-                    f"container_type={state.container_type!r}"
+                    f"container_type={state.abstraction.container_type!r}"
                 )
 
     def test_navigate_up_on_dynamic_state_resolves_normally(self) -> None:
@@ -3033,7 +3036,7 @@ class TestObservedClickSelfLoopPreserved:
         fsm = FsmBuilder("com.test.app").build_from_trace(trace)
 
         # Find the home state.
-        home_state = next(s for s in fsm.states.values() if "scr_home" in s.raw_screens)
+        home_state = next(s for s in fsm.states.values() if "scr_home" in s.evidence.raw_screen_ids)
         self_loops = [
             t
             for t in fsm.transitions
@@ -3129,7 +3132,9 @@ class TestNoOrphanSubFsmTemplates:
         # builder ties it to the broader pipeline, we replicate the sweep
         # directly here using the same predicate.
         referenced = {
-            s.sub_fsm_template_id for s in fsm.states.values() if s.sub_fsm_template_id is not None
+            s.abstraction.template_id
+            for s in fsm.states.values()
+            if s.abstraction.template_id is not None
         }
         for tid in list(fsm.sub_fsm_templates):
             if tid not in referenced:
@@ -3507,12 +3512,15 @@ def test_product_row_transitions_preserve_item_identity(tmp_path: Path) -> None:
     fsm = FsmBuilder("com.test.app").build_from_trace(path)
 
     # All three detail screens collapse to a single abstract detail state.
-    list_state = next(s for s in fsm.states.values() if "scr_list" in (s.raw_screens or []))
+    list_state = next(
+        s for s in fsm.states.values() if "scr_list" in (s.evidence.raw_screen_ids or [])
+    )
     detail_state_ids = {
         s.state_id
         for s in fsm.states.values()
         if any(
-            sid in (s.raw_screens or []) for sid in ("scr_detail_a", "scr_detail_b", "scr_detail_c")
+            sid in (s.evidence.raw_screen_ids or [])
+            for sid in ("scr_detail_a", "scr_detail_b", "scr_detail_c")
         )
     }
     assert len(detail_state_ids) == 1

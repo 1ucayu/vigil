@@ -19,10 +19,14 @@ from vigil.core.ui_parser import parse_hierarchy_xml
 from vigil.models.action import Action
 from vigil.models.fsm import (
     AbstractState,
+    AndroidStateContext,
     AppFSM,
     ContainerType,
     HierarchyLevel,
     ProvenanceEntry,
+    StateAbstraction,
+    StateEvidence,
+    StateIdentity,
     SubFsmTemplate,
     Transition,
     canonical_action_key,
@@ -265,7 +269,7 @@ class FsmBuilder:
         groups: dict[tuple[str | None, str], list[str]] = defaultdict(list)
         for state in fsm.states.values():
             base_name = re.sub(r"\s*#\d+$", "", state.name)
-            key = (state.activity_name, base_name)
+            key = (state.android_context.activity_name, base_name)
             groups[key].append(state.state_id)
 
         merged_count = 0
@@ -273,7 +277,7 @@ class FsmBuilder:
         _MEANINGFUL_SELF_LOOPS = {"scroll_up", "scroll_down", "input_text"}  # noqa: N806
 
         def _fp(state_id: str) -> str:
-            return fsm.states[state_id].fingerprint or ""
+            return fsm.states[state_id].identity.functional_hash or ""
 
         for (_activity, base_name), state_ids in groups.items():
             if len(state_ids) <= 1:
@@ -309,7 +313,9 @@ class FsmBuilder:
 
                 for dup_id in duplicates:
                     dup_state = fsm.states[dup_id]
-                    fsm.states[canonical_id].raw_screens.extend(dup_state.raw_screens)
+                    fsm.states[canonical_id].evidence.raw_screen_ids.extend(
+                        dup_state.evidence.raw_screen_ids
+                    )
 
                 fsm.states[canonical_id].name = base_name
 
@@ -465,7 +471,7 @@ class FsmBuilder:
         dialog_classes = set(indicators.get("classes", []))
         dialog_rids = {rid.lower() for rid in indicators.get("resource_ids", [])}
 
-        for sid in state.raw_screens:
+        for sid in state.evidence.raw_screen_ids:
             screen = raw_screens.get(sid, {})
             metadata = screen.get("metadata", {})
             if metadata.get("has_modal"):
@@ -516,7 +522,7 @@ class FsmBuilder:
                 continue
 
             elements: list[dict[str, Any]] = []
-            for sid in state.raw_screens:
+            for sid in state.evidence.raw_screen_ids:
                 screen = raw_screens.get(sid, {})
                 elements = screen.get("interactable_elements", screen.get("elements", []))
                 if elements:
@@ -571,8 +577,9 @@ class FsmBuilder:
 
         activity_groups: dict[str, list[str]] = defaultdict(list)
         for state in fsm.states.values():
-            if state.activity_name and state.hierarchy_level == HierarchyLevel.FRAGMENT:
-                activity_groups[state.activity_name].append(state.state_id)
+            activity = state.android_context.activity_name
+            if activity and state.hierarchy_level == HierarchyLevel.FRAGMENT:
+                activity_groups[activity].append(state.state_id)
 
         tab_groups: list[list[str]] = []
         for _activity, state_ids in activity_groups.items():
@@ -581,7 +588,7 @@ class FsmBuilder:
             has_tabs = False
             for sid in state_ids:
                 state = fsm.states[sid]
-                for raw_sid in state.raw_screens:
+                for raw_sid in state.evidence.raw_screen_ids:
                     screen = raw_screens.get(raw_sid, {})
                     elements = screen.get("interactable_elements", screen.get("elements", []))
                     for el in elements:
@@ -661,11 +668,11 @@ class FsmBuilder:
         labeled = 0
 
         for sid, state in fsm.states.items():
-            if state.container_type != ContainerType.NONE:
+            if state.abstraction.container_type != ContainerType.NONE:
                 continue
 
             has_scrollable = False
-            for rsid in state.raw_screens:
+            for rsid in state.evidence.raw_screen_ids:
                 screen = raw_screens.get(rsid, {})
                 elements = screen.get("interactable_elements", screen.get("elements", []))
                 if any(e.get("is_scrollable") for e in elements):
@@ -676,7 +683,7 @@ class FsmBuilder:
 
             targets = self._find_same_fingerprint_targets(fsm, sid)
             if len(targets) >= 2:
-                state.container_type = ContainerType.DYNAMIC
+                state.abstraction.container_type = ContainerType.DYNAMIC
                 labeled += 1
 
         return labeled
@@ -705,7 +712,9 @@ class FsmBuilder:
         """
         templates_created = 0
         dynamic_state_ids = [
-            sid for sid, s in fsm.states.items() if s.container_type == ContainerType.DYNAMIC
+            sid
+            for sid, s in fsm.states.items()
+            if s.abstraction.container_type == ContainerType.DYNAMIC
         ]
         # Cumulative redirect map across template iterations. A collapsed
         # state may itself be redirected by a later template; resolving
@@ -804,7 +813,7 @@ class FsmBuilder:
 
             collapsed_target_id_set = {tid for tid, _ in click_targets}
             parameter_schema = self._infer_parameter_schema(fsm, state_id, collapsed_target_id_set)
-            item_skeleton = rep_state.structural_fingerprint or "" if rep_state else ""
+            item_skeleton = rep_state.identity.structural_hash or "" if rep_state else ""
 
             tmpl = SubFsmTemplate(
                 template_id=template_id,
@@ -816,31 +825,32 @@ class FsmBuilder:
                 item_skeleton=item_skeleton,
             )
             fsm.sub_fsm_templates[template_id] = tmpl
-            state.sub_fsm_template_id = template_id
+            state.abstraction.template_id = template_id
             templates_created += 1
 
             # Lossless collapse: merge each collapsed sibling's raw_screens
             # AND its incoming/outgoing transitions onto the representative
             # before deleting it. Validator (validate_fsm) inverts
-            # AbstractState.raw_screens to recover screen→state mappings, so
-            # any screen left orphaned by the old "delete + prune" policy
-            # would surface as state_not_found on its own training trace.
+            # AbstractState.evidence.raw_screen_ids to recover screen→state
+            # mappings, so any screen left orphaned by the old "delete +
+            # prune" policy would surface as state_not_found on its own
+            # training trace.
             #
-            # Collapsed siblings share structural_fingerprint by construction
+            # Collapsed siblings share structural_hash by construction
             # (the collapse criterion in _find_same_fingerprint_targets), so
-            # the representative's structural_fingerprint already covers them;
+            # the representative's structural_hash already covers them;
             # we deliberately do NOT overwrite it.
             collapsed_others = {tid for tid, _ in click_targets[1:]}
             rep_state = fsm.states.get(representative_target_id)
             if rep_state is not None:
-                rep_screens = set(rep_state.raw_screens)
+                rep_screens = set(rep_state.evidence.raw_screen_ids)
                 for tid in collapsed_others:
                     absorbed_state = fsm.states.get(tid)
                     if absorbed_state is None:
                         continue
-                    for sid in absorbed_state.raw_screens:
+                    for sid in absorbed_state.evidence.raw_screen_ids:
                         if sid not in rep_screens:
-                            rep_state.raw_screens.append(sid)
+                            rep_state.evidence.raw_screen_ids.append(sid)
                             rep_screens.add(sid)
 
             # Re-source/-target transitions touching collapsed siblings onto
@@ -930,7 +940,7 @@ class FsmBuilder:
                     tgt = fsm.states.get(t.target)
                     if tgt is None:
                         continue
-                    sfp = tgt.structural_fingerprint or "<none>"
+                    sfp = tgt.identity.structural_hash or "<none>"
                     counts[sfp] += 1
                 summary = ", ".join(f"{k[:8]}:{v}" for k, v in counts.items())
                 logger.info(f"  {sid[:6]}  {summary or '<no click targets>'}")
@@ -970,22 +980,24 @@ class FsmBuilder:
 
         # Stale template-id sweep: any state whose container_type is not
         # DYNAMIC (perhaps because the state was absorbed/redirected, or
-        # the classifier downgraded it) must not retain a sub_fsm_template_id.
+        # the classifier downgraded it) must not retain a template_id.
         # Without this, ``resolve_transition`` would treat clicks on a
         # non-dynamic state as template-binding attempts.
         for state in fsm.states.values():
             if (
-                state.sub_fsm_template_id is not None
-                and state.container_type != ContainerType.DYNAMIC
+                state.abstraction.template_id is not None
+                and state.abstraction.container_type != ContainerType.DYNAMIC
             ):
-                state.sub_fsm_template_id = None
+                state.abstraction.template_id = None
 
         # Drop orphan templates that no live state references via
-        # ``sub_fsm_template_id``. After redirects, a previously-built
+        # ``abstraction.template_id``. After redirects, a previously-built
         # template may no longer be reachable from any state and should
         # not linger in the bundle.
         referenced_template_ids = {
-            s.sub_fsm_template_id for s in fsm.states.values() if s.sub_fsm_template_id is not None
+            s.abstraction.template_id
+            for s in fsm.states.values()
+            if s.abstraction.template_id is not None
         }
         orphan_template_ids = [
             tid for tid in list(fsm.sub_fsm_templates.keys()) if tid not in referenced_template_ids
@@ -1172,7 +1184,7 @@ class FsmBuilder:
             target = fsm.states.get(t.target)
             if target is None:
                 continue
-            sfp = target.structural_fingerprint
+            sfp = target.identity.structural_hash
             if not sfp:
                 continue
             # Multiple observations of the same (source, target) edge must not
@@ -1359,16 +1371,18 @@ class FsmBuilder:
         target_order = sorted(target_to_screens.keys())
         keep_target = target_order[0]
         new_state_ids: dict[str, str] = {}
-        base_fingerprint = source_state.fingerprint
-        base_structural_fingerprint = source_state.structural_fingerprint
+        base_fingerprint = source_state.identity.functional_hash
+        base_structural_fingerprint = source_state.identity.structural_hash
         target_secondary_hashes = {
             tgt: self._secondary_feature_group_hash(screens, raw_screens)
             for tgt, screens in target_to_screens.items()
         }
 
         keep_hash = target_secondary_hashes[keep_target]
-        source_state.fingerprint = self._with_secondary_feature_hash(base_fingerprint, keep_hash)
-        source_state.structural_fingerprint = self._with_secondary_feature_hash(
+        source_state.identity.functional_hash = self._with_secondary_feature_hash(
+            base_fingerprint, keep_hash
+        )
+        source_state.identity.structural_hash = self._with_secondary_feature_hash(
             base_structural_fingerprint, keep_hash
         )
 
@@ -1384,21 +1398,36 @@ class FsmBuilder:
             new_state = AbstractState(
                 state_id=new_state_id,
                 name=f"{source_state.name} #refined-{idx}",
-                fingerprint=self._with_secondary_feature_hash(base_fingerprint, secondary_hash),
-                structural_fingerprint=self._with_secondary_feature_hash(
-                    base_structural_fingerprint, secondary_hash
-                ),
                 hierarchy_level=source_state.hierarchy_level,
                 parent_state=source_state.parent_state,
-                activity_name=source_state.activity_name,
-                invariants=list(source_state.invariants),
-                raw_screens=sorted(screens_for_new),
-                container_type=source_state.container_type,
-                container_resource_id=source_state.container_resource_id,
-                semantic_profile=source_state.semantic_profile,
-                state_invariants=list(source_state.state_invariants),
-                invariant_confidence=source_state.invariant_confidence,
-                sub_fsm_template_id=source_state.sub_fsm_template_id,
+                kind=source_state.kind,
+                identity=StateIdentity(
+                    functional_hash=self._with_secondary_feature_hash(
+                        base_fingerprint, secondary_hash
+                    ),
+                    structural_hash=self._with_secondary_feature_hash(
+                        base_structural_fingerprint, secondary_hash
+                    ),
+                ),
+                android_context=AndroidStateContext(
+                    activity_name=source_state.android_context.activity_name,
+                    package_name=source_state.android_context.package_name,
+                    window_type=source_state.android_context.window_type,
+                ),
+                evidence=StateEvidence(raw_screen_ids=sorted(screens_for_new)),
+                abstraction=StateAbstraction(
+                    container_type=source_state.abstraction.container_type,
+                    container_selector=dict(source_state.abstraction.container_selector),
+                    template_id=source_state.abstraction.template_id,
+                    template_role=source_state.abstraction.template_role,
+                    parameter_schema=dict(source_state.abstraction.parameter_schema),
+                    parameter_bindings=dict(source_state.abstraction.parameter_bindings),
+                ),
+                annotations=source_state.annotations.model_copy(deep=True),
+                invariant_specs=[
+                    spec.model_copy(deep=True) for spec in source_state.invariant_specs
+                ],
+                legacy_invariants=list(source_state.legacy_invariants),
             )
             states[new_state_id] = new_state
             new_state_ids[tgt] = new_state_id
@@ -1406,8 +1435,8 @@ class FsmBuilder:
                 sid_to_state_id[sid] = new_state_id
 
         relocated_screens = {s for tgt in target_order[1:] for s in target_to_screens[tgt]}
-        source_state.raw_screens = [
-            s for s in source_state.raw_screens if s not in relocated_screens
+        source_state.evidence.raw_screen_ids = [
+            s for s in source_state.evidence.raw_screen_ids if s not in relocated_screens
         ]
 
         # 1. Update conflicting transitions: re-source the ones whose target is not the kept one.
@@ -1574,7 +1603,7 @@ class FsmBuilder:
 
             if fp in fp_to_state_id:
                 existing_sid = fp_to_state_id[fp]
-                states[existing_sid].raw_screens.append(screen_id)
+                states[existing_sid].evidence.raw_screen_ids.append(screen_id)
                 continue
 
             state_counter += 1
@@ -1734,7 +1763,7 @@ class FsmBuilder:
                     raw_screens=[screen_id],
                 )
             else:
-                states[canonical].raw_screens.append(screen_id)
+                states[canonical].evidence.raw_screen_ids.append(screen_id)
             sid_to_state_id[screen_id] = canonical
 
         logger.info(
@@ -2081,7 +2110,7 @@ class FsmBuilder:
         if entry_activity and states:
             entry_short = entry_activity.rsplit(".", 1)[-1]
             for state in states.values():
-                activity_name = state.activity_name
+                activity_name = state.android_context.activity_name
                 if not activity_name:
                     continue
                 if activity_name == entry_activity:
@@ -2117,7 +2146,7 @@ class FsmBuilder:
         """
         activity_groups: dict[str | None, list[str]] = defaultdict(list)
         for state in states.values():
-            activity_groups[state.activity_name].append(state.state_id)
+            activity_groups[state.android_context.activity_name].append(state.state_id)
 
         for activity_name, state_ids in activity_groups.items():
             if activity_name is None:

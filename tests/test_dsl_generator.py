@@ -366,7 +366,7 @@ class TestScreenshotResolution:
         fsm, trace_path = synthetic_fsm_and_trace
         gen = _make_generator(fsm)
         trace_data = json.loads(trace_path.read_text())
-        fsm.states["s1"].raw_screens = []
+        fsm.states["s1"].evidence.raw_screen_ids = []
 
         path = gen._resolve_screenshot(fsm.states["s1"], trace_data)
         assert path is None

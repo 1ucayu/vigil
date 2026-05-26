@@ -3,7 +3,7 @@
 Verifies that state-level invariants hold for the current screen.
 Called as post-arrival check after an agent reaches a new state.
 Invariants are mined during offline FSM construction (Stage 2.5)
-and stored in AbstractState.state_invariants.
+and stored in AbstractState.invariant_specs.
 
 Three-valued (TRUE / FALSE / UNKNOWN). DecisionEngine routes:
   any FALSE -> DENY (invariant violation proven);
@@ -37,7 +37,7 @@ class InvariantChecker:
     """Checks state invariants against runtime screen state.
 
     Uses DSLEvaluator to evaluate each invariant expression from
-    AbstractState.state_invariants against the current ScreenContext.
+    AbstractState.invariant_specs against the current ScreenContext.
     """
 
     def __init__(self, fsm: AppFSM, evaluator: DSLEvaluator | None = None) -> None:
@@ -57,7 +57,7 @@ class InvariantChecker:
                 state_id=state_id, all_passed=True, total=0, passed=0, failed=0
             )
 
-        invariants = state.state_invariants
+        invariants = [spec.expr for spec in state.invariant_specs]
         if not invariants:
             return InvariantCheckResult(
                 state_id=state_id, all_passed=True, total=0, passed=0, failed=0

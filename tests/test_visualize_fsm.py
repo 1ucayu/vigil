@@ -9,10 +9,15 @@ from typing import Any
 from vigil.core.paths import OUTPUT_DOCS_DIR, resolve_generated_output_path
 from vigil.models.fsm import (
     AbstractState,
+    AndroidStateContext,
     AppFSM,
     ContainerType,
     HierarchyLevel,
-    StateSemanticProfile,
+    StateAbstraction,
+    StateAnnotations,
+    StateEvidence,
+    StateIdentity,
+    StateInvariant,
     Transition,
 )
 from vigil.scripts.visualize_fsm import _fsm_to_view_dict, default_output_path, render_fsm_html
@@ -22,9 +27,9 @@ _SAFE_STATE_FIELDS = {
     "name",
     "hierarchy_level",
     "parent_state",
-    "activity_name",
-    "container_type",
-    "sub_fsm_template_id",
+    "kind",
+    "android_context",
+    "abstraction",
 }
 
 _GUARD = "read(secret_field, enabled) == true"
@@ -54,32 +59,41 @@ def _sensitive_fsm() -> AppFSM:
     s1 = AbstractState(
         state_id="s1",
         name="Main",
-        fingerprint="fp_secret_main",
-        structural_fingerprint="struct_secret_main",
         hierarchy_level=HierarchyLevel.ACTIVITY,
-        activity_name="com.example.MainActivity",
-        invariants=["secret invariant"],
-        raw_screens=["raw_screen_secret"],
-        container_type=ContainerType.DYNAMIC,
-        container_resource_id="container_secret",
-        semantic_profile=StateSemanticProfile(
+        identity=StateIdentity(
+            functional_hash="fp_secret_main",
+            structural_hash="struct_secret_main",
+        ),
+        android_context=AndroidStateContext(activity_name="com.example.MainActivity"),
+        evidence=StateEvidence(raw_screen_ids=["raw_screen_secret"]),
+        abstraction=StateAbstraction(
+            container_type=ContainerType.DYNAMIC,
+            container_selector={"resource_id": "container_secret"},
+            template_id="tmpl_secret",
+        ),
+        annotations=StateAnnotations(
             alt_text="secret alt text",
             page_function="secret page function",
             expected_actions=["secret action"],
-            icon_labels={"secret_icon": "secret icon label"},
+            widget_aliases=[{"element_id": "secret_icon", "label": "secret icon label"}],
             generation_confidence=0.91,
         ),
-        state_invariants=["secret state invariant"],
-        invariant_confidence=0.84,
-        sub_fsm_template_id="tmpl_secret",
+        invariant_specs=[
+            StateInvariant(
+                expr="secret state invariant",
+                confidence=0.84,
+                source="mined_multivisit",
+            )
+        ],
+        legacy_invariants=["secret invariant"],
     )
     s2 = AbstractState(
         state_id="s2",
         name="Detail",
-        fingerprint="fp_secret_detail",
         hierarchy_level=HierarchyLevel.FRAGMENT,
         parent_state="s1",
-        activity_name="com.example.MainActivity",
+        identity=StateIdentity(functional_hash="fp_secret_detail"),
+        android_context=AndroidStateContext(activity_name="com.example.MainActivity"),
     )
     fsm.add_state(s1)
     fsm.add_state(s2)
@@ -152,6 +166,14 @@ def test_render_fsm_html_redacts_sensitive_fields_by_default(tmp_path: Path) -> 
     transition = payload["transitions"][0]
 
     assert set(state) == _SAFE_STATE_FIELDS
+    # Abstraction is emitted but redacted: container_type / template_id /
+    # template_role only — no selectors, parameter schema, or bindings.
+    assert set(state["abstraction"]) == {"container_type", "template_id", "template_role"}
+    assert state["abstraction"]["container_type"] == "dynamic"
+    assert state["abstraction"]["template_id"] == "tmpl_secret"
+    # android_context is fully present (activity/package/window are public Android metadata).
+    assert state["android_context"]["activity_name"] == "com.example.MainActivity"
+
     assert transition == {
         "source": "s1",
         "target": "s2",
@@ -159,7 +181,22 @@ def test_render_fsm_html_redacts_sensitive_fields_by_default(tmp_path: Path) -> 
         "confidence": 0.91,
         "observed_count": 3,
     }
-    for key in ("raw_screens", "semantic_profile", "icon_labels", "invariants"):
+    # The redacted safe view must not leak raw screen ids, annotations,
+    # widget aliases, invariant specs, legacy invariants, or selector
+    # parameters that can reveal capture-state / LLM-derived / fingerprint
+    # information.
+    for key in (
+        "raw_screen_ids",
+        "evidence",
+        "annotations",
+        "widget_aliases",
+        "invariant_specs",
+        "legacy_invariants",
+        "container_selector",
+        "parameter_schema",
+        "parameter_bindings",
+        "container_secret",
+    ):
         assert key not in html
     for secret_value in (
         "raw_screen_secret",
@@ -179,19 +216,23 @@ def test_render_fsm_html_can_opt_into_sensitive_details(tmp_path: Path) -> None:
     state = payload["states"][0]
     transition = payload["transitions"][0]
 
-    assert state["raw_screens"] == ["raw_screen_secret"]
-    assert state["semantic_profile"]["icon_labels"] == {"secret_icon": "secret icon label"}
-    # Legacy invariants remain printable metadata; state_invariants are the
-    # canonical runtime-enforced mirror.
-    assert state["invariants"] == ["secret invariant"]
+    # Nested canonical keys carry the data.
+    assert state["evidence"]["raw_screen_ids"] == ["raw_screen_secret"]
+    aliases = state["annotations"]["widget_aliases"]
+    assert {a["label"] for a in aliases} == {"secret icon label"}
+    assert {a["element_id"] for a in aliases} == {"secret_icon"}
+    assert state["annotations"]["alt_text"] == "secret alt text"
+    # Legacy invariants stay non-runtime; invariant_specs is the canonical
+    # runtime-enforced list.
     assert state["legacy_invariants"] == ["secret invariant"]
-    assert state["state_invariants"] == ["secret state invariant"]
+    spec_exprs = [spec["expr"] for spec in state["invariant_specs"]]
+    assert spec_exprs == ["secret state invariant"]
     assert transition["action"]["target"] == "wifi_entry"
     assert transition["action"]["target_text"] == "private network"
     assert "guard" not in transition
-    assert "raw_screens" in html
-    assert "semantic_profile" in html
-    assert "icon_labels" in html
+    assert "raw_screen_ids" in html
+    assert "annotations" in html
+    assert "widget_aliases" in html
     assert _GUARD not in html
 
 

@@ -89,11 +89,16 @@ def _cmd_inspect(fsm) -> None:
 
     print(f"\n{_BOLD}States:{_RESET}")
     for s in fsm.states.values():
-        activity = f" @ {s.activity_name}" if s.activity_name else ""
+        activity_name = s.android_context.activity_name
+        activity = f" @ {activity_name}" if activity_name else ""
         print(f"  {_CYAN}{s.state_id}{_RESET}  {s.name}{activity}")
-        if s.invariants:
-            for inv in s.invariants:
-                print(f"    invariant: {inv}")
+        if s.invariant_specs:
+            for spec in s.invariant_specs:
+                meta = f"  ({spec.source}, conf={spec.confidence:.2f})"
+                print(f"    invariant: {spec.expr}{meta}")
+        if s.legacy_invariants:
+            for legacy_expr in s.legacy_invariants:
+                print(f"    legacy invariant (deprecated, non-runtime): {legacy_expr}")
 
     print(f"\n{_BOLD}Transitions:{_RESET}")
     for t in fsm.transitions:

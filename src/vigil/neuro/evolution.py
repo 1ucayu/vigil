@@ -19,7 +19,13 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel
 
-from vigil.models.fsm import AbstractState, AppFSM, Transition
+from vigil.models.fsm import (
+    AbstractState,
+    AndroidStateContext,
+    AppFSM,
+    StateIdentity,
+    Transition,
+)
 from vigil.models.state import RawScreen
 
 # Cap on confidence for inherited/evolved transitions. Kept below
@@ -85,12 +91,12 @@ class FsmEvolver:
             else INHERITED_TRANSITION_CONFIDENCE
         )
         self._evolution_count = 0
-        # Precompute per-state component sets from raw_screens. States whose
-        # raw_screens are not available score 0.0 at match time (logged+skipped).
+        # Precompute per-state component sets from raw screens. States whose
+        # raw screens are not available score 0.0 at match time (logged+skipped).
         self._state_components: dict[str, set[tuple[str, str, int]]] = {}
         for sid, state in fsm.states.items():
             comps: set[tuple[str, str, int]] = set()
-            for rsid in state.raw_screens:
+            for rsid in state.evidence.raw_screen_ids:
                 rs = self._raw_screens.get(rsid)
                 if rs is None:
                     continue
@@ -118,7 +124,7 @@ class FsmEvolver:
         best_score = 0.0
 
         for state in self._fsm.states.values():
-            if state.structural_fingerprint and state.structural_fingerprint == screen_fp:
+            if state.identity.structural_hash and state.identity.structural_hash == screen_fp:
                 best_state_id = state.state_id
                 best_score = 1.0
                 break
@@ -141,10 +147,12 @@ class FsmEvolver:
         new_state = AbstractState(
             state_id=new_state_id,
             name=f"{similar_state.name} (evolved)",
-            fingerprint=screen_fp,
             hierarchy_level=similar_state.hierarchy_level,
             parent_state=similar_state.parent_state,
-            activity_name=similar_state.activity_name,
+            identity=StateIdentity(functional_hash=screen_fp),
+            android_context=AndroidStateContext(
+                activity_name=similar_state.android_context.activity_name,
+            ),
         )
         self._fsm.add_state(new_state)
 

@@ -55,9 +55,9 @@ _SAFE_STATE_FIELDS = (
     "name",
     "hierarchy_level",
     "parent_state",
-    "activity_name",
-    "container_type",
-    "sub_fsm_template_id",
+    "kind",
+    "android_context",
+    "abstraction",
 )
 
 
@@ -122,14 +122,14 @@ def render_fsm(
         penwidth="1.0",
     )
 
-    activities = sorted({s.activity_name or "" for s in fsm.states.values()})
+    activities = sorted({s.android_context.activity_name or "" for s in fsm.states.values()})
     activity_color = {
         act: _ACTIVITY_COLORS[i % len(_ACTIVITY_COLORS)] for i, act in enumerate(activities)
     }
 
     activity_states: dict[str, list[str]] = {}
     for state in fsm.states.values():
-        act = state.activity_name or ""
+        act = state.android_context.activity_name or ""
         if act not in activity_states:
             activity_states[act] = []
         activity_states[act].append(state.state_id)
@@ -148,7 +148,7 @@ def render_fsm(
                 penwidth="2.5",
             )
         else:
-            fill = activity_color.get(state.activity_name or "", "#e8e8e8")
+            fill = activity_color.get(state.android_context.activity_name or "", "#e8e8e8")
             parent_graph.node(state_id, label=name, fillcolor=fill)
 
     if cluster_activities and len(activities) > 1:
@@ -236,7 +236,7 @@ def _fsm_to_view_dict(
     screens_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Convert an AppFSM to a frontend-friendly, JSON-serializable dict."""
-    activities = sorted({s.activity_name or "" for s in fsm.states.values()})
+    activities = sorted({s.android_context.activity_name or "" for s in fsm.states.values()})
     activity_colors = {
         act: _ACTIVITY_COLORS[i % len(_ACTIVITY_COLORS)] for i, act in enumerate(activities)
     }
@@ -280,15 +280,37 @@ def _state_to_view_dict(
     include_sensitive_details: bool,
     screens_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Convert a state to the HTML view schema."""
-    state_dict = state.model_dump_compat(mode="json")
-    if include_sensitive_details:
-        if screens_dir is not None:
-            images = _load_screen_images(state_dict.get("raw_screens", []), screens_dir)
-            if images:
-                state_dict["raw_screen_images"] = images
-        return state_dict
-    return {field: state_dict.get(field) for field in _SAFE_STATE_FIELDS}
+    """Convert a state to the HTML view schema.
+
+    Safe mode emits a redacted nested subset (no evidence, no annotations,
+    no invariant specs, no legacy invariants, no abstraction selectors /
+    parameter schemas). Sensitive mode emits the full nested
+    ``state.model_dump(mode="json")`` plus optional raw screenshots.
+    """
+    safe_view: dict[str, Any] = {
+        "state_id": state.state_id,
+        "name": state.name,
+        "hierarchy_level": state.hierarchy_level.value,
+        "parent_state": state.parent_state,
+        "kind": state.kind.value,
+        "android_context": state.android_context.model_dump(mode="json"),
+        # Redacted abstraction projection: keep classification + template
+        # identity but drop selector / parameter dicts that can leak
+        # resource ids, sample text values, or binding fingerprints.
+        "abstraction": {
+            "container_type": state.abstraction.container_type.value,
+            "template_id": state.abstraction.template_id,
+            "template_role": state.abstraction.template_role,
+        },
+    }
+    if not include_sensitive_details:
+        return safe_view
+    full = state.model_dump(mode="json")
+    if screens_dir is not None:
+        images = _load_screen_images(state.evidence.raw_screen_ids, screens_dir)
+        if images:
+            full["raw_screen_images"] = images
+    return full
 
 
 def _load_screen_images(screen_ids: list[str], screens_dir: Path) -> list[dict[str, str]]:
@@ -744,7 +766,8 @@ const FSM_DATA = __FSM_DATA__;
 
   function nodeFill(s) {
     if (s.state_id === FSM_DATA.initial_state) return FSM_DATA.initial_color;
-    return FSM_DATA.activity_colors[s.activity_name || ''] || '#e8e8e8';
+    const activity = (s.android_context && s.android_context.activity_name) || '';
+    return FSM_DATA.activity_colors[activity] || '#e8e8e8';
   }
 
   function nodeRadius(s) {

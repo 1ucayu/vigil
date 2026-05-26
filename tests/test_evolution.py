@@ -170,7 +170,7 @@ class TestInheritAndBind:
         assert result.similarity_score == pytest.approx(1.0)
 
         new_state = fsm.states["s_evo_001"]
-        assert new_state.fingerprint == "fp_wifi_new"
+        assert new_state.identity.functional_hash == "fp_wifi_new"
         assert "(evolved)" in new_state.name
 
     def test_inherited_activity(
@@ -183,7 +183,9 @@ class TestInheritAndBind:
 
         inherited_from = fsm.states[result.inherited_from]
         new_state = fsm.states[result.state_id]
-        assert new_state.activity_name == inherited_from.activity_name
+        assert (
+            new_state.android_context.activity_name == inherited_from.android_context.activity_name
+        )
         assert new_state.hierarchy_level == inherited_from.hierarchy_level
 
     def test_inherited_transitions(
@@ -322,7 +324,7 @@ class TestCacheToDisk:
 
         reloaded = AppFSM.deserialize(path)
         assert "s_evo_001" in reloaded.states
-        assert reloaded.states["s_evo_001"].fingerprint == "fp_wifi_a"
+        assert reloaded.states["s_evo_001"].identity.functional_hash == "fp_wifi_a"
         assert len(reloaded.evolution_log) == 1
 
 

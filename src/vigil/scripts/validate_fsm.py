@@ -111,7 +111,7 @@ _SENTINELS = frozenset({"COLD_START_FAILED", "ACTION_FAILED", "LEFT_APP"})
 
 
 def _build_screen_to_state(fsm: AppFSM) -> dict[str, str]:
-    """Invert AbstractState.raw_screens to get a screen-id → state-id map.
+    """Invert AbstractState.evidence.raw_screen_ids to get a screen-id → state-id map.
 
     This is the authoritative mapping the builder produced — FSM construction
     is the only source of truth for which raw screens collapsed to which
@@ -120,7 +120,7 @@ def _build_screen_to_state(fsm: AppFSM) -> dict[str, str]:
     """
     mapping: dict[str, str] = {}
     for state in fsm.states.values():
-        for screen_id in state.raw_screens:
+        for screen_id in state.evidence.raw_screen_ids:
             mapping[screen_id] = state.state_id
     return mapping
 
@@ -153,13 +153,13 @@ def _template_binding_missing(fsm: AppFSM, source_state_id: str, action: dict[st
     state = fsm.states.get(source_state_id)
     if (
         state is None
-        or state.container_type != ContainerType.DYNAMIC
-        or not state.sub_fsm_template_id
+        or state.abstraction.container_type != ContainerType.DYNAMIC
+        or not state.abstraction.template_id
     ):
         return False
     if (action.get("type") or action.get("action_type")) != "click":
         return False
-    template = fsm.sub_fsm_templates.get(state.sub_fsm_template_id)
+    template = fsm.sub_fsm_templates.get(state.abstraction.template_id)
     if template is None:
         return False
     template_state_ids = set(template.states)
@@ -309,8 +309,8 @@ def validate_fsm(
                 source_state = fsm.states.get(source_state_id)
                 if (
                     source_state is not None
-                    and source_state.container_type == ContainerType.DYNAMIC
-                    and source_state.sub_fsm_template_id
+                    and source_state.abstraction.container_type == ContainerType.DYNAMIC
+                    and source_state.abstraction.template_id
                 ):
                     reason = ValidationReason.TEMPLATE_BINDING_MISSING
                     detail = (

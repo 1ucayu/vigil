@@ -142,8 +142,8 @@ class TestStateNotFound:
         builder = FsmBuilder("com.test.app")
         fsm = builder.build_from_trace(synthetic_trace)
         for state in fsm.states.values():
-            if "scr_001" in state.raw_screens:
-                state.raw_screens.remove("scr_001")
+            if "scr_001" in state.evidence.raw_screen_ids:
+                state.evidence.raw_screen_ids.remove("scr_001")
 
         report = validate_fsm(fsm, synthetic_trace)
         reasons = [s.reason for s in report.steps if s.source_screen_id == "scr_001"]
@@ -462,17 +462,19 @@ class TestSettingsTraceRegression:
 
         # 2. No state has sub_fsm_template_id while container_type != DYNAMIC.
         for state in fsm.states.values():
-            if state.sub_fsm_template_id is not None:
-                assert state.container_type == ContainerType.DYNAMIC, (
+            if state.abstraction.template_id is not None:
+                assert state.abstraction.container_type == ContainerType.DYNAMIC, (
                     f"stale template id on non-DYNAMIC state {state.state_id}: "
-                    f"container_type={state.container_type!r}, "
-                    f"sub_fsm_template_id={state.sub_fsm_template_id!r}"
+                    f"container_type={state.abstraction.container_type!r}, "
+                    f"sub_fsm_template_id={state.abstraction.template_id!r}"
                 )
 
         # 2b. No orphan templates — every template_id in sub_fsm_templates
         #     must be referenced by at least one state's sub_fsm_template_id.
         referenced_template_ids = {
-            s.sub_fsm_template_id for s in fsm.states.values() if s.sub_fsm_template_id is not None
+            s.abstraction.template_id
+            for s in fsm.states.values()
+            if s.abstraction.template_id is not None
         }
         for tid in fsm.sub_fsm_templates:
             assert (
@@ -487,10 +489,9 @@ class TestSettingsTraceRegression:
                 continue
             groups.setdefault((t.source, canonical_action_key(t.action)), set()).add(t.target)
         for (src, key), targets in groups.items():
-            assert len(targets) <= 1, (
-                f"non-deterministic transition: source={src} key={key} "
-                f"targets={sorted(targets)}"
-            )
+            assert (
+                len(targets) <= 1
+            ), f"non-deterministic transition: source={src} key={key} targets={sorted(targets)}"
 
         # Diagnostic-only: report OK/reason counts; do not assert on the floor.
         report = validate_fsm(fsm, _SETTINGS_TRACE)
@@ -498,9 +499,7 @@ class TestSettingsTraceRegression:
         total = len(report.steps)
         ok = reasons.get(ValidationReason.OK, 0)
         with capsys.disabled():
-            print(
-                f"\n[settings regression] total={total} ok={ok} " f"reasons={reasons.most_common()}"
-            )
+            print(f"\n[settings regression] total={total} ok={ok} reasons={reasons.most_common()}")
 
 
 _FIDELITY_TRACE = (

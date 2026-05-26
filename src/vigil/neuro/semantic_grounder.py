@@ -27,6 +27,8 @@ from vigil.models.fsm import (
     AbstractState,
     AppFSM,
     ContainerType,
+    StateAnnotations,
+    StateInvariant,
     StateSemanticProfile,
 )
 from vigil.neuro.app_prior import AppPrior
@@ -212,15 +214,33 @@ class SemanticGrounder:
             if icon_labels:
                 profile.icon_labels = icon_labels
 
-            state.semantic_profile = profile
+            # Project the legacy ``StateSemanticProfile`` (icon_labels as
+            # dict[str, str]) onto the canonical ``StateAnnotations`` shape
+            # (widget_aliases as list[{element_id, label}]). Inlined here
+            # rather than imported from a private model helper.
+            widget_aliases = [
+                {"element_id": str(elem_id), "label": str(label)}
+                for elem_id, label in (profile.icon_labels or {}).items()
+            ]
+            state.annotations = StateAnnotations(
+                display_name=state.annotations.display_name,
+                alt_text=profile.alt_text,
+                page_function=profile.page_function,
+                expected_actions=list(profile.expected_actions),
+                widget_aliases=widget_aliases,
+                generation_confidence=profile.generation_confidence,
+            )
 
             invariants, confidence, container_type = self.mine_invariants(
                 state, observations, app_prior
             )
-            state.state_invariants = invariants
-            state.invariant_confidence = confidence
+            source = "mined_multivisit" if confidence > 0.0 else "unknown"
+            state.invariant_specs = [
+                StateInvariant(expr=str(expr), confidence=confidence, source=source)
+                for expr in invariants
+            ]
             if container_type != ContainerType.NONE:
-                state.container_type = container_type
+                state.abstraction.container_type = container_type
 
         return fsm
 
@@ -234,15 +254,17 @@ class SemanticGrounder:
         obs = observations[0]
         prompt_parts: list[str] = []
 
-        if app_prior and state.activity_name:
-            activity_info = _find_activity(app_prior, state.activity_name)
+        if app_prior and state.android_context.activity_name:
+            activity_info = _find_activity(app_prior, state.android_context.activity_name)
             if activity_info:
                 prompt_parts.append(f"This screen belongs to Activity: {activity_info.name}")
                 if activity_info.label:
                     prompt_parts.append(f"Activity label: {activity_info.label}")
 
         elements_raw = obs.get("interactable_elements", obs.get("elements", []))
-        static_ctx = _build_static_context(app_prior, state.activity_name, elements_raw)
+        static_ctx = _build_static_context(
+            app_prior, state.android_context.activity_name, elements_raw
+        )
         if static_ctx:
             prompt_parts.append(static_ctx)
 
@@ -318,7 +340,7 @@ class SemanticGrounder:
             relevant = [
                 w
                 for w in app_prior.widget_declarations
-                if _match_layout_to_activity(w.layout_file, state.activity_name)
+                if _match_layout_to_activity(w.layout_file, state.android_context.activity_name)
             ]
             if relevant:
                 wids = ", ".join(f"{w.widget_class}(id={w.widget_id})" for w in relevant[:10])
@@ -566,10 +588,10 @@ class SemanticGrounder:
         app_prior: AppPrior | None,
     ) -> float:
         """Cross-validate page_function with Activity prior."""
-        if app_prior is None or not state.activity_name:
+        if app_prior is None or not state.android_context.activity_name:
             return 0.7
 
-        activity_info = _find_activity(app_prior, state.activity_name)
+        activity_info = _find_activity(app_prior, state.android_context.activity_name)
         if activity_info is None or activity_info.predicted_function is None:
             return 0.7
 
@@ -594,7 +616,7 @@ class SemanticGrounder:
     ) -> list[dict[str, Any]]:
         """Collect all observation dicts for a state's raw screens."""
         observations: list[dict[str, Any]] = []
-        for sid in state.raw_screens:
+        for sid in state.evidence.raw_screen_ids:
             if sid in raw_screens:
                 observations.append(raw_screens[sid])
         if not observations and raw_screens:

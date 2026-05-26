@@ -37,6 +37,68 @@ class TestStateLocator:
             assert loc.result == LocateResult.EXACT
             assert loc.state_id == expected_id
 
+    def test_ambiguous_fingerprint_is_not_exact(self) -> None:
+        fsm = AppFSM(app_package="com.test.app")
+        fsm.add_state(
+            AbstractState(
+                state_id="s_func_a",
+                name="Shared Functional A",
+                fingerprint="fp_shared",
+                structural_fingerprint="struct_func_a",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="s_func_b",
+                name="Shared Functional B",
+                fingerprint="fp_shared",
+                structural_fingerprint="struct_func_b",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="s_struct_a",
+                name="Shared Structural A",
+                fingerprint="fp_struct_a",
+                structural_fingerprint="struct_shared",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="s_struct_b",
+                name="Shared Structural B",
+                fingerprint="fp_struct_b",
+                structural_fingerprint="struct_shared",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+        fsm.add_state(
+            AbstractState(
+                state_id="s_unique",
+                name="Unique",
+                fingerprint="fp_unique",
+                structural_fingerprint="struct_unique",
+                hierarchy_level=HierarchyLevel.ACTIVITY,
+            )
+        )
+
+        locator = StateLocator(fsm)
+
+        shared_functional = locator.locate_by_fingerprint("fp_shared")
+        assert shared_functional.result != LocateResult.EXACT
+        assert shared_functional.state_id is None
+
+        shared_structural = locator.locate_by_fingerprint("struct_shared")
+        assert shared_structural.result != LocateResult.EXACT
+        assert shared_structural.state_id is None
+
+        unique = locator.locate_by_fingerprint("fp_unique")
+        assert unique.result == LocateResult.EXACT
+        assert unique.state_id == "s_unique"
+
 
 # ============================================================
 # FsmChecker tests

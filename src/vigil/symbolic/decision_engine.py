@@ -293,7 +293,7 @@ class DecisionEngine:
         if self._invariant_checker is None:
             return None
         target_state = self._fsm.states.get(target_state_id)
-        if target_state is None or not target_state.state_invariants:
+        if target_state is None or not target_state.invariant_specs:
             return None
 
         inv = self._invariant_checker.check_state(target_state_id, screen_ctx)

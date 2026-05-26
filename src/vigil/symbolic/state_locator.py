@@ -55,7 +55,7 @@ class StateLocator:
 
     def __init__(self, fsm: AppFSM) -> None:
         self._fsm = fsm
-        self._fp_index: dict[str, str] = {}
+        self._fp_index: dict[str, list[str]] = {}
         # Refined-sibling index keyed by (base_fingerprint, secondary_hash) so
         # a live screen with the same secondary signature but a DIFFERENT base
         # structural fingerprint cannot falsely localize to a refined sibling.
@@ -63,11 +63,16 @@ class StateLocator:
         # concrete secondary hash (see _refine_conflicting_successors policy).
         self._refined_fp_index: dict[tuple[str, str], str] = {}
         for state in fsm.states.values():
-            self._fp_index[state.fingerprint] = state.state_id
-            self._index_refined_sibling(state.fingerprint, state.state_id)
-            if state.structural_fingerprint:
-                self._fp_index[state.structural_fingerprint] = state.state_id
-                self._index_refined_sibling(state.structural_fingerprint, state.state_id)
+            self._add_fingerprint_match(state.identity.functional_hash, state.state_id)
+            self._index_refined_sibling(state.identity.functional_hash, state.state_id)
+            if state.identity.structural_hash:
+                self._add_fingerprint_match(state.identity.structural_hash, state.state_id)
+                self._index_refined_sibling(state.identity.structural_hash, state.state_id)
+
+    def _add_fingerprint_match(self, fingerprint: str, state_id: str) -> None:
+        matches = self._fp_index.setdefault(fingerprint, [])
+        if state_id not in matches:
+            matches.append(state_id)
 
     def _index_refined_sibling(self, fingerprint: str, state_id: str) -> None:
         if _REFINED_SECONDARY_MARKER not in fingerprint:
@@ -112,12 +117,13 @@ class StateLocator:
         refined_state_id = self._refined_fp_index.get((fp, secondary_hash))
         if refined_state_id:
             refined = self._fsm.states.get(refined_state_id)
-            matched = refined.structural_fingerprint if refined else None
+            matched = refined.identity.structural_hash if refined else None
             return StateLocation(
                 result=LocateResult.EXACT,
                 state_id=refined_state_id,
                 confidence=1.0,
-                matched_fingerprint=matched or (refined.fingerprint if refined else fp),
+                matched_fingerprint=matched
+                or (refined.identity.functional_hash if refined else fp),
             )
 
         return location
@@ -132,12 +138,18 @@ class StateLocator:
             StateLocation with match result, state_id, and confidence.
         """
         # Exact match via index — O(1)
-        state_id = self._fp_index.get(fingerprint)
-        if state_id is not None:
+        state_ids = self._fp_index.get(fingerprint)
+        if state_ids is not None and len(state_ids) == 1:
             return StateLocation(
                 result=LocateResult.EXACT,
-                state_id=state_id,
+                state_id=state_ids[0],
                 confidence=1.0,
+                matched_fingerprint=fingerprint,
+            )
+        if state_ids is not None:
+            return StateLocation(
+                result=LocateResult.UNKNOWN,
+                confidence=0.0,
                 matched_fingerprint=fingerprint,
             )
 

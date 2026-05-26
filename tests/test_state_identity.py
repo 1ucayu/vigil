@@ -440,6 +440,4 @@ def test_edittext_typed_value_does_not_split_structural_fingerprint() -> None:
     b = _screen("latte")
     fa = a.get_structural_fingerprint()
     fb = b.get_structural_fingerprint()
-    assert fa == fb, (
-        f"typed EditText value must not affect structural_fingerprint: " f"{fa} vs {fb}"
-    )
+    assert fa == fb, f"typed EditText value must not affect structural_fingerprint: {fa} vs {fb}"

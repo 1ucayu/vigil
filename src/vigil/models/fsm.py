@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Any
 
 import networkx as nx
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    computed_field,
+    model_validator,
+)
 
 
 class HierarchyLevel(StrEnum):
@@ -62,6 +69,11 @@ class StateKind(StrEnum):
     ERROR = "error"
     SYSTEM = "system"
     EXTERNAL = "external"
+
+
+def _kind_for_hierarchy_level(hierarchy_level: HierarchyLevel | str) -> StateKind:
+    level = HierarchyLevel(hierarchy_level)
+    return StateKind.DIALOG if level == HierarchyLevel.COMPONENT else StateKind.NORMAL
 
 
 class TransitionLookupStatus(StrEnum):
@@ -219,12 +231,12 @@ def _identity_fields(action_key: dict[str, Hashable | None]) -> set[str]:
 
 
 class StateSemanticProfile(BaseModel):
-    """LLM-generated semantic annotation for an abstract state (Stage 2.5).
+    """Legacy LLM-generated semantic annotation for an abstract state.
 
-    Provides semantic context beyond structural fingerprinting for:
-    - State localization (distinguishing structurally isomorphic pages)
-    - Guard generation (stable element aliases for icon-only buttons)
-    - Container classification (invariant-derived static/dynamic)
+    Retained as a synthesized view rebuilt from ``StateAnnotations`` for
+    callers (notably the legacy ``semantic_profile`` alias on
+    ``AbstractState`` and external fixtures) that still expect the old
+    shape. ``StateAnnotations`` is the canonical storage.
     """
 
     alt_text: str = ""
@@ -237,9 +249,9 @@ class StateSemanticProfile(BaseModel):
 class StateIdentity(BaseModel):
     """Deterministic identity for an abstract state.
 
-    Replaces the ambiguous flat ``fingerprint`` field with explicit functional
-    vs. structural hashes plus algorithm/version provenance so future identity
-    algorithm changes do not silently break stored FSMs.
+    Explicit functional vs. structural hashes plus algorithm/version
+    provenance so future identity algorithm changes do not silently break
+    stored FSMs.
     """
 
     functional_hash: str
@@ -261,20 +273,21 @@ class StateEvidence(BaseModel):
     """Trace-derived evidence supporting that this state exists.
 
     XML/runtime traces are the deterministic source of truth — this is where
-    the supporting screen ids live.
+    the supporting screen ids live. ``observation_count`` is a derived
+    field over ``raw_screen_ids`` so mutating the underlying list (e.g.
+    appending newly-observed screens during builder merging) can never
+    leave the count stale.
     """
 
     raw_screen_ids: list[str] = Field(default_factory=list)
-    observation_count: int = 0
     construction_source: str = "observed_trace"
     first_seen_trace: str | None = None
     trust_level: str = "observed"
 
-    @model_validator(mode="after")
-    def _default_observation_count(self) -> StateEvidence:
-        if self.observation_count == 0 and self.raw_screen_ids:
-            object.__setattr__(self, "observation_count", len(self.raw_screen_ids))
-        return self
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def observation_count(self) -> int:
+        return len(self.raw_screen_ids)
 
 
 class StateAbstraction(BaseModel):
@@ -289,11 +302,7 @@ class StateAbstraction(BaseModel):
 
 
 class StateInvariant(BaseModel):
-    """A single runtime-checkable invariant with its own confidence + provenance.
-
-    Replaces the coarse per-state scalar ``invariant_confidence`` so each
-    predicate carries its own evidence.
-    """
+    """A single runtime-checkable invariant with its own confidence + provenance."""
 
     expr: str
     confidence: float = 0.0
@@ -301,12 +310,24 @@ class StateInvariant(BaseModel):
     evidence_count: int = 0
 
 
-def _model_dump_for_compare(model: BaseModel) -> dict[str, Any]:
-    return model.model_dump(mode="json")
+class StateAnnotations(BaseModel):
+    """LLM-derived, non-authoritative annotations.
+
+    Per project rules these never decide state equality, edges, replay
+    confidence, or runtime verdicts. ``display_name`` is annotation-only —
+    consumers must use ``AbstractState.name`` as the canonical state name;
+    ``display_name`` does not override identity or routing.
+    """
+
+    display_name: str = ""
+    alt_text: str = ""
+    page_function: str = ""
+    expected_actions: list[str] = Field(default_factory=list)
+    widget_aliases: list[dict[str, Any]] = Field(default_factory=list)
+    generation_confidence: float = 0.0
 
 
-def _nested_metadata_differs(model: BaseModel, default_model: BaseModel) -> bool:
-    return _model_dump_for_compare(model) != _model_dump_for_compare(default_model)
+_MISSING: Any = object()
 
 
 def _invariant_expr(value: Any) -> str:
@@ -319,108 +340,132 @@ def _invariant_expr(value: Any) -> str:
     return str(value)
 
 
-def _as_invariant_items(values: Any) -> list[Any]:
-    if values is None:
-        return []
-    if isinstance(values, str | dict | BaseModel):
-        return [values]
-    return list(values)
+def _invariant_confidence(value: Any) -> float:
+    if isinstance(value, StateInvariant):
+        return float(value.confidence)
+    if isinstance(value, BaseModel):
+        value = value.model_dump()
+    if isinstance(value, dict):
+        return float(value.get("confidence", 0.0))
+    return 0.0
 
 
-def _invariant_expr_set(values: Any) -> set[str]:
-    return {_invariant_expr(value) for value in _as_invariant_items(values)}
+def _to_dict(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if isinstance(value, dict):
+        return dict(value)
+    return None
 
 
-def _dedupe_invariant_texts(values: Any) -> list[str]:
-    texts: list[str] = []
-    seen: set[str] = set()
-    for value in _as_invariant_items(values):
-        text = _invariant_expr(value)
-        if text in seen:
+def _annotations_from_semantic_profile(profile: Any) -> dict[str, Any]:
+    sp = profile.model_dump() if isinstance(profile, BaseModel) else dict(profile or {})
+    icon_labels = sp.get("icon_labels") or {}
+    widget_aliases = [
+        {"element_id": str(elem_id), "label": str(label)} for elem_id, label in icon_labels.items()
+    ]
+    return {
+        "alt_text": sp.get("alt_text", "") or "",
+        "page_function": sp.get("page_function", "") or "",
+        "expected_actions": list(sp.get("expected_actions", []) or []),
+        "widget_aliases": widget_aliases,
+        "generation_confidence": float(sp.get("generation_confidence", 0.0) or 0.0),
+    }
+
+
+def _semantic_profile_from_annotations(annotations: StateAnnotations) -> StateSemanticProfile:
+    icon_labels: dict[str, str] = {}
+    for alias in annotations.widget_aliases:
+        if not isinstance(alias, dict):
             continue
-        seen.add(text)
-        texts.append(text)
-    return texts
-
-
-def _state_invariant_specs(values: Any, confidence: float, source: str) -> list[Any]:
-    specs: list[Any] = []
-    seen_exprs: set[str] = set()
-    for value in _as_invariant_items(values):
-        expr = _invariant_expr(value)
-        if expr in seen_exprs:
+        elem_id = alias.get("element_id")
+        label = alias.get("label")
+        if elem_id is None or label is None:
             continue
-        seen_exprs.add(expr)
-        if isinstance(value, StateInvariant | dict):
-            specs.append(value)
-        else:
-            specs.append(
-                {
-                    "expr": expr,
-                    "confidence": confidence,
-                    "source": source,
-                    "evidence_count": 0,
-                }
-            )
-    return specs
+        icon_labels[str(elem_id)] = str(label)
+    return StateSemanticProfile(
+        alt_text=annotations.alt_text,
+        page_function=annotations.page_function,
+        expected_actions=list(annotations.expected_actions),
+        icon_labels=icon_labels,
+        generation_confidence=annotations.generation_confidence,
+    )
 
 
-class StateAnnotations(BaseModel):
-    """LLM-derived, non-authoritative annotations.
+def _merge_value(
+    nested: dict[str, Any],
+    nested_key: str,
+    flat_key: str,
+    flat_value: Any,
+    *,
+    equals: Any = None,
+) -> None:
+    """Merge a flat alias into a nested dict, raising on real conflicts."""
+    if flat_value is _MISSING:
+        return
+    existing = nested.get(nested_key)
+    if existing is None:
+        nested[nested_key] = flat_value
+        return
+    same = (equals or (lambda a, b: a == b))(existing, flat_value)
+    if not same:
+        raise ValueError(
+            f"Conflicting {flat_key!r} (flat) vs {nested_key!r} (nested): "
+            f"flat={flat_value!r}, nested={existing!r}"
+        )
 
-    Per project rules these never decide state equality, edges, replay
-    confidence, or runtime verdicts. They are kept distinct from identity and
-    evidence on purpose.
-    """
 
-    display_name: str = ""
-    alt_text: str = ""
-    page_function: str = ""
-    expected_actions: list[str] = Field(default_factory=list)
-    widget_aliases: list[dict[str, Any]] = Field(default_factory=list)
-    generation_confidence: float = 0.0
+def _container_type_equal(a: Any, b: Any) -> bool:
+    return ContainerType(a) == ContainerType(b)
 
 
 class AbstractState(BaseModel):
     """An abstract UI state in the FSM.
 
-    The schema is logically partitioned into:
-    - Deterministic identity (``identity`` view over ``fingerprint`` /
-      ``structural_fingerprint``).
-    - Android observation context (``android_context`` view over
-      ``activity_name``).
-    - Trace evidence (``evidence`` view over ``raw_screens``).
-    - Dynamic abstraction (``abstraction`` view over ``container_type``,
-      ``container_resource_id``, ``sub_fsm_template_id``).
-    - Runtime-checkable invariants (``invariant_specs`` is canonical; the
-      flat ``state_invariants`` + ``invariant_confidence`` aliases are kept
-      for backward compatibility).
-    - LLM annotations (``annotations`` view; legacy ``semantic_profile`` is
-      preserved verbatim).
+    The schema is partitioned into nested canonical submodels:
 
-    Old flat kwargs and old serialized JSON continue to construct cleanly via
-    ``model_validator(mode="before")``.
+    - ``identity`` (StateIdentity): functional / structural hashes.
+    - ``android_context`` (AndroidStateContext): activity / package / window.
+    - ``evidence`` (StateEvidence): trace-derived raw screen ids.
+    - ``abstraction`` (StateAbstraction): container / template metadata.
+    - ``invariant_specs`` (list[StateInvariant]): runtime-checkable invariants.
+    - ``annotations`` (StateAnnotations): LLM-derived non-authoritative labels.
+
+    Flat names (``fingerprint``, ``structural_fingerprint``, ``activity_name``,
+    ``raw_screens``, ``container_type``, ``container_resource_id``,
+    ``sub_fsm_template_id``, ``semantic_profile``, ``state_invariants``,
+    ``invariant_confidence``) survive **only** as ``@property`` aliases that
+    read and write the nested canonical fields — there is exactly one copy
+    of every datum. Both old flat JSON / kwargs and the nested form
+    construct cleanly via ``model_validator(mode="before")``. Mixed input
+    that agrees is accepted; mixed input that disagrees raises.
+
+    ``legacy_invariants`` is the one intentional flat survivor: a
+    non-runtime bag of legacy invariant expressions kept distinct from
+    ``invariant_specs`` so loading old FSMs cannot silently change verifier
+    verdicts. The ``invariants`` alias reads/writes this bag only.
+
+    ``name`` is the canonical state name. ``annotations.display_name`` is
+    annotation-only and must not override identity or routing.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     state_id: str
     name: str
-    fingerprint: str
-    structural_fingerprint: str | None = None
     hierarchy_level: HierarchyLevel
     parent_state: str | None = None
-    activity_name: str | None = None
-    raw_screens: list[str] = Field(default_factory=list)
-    container_type: ContainerType = ContainerType.NONE
-    container_resource_id: str | None = None
-    semantic_profile: StateSemanticProfile | None = None
-    sub_fsm_template_id: str | None = None
+    kind: StateKind = StateKind.NORMAL
+    identity: StateIdentity
+    android_context: AndroidStateContext = Field(default_factory=AndroidStateContext)
+    evidence: StateEvidence = Field(default_factory=StateEvidence)
+    abstraction: StateAbstraction = Field(default_factory=StateAbstraction)
     invariant_specs: list[StateInvariant] = Field(default_factory=list)
+    annotations: StateAnnotations = Field(default_factory=StateAnnotations)
     legacy_invariants: list[str] = Field(default_factory=list)
-    identity_meta: StateIdentity | None = Field(default=None, exclude=True, repr=False)
-    evidence_meta: StateEvidence | None = Field(default=None, exclude=True, repr=False)
-    abstraction_meta: StateAbstraction | None = Field(default=None, exclude=True, repr=False)
+    _kind_explicit_override: bool = PrivateAttr(default=False)
 
     @model_validator(mode="before")
     @classmethod
@@ -429,188 +474,274 @@ class AbstractState(BaseModel):
             return data
         data = dict(data)
 
-        # Nested → flat (new schema input)
-        identity = data.pop("identity", None)
-        if identity is not None:
-            if isinstance(identity, BaseModel):
-                identity = identity.model_dump()
-            identity_payload = dict(identity)
-            if (
-                identity_payload.get("functional_hash") is None
-                and data.get("fingerprint") is not None
-            ):
-                identity_payload["functional_hash"] = data.get("fingerprint")
-            if (
-                identity_payload.get("structural_hash") is None
-                and data.get("structural_fingerprint") is not None
-            ):
-                identity_payload["structural_hash"] = data.get("structural_fingerprint")
-            identity_model = StateIdentity(**identity_payload)
-            data.setdefault("fingerprint", identity_model.functional_hash)
-            data.setdefault("structural_fingerprint", identity_model.structural_hash)
-            default_identity = StateIdentity(
-                functional_hash=data["fingerprint"],
-                structural_hash=data.get("structural_fingerprint"),
+        # --- Pop legacy flat keys ---
+        flat_fp = data.pop("fingerprint", _MISSING)
+        flat_sfp = data.pop("structural_fingerprint", _MISSING)
+        flat_act = data.pop("activity_name", _MISSING)
+        flat_raw = data.pop("raw_screens", _MISSING)
+        flat_ct = data.pop("container_type", _MISSING)
+        flat_crid = data.pop("container_resource_id", _MISSING)
+        flat_tid = data.pop("sub_fsm_template_id", _MISSING)
+        flat_sp = data.pop("semantic_profile", _MISSING)
+        flat_st_inv = data.pop("state_invariants", _MISSING)
+        flat_inv_conf = data.pop("invariant_confidence", _MISSING)
+        flat_inv_legacy = data.pop("invariants", _MISSING)
+
+        # --- Normalise nested submodel inputs to dicts ---
+        identity = _to_dict(data.get("identity")) or {}
+        android = _to_dict(data.get("android_context")) or {}
+        evidence = _to_dict(data.get("evidence")) or {}
+        abstraction = _to_dict(data.get("abstraction")) or {}
+        annotations = _to_dict(data.get("annotations")) or {}
+
+        # --- Identity ---
+        _merge_value(identity, "functional_hash", "fingerprint", flat_fp)
+        _merge_value(identity, "structural_hash", "structural_fingerprint", flat_sfp)
+        if "functional_hash" not in identity:
+            raise ValueError(
+                "AbstractState requires either 'fingerprint' or 'identity.functional_hash'"
             )
-            if _nested_metadata_differs(identity_model, default_identity):
-                data["identity_meta"] = identity_model
+        data["identity"] = identity
 
-        android_context = data.pop("android_context", None)
-        if android_context is not None:
-            if isinstance(android_context, BaseModel):
-                android_context = android_context.model_dump()
-            data.setdefault("activity_name", android_context.get("activity_name"))
+        # --- Android context ---
+        _merge_value(android, "activity_name", "activity_name", flat_act)
+        if android:
+            data["android_context"] = android
 
-        evidence = data.pop("evidence", None)
-        if evidence is not None:
-            if isinstance(evidence, BaseModel):
-                evidence = evidence.model_dump()
-            evidence_model = StateEvidence(**dict(evidence))
-            data.setdefault("raw_screens", list(evidence_model.raw_screen_ids))
-            raw_screens = list(data.get("raw_screens", []))
-            default_evidence = StateEvidence(
-                raw_screen_ids=raw_screens,
-                observation_count=len(raw_screens),
-            )
-            if _nested_metadata_differs(evidence_model, default_evidence):
-                data["evidence_meta"] = evidence_model
+        # --- Evidence ---
+        if flat_raw is not _MISSING:
+            existing = evidence.get("raw_screen_ids")
+            if existing is None:
+                evidence["raw_screen_ids"] = list(flat_raw)
+            elif list(existing) != list(flat_raw):
+                raise ValueError(
+                    "Conflicting 'raw_screens' (flat) vs "
+                    "'evidence.raw_screen_ids' (nested): "
+                    f"flat={list(flat_raw)!r}, nested={list(existing)!r}"
+                )
+        # Reject only when an explicit legacy observation_count disagrees
+        # with the derived value; otherwise accept and let the computed
+        # field redo the math.
+        legacy_obs = evidence.pop("observation_count", _MISSING)
+        if legacy_obs is not _MISSING:
+            derived = len(evidence.get("raw_screen_ids", []) or [])
+            if int(legacy_obs) != derived:
+                raise ValueError(
+                    "Conflicting 'observation_count' "
+                    f"({legacy_obs}) vs len(raw_screen_ids)={derived}"
+                )
+        if evidence:
+            data["evidence"] = evidence
 
-        abstraction = data.pop("abstraction", None)
-        if abstraction is not None:
-            if isinstance(abstraction, BaseModel):
-                abstraction = abstraction.model_dump()
-            abstraction_model = StateAbstraction(**dict(abstraction))
-            data.setdefault("container_type", abstraction_model.container_type)
-            selector = abstraction_model.container_selector or {}
-            if isinstance(selector, dict) and selector.get("resource_id") is not None:
-                data.setdefault("container_resource_id", selector.get("resource_id"))
-            data.setdefault("sub_fsm_template_id", abstraction_model.template_id)
-            default_selector: dict[str, Any] = {}
-            if data.get("container_resource_id") is not None:
-                default_selector["resource_id"] = data.get("container_resource_id")
-            default_abstraction = StateAbstraction(
-                container_type=data.get("container_type", ContainerType.NONE),
-                container_selector=default_selector,
-                template_id=data.get("sub_fsm_template_id"),
-            )
-            if _nested_metadata_differs(abstraction_model, default_abstraction):
-                data["abstraction_meta"] = abstraction_model
+        # --- Abstraction ---
+        _merge_value(
+            abstraction,
+            "container_type",
+            "container_type",
+            flat_ct,
+            equals=_container_type_equal,
+        )
+        _merge_value(abstraction, "template_id", "sub_fsm_template_id", flat_tid)
+        if flat_crid is not _MISSING:
+            selector = dict(abstraction.get("container_selector") or {})
+            existing_crid = selector.get("resource_id")
+            if existing_crid is None:
+                if flat_crid is not None:
+                    selector["resource_id"] = flat_crid
+            elif existing_crid != flat_crid:
+                raise ValueError(
+                    "Conflicting 'container_resource_id' (flat) vs "
+                    "'abstraction.container_selector.resource_id' (nested): "
+                    f"flat={flat_crid!r}, nested={existing_crid!r}"
+                )
+            if selector:
+                abstraction["container_selector"] = selector
+        if abstraction:
+            data["abstraction"] = abstraction
 
-        annotations = data.pop("annotations", None)
-        if annotations is not None and data.get("semantic_profile") is None:
-            if isinstance(annotations, BaseModel):
-                annotations = annotations.model_dump()
-            data["semantic_profile"] = StateSemanticProfile(
-                alt_text=annotations.get("alt_text", ""),
-                page_function=annotations.get("page_function", ""),
-                expected_actions=list(annotations.get("expected_actions", [])),
-                generation_confidence=float(annotations.get("generation_confidence", 0.0)),
-            )
+        # --- Annotations / semantic_profile ---
+        if flat_sp is not _MISSING and flat_sp is not None:
+            sp_annotations = _annotations_from_semantic_profile(flat_sp)
+            if annotations:
+                # Reconcile only meaningful overlap (alt_text, page_function,
+                # expected_actions). widget_aliases is recomputed from
+                # icon_labels on every load — trust the nested form when
+                # both are present and non-empty.
+                for key in ("alt_text", "page_function"):
+                    flat_val = sp_annotations.get(key, "")
+                    nested_val = annotations.get(key, "")
+                    if flat_val and nested_val and flat_val != nested_val:
+                        raise ValueError(
+                            f"Conflicting 'semantic_profile.{key}' (flat) vs "
+                            f"'annotations.{key}' (nested): "
+                            f"flat={flat_val!r}, nested={nested_val!r}"
+                        )
+                    if not nested_val and flat_val:
+                        annotations[key] = flat_val
+                if not annotations.get("widget_aliases") and sp_annotations.get("widget_aliases"):
+                    annotations["widget_aliases"] = sp_annotations["widget_aliases"]
+                if not annotations.get("expected_actions") and sp_annotations.get(
+                    "expected_actions"
+                ):
+                    annotations["expected_actions"] = sp_annotations["expected_actions"]
+                if (
+                    annotations.get("generation_confidence", 0.0) == 0.0
+                    and sp_annotations.get("generation_confidence", 0.0) != 0.0
+                ):
+                    annotations["generation_confidence"] = sp_annotations["generation_confidence"]
+            else:
+                annotations = sp_annotations
+        if annotations:
+            data["annotations"] = annotations
 
-        # ``kind`` is computed; ignore an explicit value on input.
-        data.pop("kind", None)
-
-        # Invariant handling. Three possible input keys:
-        #   - ``invariant_specs`` (new canonical form, list[StateInvariant|dict])
-        #   - ``state_invariants`` (list[str]) + ``invariant_confidence`` (float)
-        #   - ``invariants`` (legacy list[str]; deprecated and kept separate
-        #     from runtime-enforced invariant_specs)
-        legacy_state_invariants = data.pop("state_invariants", None)
-        legacy_confidence = data.pop("invariant_confidence", None)
-        legacy_invariants = data.pop("invariants", None)
-        if legacy_invariants is not None or data.get("legacy_invariants") is not None:
-            combined_legacy: list[str] = []
-            combined_legacy.extend(_dedupe_invariant_texts(data.get("legacy_invariants")))
-            combined_legacy.extend(_dedupe_invariant_texts(legacy_invariants))
-            data["legacy_invariants"] = _dedupe_invariant_texts(combined_legacy)
-
-        if "invariant_specs" in data:
-            if legacy_state_invariants is not None:
-                spec_exprs = _invariant_expr_set(data.get("invariant_specs"))
-                flat_exprs = _invariant_expr_set(legacy_state_invariants)
+        # --- Invariant specs (runtime) ---
+        if "invariant_specs" in data and data["invariant_specs"] is not None:
+            specs = list(data["invariant_specs"])
+            if flat_st_inv is not _MISSING and flat_st_inv is not None:
+                spec_exprs = [_invariant_expr(s) for s in specs]
+                flat_exprs = [str(e) for e in flat_st_inv]
                 if spec_exprs != flat_exprs:
                     raise ValueError(
-                        "Conflicting invariant_specs and state_invariants: "
-                        f"spec exprs={sorted(spec_exprs)!r}, "
-                        f"state_invariants={sorted(flat_exprs)!r}"
+                        "Conflicting 'invariant_specs' vs 'state_invariants': "
+                        f"specs={spec_exprs!r}, state_invariants={flat_exprs!r}"
                     )
-        else:
-            confidence = float(legacy_confidence) if legacy_confidence is not None else 0.0
-            source = "mined_multivisit" if legacy_confidence is not None else "unknown"
-            specs = _state_invariant_specs(legacy_state_invariants, confidence, source)
-            if specs:
-                data["invariant_specs"] = specs
+            if flat_inv_conf is not _MISSING and flat_inv_conf is not None:
+                max_spec = max((_invariant_confidence(s) for s in specs), default=0.0)
+                if abs(max_spec - float(flat_inv_conf)) > 1e-9:
+                    raise ValueError(
+                        "Conflicting 'invariant_confidence' "
+                        f"({float(flat_inv_conf)}) vs "
+                        f"max(invariant_specs.confidence)={max_spec}"
+                    )
+        elif flat_st_inv is not _MISSING and flat_st_inv is not None:
+            has_conf = flat_inv_conf is not _MISSING and flat_inv_conf is not None
+            confidence = float(flat_inv_conf) if has_conf else 0.0
+            source = "mined_multivisit" if has_conf else "unknown"
+            data["invariant_specs"] = [
+                {"expr": str(e), "confidence": confidence, "source": source} for e in flat_st_inv
+            ]
+
+        # --- Legacy invariants (non-runtime; never merged into specs) ---
+        if flat_inv_legacy is not _MISSING and flat_inv_legacy is not None:
+            existing = list(data.get("legacy_invariants") or [])
+            for expr in flat_inv_legacy:
+                text = str(expr)
+                if text not in existing:
+                    existing.append(text)
+            data["legacy_invariants"] = existing
+
         return data
 
-    # --- Computed nested views (deterministic over flat fields) ---
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def identity(self) -> StateIdentity:
-        if self.identity_meta is not None:
-            return self.identity_meta
-        return StateIdentity(
-            functional_hash=self.fingerprint,
-            structural_hash=self.structural_fingerprint,
+    @model_validator(mode="after")
+    def _sync_kind_from_hierarchy_level(self) -> AbstractState:
+        explicit_non_default_kind = (
+            "kind" in self.model_fields_set and self.kind != StateKind.NORMAL
         )
+        object.__setattr__(self, "_kind_explicit_override", explicit_non_default_kind)
+        if not explicit_non_default_kind:
+            object.__setattr__(self, "kind", _kind_for_hierarchy_level(self.hierarchy_level))
+        return self
 
-    @computed_field  # type: ignore[prop-decorator]
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "hierarchy_level":
+            level = HierarchyLevel(value)
+            super().__setattr__(name, level)
+            if not self._kind_explicit_override:
+                super().__setattr__("kind", _kind_for_hierarchy_level(level))
+            return
+        if name == "kind":
+            kind = StateKind(value)
+            explicit_override = kind != StateKind.NORMAL
+            object.__setattr__(self, "_kind_explicit_override", explicit_override)
+            if not explicit_override:
+                kind = _kind_for_hierarchy_level(self.hierarchy_level)
+            super().__setattr__(name, kind)
+            return
+        super().__setattr__(name, value)
+
+    # --- Backward-compatible flat aliases (no Pydantic storage) ---
+
     @property
-    def kind(self) -> StateKind:
-        if self.hierarchy_level == HierarchyLevel.COMPONENT:
-            return StateKind.DIALOG
-        return StateKind.NORMAL
+    def fingerprint(self) -> str:
+        return self.identity.functional_hash
 
-    @computed_field  # type: ignore[prop-decorator]
+    @fingerprint.setter
+    def fingerprint(self, value: str) -> None:
+        self.identity.functional_hash = str(value)
+
     @property
-    def android_context(self) -> AndroidStateContext:
-        return AndroidStateContext(activity_name=self.activity_name)
+    def structural_fingerprint(self) -> str | None:
+        return self.identity.structural_hash
 
-    @computed_field  # type: ignore[prop-decorator]
+    @structural_fingerprint.setter
+    def structural_fingerprint(self, value: str | None) -> None:
+        self.identity.structural_hash = value
+
     @property
-    def evidence(self) -> StateEvidence:
-        if self.evidence_meta is not None:
-            return self.evidence_meta
-        return StateEvidence(
-            raw_screen_ids=list(self.raw_screens),
-            observation_count=len(self.raw_screens),
-        )
+    def activity_name(self) -> str | None:
+        return self.android_context.activity_name
 
-    @computed_field  # type: ignore[prop-decorator]
+    @activity_name.setter
+    def activity_name(self, value: str | None) -> None:
+        self.android_context.activity_name = value
+
     @property
-    def abstraction(self) -> StateAbstraction:
-        if self.abstraction_meta is not None:
-            return self.abstraction_meta
-        selector: dict[str, Any] = {}
-        if self.container_resource_id is not None:
-            selector["resource_id"] = self.container_resource_id
-        return StateAbstraction(
-            container_type=self.container_type,
-            container_selector=selector,
-            template_id=self.sub_fsm_template_id,
-        )
+    def raw_screens(self) -> list[str]:
+        # Return the live list reference so callers can ``.extend()`` / append.
+        return self.evidence.raw_screen_ids
 
-    @computed_field  # type: ignore[prop-decorator]
+    @raw_screens.setter
+    def raw_screens(self, value: list[str]) -> None:
+        self.evidence.raw_screen_ids = list(value)
+
     @property
-    def annotations(self) -> StateAnnotations:
-        sp = self.semantic_profile
-        widget_aliases: list[dict[str, Any]] = []
-        if sp is not None:
-            # Mirror icon_labels (keyed by element id) into widget_aliases without
-            # removing the original — icon_labels stays canonical on
-            # ``semantic_profile`` for this migration phase.
-            for element_id, label in sp.icon_labels.items():
-                widget_aliases.append({"element_id": element_id, "label": label})
-        return StateAnnotations(
-            display_name=self.name,
-            alt_text=sp.alt_text if sp else "",
-            page_function=sp.page_function if sp else "",
-            expected_actions=list(sp.expected_actions) if sp else [],
-            widget_aliases=widget_aliases,
-            generation_confidence=sp.generation_confidence if sp else 0.0,
-        )
+    def container_type(self) -> ContainerType:
+        return self.abstraction.container_type
 
-    # --- Backward-compatible flat aliases for invariant storage ---
+    @container_type.setter
+    def container_type(self, value: ContainerType | str) -> None:
+        self.abstraction.container_type = ContainerType(value)
+
+    @property
+    def container_resource_id(self) -> str | None:
+        return self.abstraction.container_selector.get("resource_id")
+
+    @container_resource_id.setter
+    def container_resource_id(self, value: str | None) -> None:
+        selector = self.abstraction.container_selector
+        if value is None:
+            selector.pop("resource_id", None)
+        else:
+            selector["resource_id"] = value
+
+    @property
+    def sub_fsm_template_id(self) -> str | None:
+        return self.abstraction.template_id
+
+    @sub_fsm_template_id.setter
+    def sub_fsm_template_id(self, value: str | None) -> None:
+        self.abstraction.template_id = value
+
+    @property
+    def semantic_profile(self) -> StateSemanticProfile | None:
+        if (
+            not self.annotations.alt_text
+            and not self.annotations.page_function
+            and not self.annotations.expected_actions
+            and not self.annotations.widget_aliases
+            and self.annotations.generation_confidence == 0.0
+        ):
+            return None
+        return _semantic_profile_from_annotations(self.annotations)
+
+    @semantic_profile.setter
+    def semantic_profile(self, value: Any) -> None:
+        if value is None:
+            self.annotations = StateAnnotations(display_name=self.annotations.display_name)
+            return
+        payload = _annotations_from_semantic_profile(value)
+        payload["display_name"] = self.annotations.display_name
+        self.annotations = StateAnnotations(**payload)
 
     @property
     def state_invariants(self) -> list[str]:
@@ -619,11 +750,14 @@ class AbstractState(BaseModel):
     @state_invariants.setter
     def state_invariants(self, value: list[str]) -> None:
         confidence = self.invariant_confidence
+        prior_conf = {spec.expr: spec.confidence for spec in self.invariant_specs}
         new_specs = [
             StateInvariant(
                 expr=str(expr),
-                confidence=confidence,
-                source="mined_multivisit" if confidence > 0.0 else "unknown",
+                confidence=prior_conf.get(str(expr), confidence),
+                source=(
+                    "mined_multivisit" if prior_conf.get(str(expr), confidence) > 0.0 else "unknown"
+                ),
             )
             for expr in value
         ]
@@ -639,37 +773,49 @@ class AbstractState(BaseModel):
     def invariant_confidence(self, value: float) -> None:
         value = float(value)
         for spec in self.invariant_specs:
-            object.__setattr__(spec, "confidence", value)
+            spec.confidence = value
             if spec.source == "unknown" and value > 0.0:
-                object.__setattr__(spec, "source", "mined_multivisit")
+                spec.source = "mined_multivisit"
 
     @property
     def invariants(self) -> list[str]:
-        """Deprecated legacy alias kept out of runtime-enforced invariants."""
+        """Deprecated legacy alias — kept out of runtime-enforced invariants."""
         return list(self.legacy_invariants)
 
     @invariants.setter
     def invariants(self, value: list[str]) -> None:
         object.__setattr__(self, "legacy_invariants", [str(expr) for expr in value])
 
-    # --- Serialization helpers ---
+    def model_dump_with_legacy_mirrors(self) -> dict[str, Any]:
+        """Dump schema v3 plus transitional flat compatibility mirrors.
 
-    def model_dump_compat(self, **kwargs: Any) -> dict[str, Any]:
-        """Dump in the new nested shape plus flat compatibility mirrors.
-
-        Existing tooling and on-disk FSM JSON consumers still see the flat
-        keys ``fingerprint``, ``structural_fingerprint``, ``activity_name``,
-        ``raw_screens``, ``container_type``, ``container_resource_id``,
-        ``sub_fsm_template_id``, ``state_invariants``, ``invariant_confidence``,
-        and ``semantic_profile``. The new ``identity`` / ``android_context`` /
-        ``evidence`` / ``abstraction`` / ``annotations`` / ``invariant_specs``
-        / ``kind`` keys are emitted alongside.
+        Schema v3 canonical storage remains the nested submodels above. For one
+        migration window, serialized FSM JSON also includes legacy flat fields
+        computed from those nested fields so raw-JSON consumers can migrate
+        without reading stale duplicate state.
         """
-        dumped = self.model_dump(**kwargs)
-        dumped["state_invariants"] = list(self.state_invariants)
-        dumped["invariant_confidence"] = self.invariant_confidence
-        dumped["invariants"] = list(self.legacy_invariants)
-        return dumped
+        data = self.model_dump(mode="json")
+        semantic_profile = self.semantic_profile
+        data.update(
+            {
+                "fingerprint": self.fingerprint,
+                "structural_fingerprint": self.structural_fingerprint,
+                "activity_name": self.activity_name,
+                "raw_screens": list(self.raw_screens),
+                "container_type": self.container_type.value,
+                "container_resource_id": self.container_resource_id,
+                "sub_fsm_template_id": self.sub_fsm_template_id,
+                "semantic_profile": (
+                    semantic_profile.model_dump(mode="json")
+                    if semantic_profile is not None
+                    else None
+                ),
+                "state_invariants": list(self.state_invariants),
+                "invariant_confidence": self.invariant_confidence,
+                "invariants": list(self.invariants),
+            }
+        )
+        return data
 
 
 class ProvenanceEntry(BaseModel):
@@ -742,6 +888,14 @@ class SubFsmTemplate(BaseModel):
     transitions: list[Transition] = Field(default_factory=list)
     parameter_schema: dict[str, str] = Field(default_factory=dict)
     item_skeleton: str = ""
+
+    def model_dump_with_legacy_mirrors(self) -> dict[str, Any]:
+        data = self.model_dump(mode="json")
+        data["states"] = {
+            sid: state.model_dump_with_legacy_mirrors() for sid, state in self.states.items()
+        }
+        data["transitions"] = [t.model_dump(mode="json") for t in self.transitions]
+        return data
 
 
 class AppFSM:
@@ -859,11 +1013,11 @@ class AppFSM:
         has_template_entry_edge = False
         if (
             state
-            and state.sub_fsm_template_id
-            and state.container_type == ContainerType.DYNAMIC
+            and state.abstraction.template_id
+            and state.abstraction.container_type == ContainerType.DYNAMIC
             and proposed_type == "click"
         ):
-            template = self.sub_fsm_templates.get(state.sub_fsm_template_id)
+            template = self.sub_fsm_templates.get(state.abstraction.template_id)
             if template is not None:
                 template_state_ids = set(template.states)
                 # A click on this source is a template-binding attempt only if
@@ -1045,22 +1199,24 @@ class AppFSM:
         (on raw component tuples before hashing) is a future extension for Tier 3.
         """
         for state in self.states.values():
-            if state.fingerprint == fingerprint:
+            if state.identity.functional_hash == fingerprint:
                 return state.state_id
         return None
 
     def serialize(self, path: str | Path) -> None:
-        """Serialize the FSM to a JSON file."""
+        """Serialize the FSM to schema v3 JSON with migration-window flat mirrors."""
         path = Path(path)
         data = {
             "app_package": self.app_package,
             "version": self.version,
-            "schema_version": "2",
+            "schema_version": "3",
             "initial_state": self.initial_state,
-            "states": {sid: s.model_dump_compat() for sid, s in self.states.items()},
+            "states": {sid: s.model_dump_with_legacy_mirrors() for sid, s in self.states.items()},
             "transitions": [t.model_dump() for t in self.transitions],
             "evolution_log": self.evolution_log,
-            "sub_fsm_templates": {tid: t.model_dump() for tid, t in self.sub_fsm_templates.items()},
+            "sub_fsm_templates": {
+                tid: t.model_dump_with_legacy_mirrors() for tid, t in self.sub_fsm_templates.items()
+            },
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2, default=str))
