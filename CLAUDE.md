@@ -7,6 +7,7 @@ This file is intentionally short so Claude Code starts quickly and focuses on th
 - Architecture notes: `docs/architecture.md`
 - Error taxonomy: `docs/error_taxonomy.md`
 - Paper outline: `docs/nsdi_paper_outline.md`
+- Live Overleaf paper source (read-only symlink): `overleaf/`
 - DSL grammar: `output_docs/dsl_grammar.lark`
 - Literature/design survey: `docs/references/neuro_symbolic_architecture_survey.md`
 
@@ -26,6 +27,12 @@ Read the full context only when the task needs paper positioning, complete resea
 | Target venue | NSDI 2026 style systems submission |
 
 Vigil is a neuro-symbolic runtime verification system for mobile GUI agents. It builds a per-app, DSL-guarded, confidence-annotated EFSM offline from APK static priors plus exploration/replay traces, then checks proposed GUI actions online with symbolic verification in the common path.
+
+---
+
+## Paper Source
+
+The root-level `overleaf/` path is a local symlink to the Dropbox-backed Overleaf project. Treat it as read-only context: inspect `overleaf/main.tex`, `overleaf/body.tex`, `overleaf/refs.bib`, and related paper files when needed, but do not edit, format, generate, delete, or move anything under `overleaf/`. Put derived notes, generated documentation, or visual artifacts in `docs/` or `output_docs/` according to the existing repository rules.
 
 ---
 

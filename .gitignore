@@ -22,6 +22,9 @@ uv.lock
 .DS_Store
 Thumbs.db
 
+# Local external paper source symlink
+/overleaf
+
 # Project data (large, generated)
 /data/
 models/bundles/
