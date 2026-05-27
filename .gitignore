@@ -58,8 +58,11 @@ mobile_agents/**/__pycache__/
 
 # Android / Gradle (fidelity_app)
 fidelity_app/.gradle/
-fidelity_app/**/build/
+fidelity_app/**/.gradle/
 fidelity_app/local.properties
+fidelity_app/**/local.properties
+fidelity_app/**/build/
+fidelity_app/**/app/build/
 fidelity_app/.idea/
 fidelity_app/.cxx/
 fidelity_app/captures/

@@ -172,23 +172,30 @@ ALLOW iff (s_t, a_t, s') in delta
 
 ## Fidelity App Notes
 
-The controlled benchmark Android app should live in root-level `fidelity_app/`, separate from `src/vigil/`. It should be native Kotlin + Jetpack Compose, deterministic, emulator-friendly, and expose stable accessibility/test identifiers.
+Controlled benchmark Android apps live under root-level `fidelity_app/`, separate from `src/vigil/`. Each app subdirectory is its own native Kotlin + Jetpack Compose Gradle project with its own `gradlew`, package name, build outputs, and hidden evaluator artifacts.
 
-Provisionally named `VigilMarket`, it should cover the three error families with a compact shopping-style flow and maintain hidden evaluator artifacts in `fidelity_app/gold/`:
+Current fidelity app projects:
+
+- `fidelity_app/vigilmarket/` (`com.vigil.market`)
+- `fidelity_app/vigilbank/` (`com.vigil.bank`)
+- `fidelity_app/vigilchat/` (`com.vigil.chat`)
+- `fidelity_app/vigilclock/` (`com.vigil.clock`)
+
+Each app maintains hidden evaluator artifacts in its own `gold/` directory:
 
 - `fsm.json`
 - `guards.json`
 - `tasks.json`
 
-Use it as a calibration target for `state_id`, canonical action identity `<tau, q, v>`, transition extraction, template abstraction, DSL guard evaluation, and replay confidence. Do not wire it into the Python pipeline until the app and gold artifacts are stable.
+Use these apps as calibration targets for `state_id`, canonical action identity `<tau, q, v>`, transition extraction, template abstraction, DSL guard evaluation, and replay confidence. Do not wire an app into the Python pipeline until the app and gold artifacts are stable.
 
 Recommended app commands:
 
 ```bash
-cd fidelity_app
-./gradlew assembleDebug
-./gradlew installDebug
-adb -s emulator-5554 shell monkey -p com.vigil.market 1
+cd fidelity_app/vigilmarket && ./gradlew assembleDebug
+cd fidelity_app/vigilbank && ./gradlew assembleDebug
+cd fidelity_app/vigilchat && ./gradlew assembleDebug
+cd fidelity_app/vigilclock && ./gradlew assembleDebug
 ```
 
 ---

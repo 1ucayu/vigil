@@ -10,10 +10,11 @@ Read `CLAUDE.md` and `AGENTS.md` fully before making changes. This repository is
 
 ## Goal
 
-Create a standalone native Android app project in a new root-level folder:
+Create a standalone native Android app project in a root-level fidelity app
+subdirectory:
 
 ```text
-fidelity_app/
+fidelity_app/vigilmarket/
 ```
 
 Do not put this app under `src/`, `tests/`, or the existing Python package. Keep it as a separate Android project that can be opened in Android Studio or edited from VSCode and built from the command line.
@@ -30,12 +31,12 @@ List of devices attached
 emulator-5554 device
 ```
 
-Use command-line Android tooling when possible. The expected workflow should be:
+Use command-line Android tooling when possible. The expected workflow should be
+run from the target app directory:
 
 ```bash
-cd fidelity_app
-./gradlew assembleDebug
-./gradlew installDebug
+cd fidelity_app/vigilmarket && ./gradlew assembleDebug
+cd fidelity_app/vigilmarket && ./gradlew installDebug
 adb -s emulator-5554 shell monkey -p com.vigil.market 1
 ```
 

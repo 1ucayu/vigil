@@ -1,0 +1,90 @@
+{
+  "$comment": "Ground-truth FSM for VigilChat. Evaluator-only; not consumed by the running app.",
+  "app_id": "com.vigil.chat",
+  "model": "M_A = <S, s0, Sigma, delta, Gamma, I, rho>",
+  "transition_kinds": ["nav", "dialog_open", "dialog_confirm", "dialog_cancel", "system_back", "terminal"],
+  "initial_state": "inbox",
+  "terminal_states": [],
+  "states": [
+    {"id": "inbox",             "screen_marker": "screen:inbox"},
+    {"id": "thread",            "screen_marker": "screen:thread",
+     "template": true, "template_params": ["thread_id"]},
+    {"id": "attachment_picker", "screen_marker": "screen:attachment_picker"},
+    {"id": "contacts",          "screen_marker": "screen:contacts"},
+    {"id": "settings",          "screen_marker": "screen:settings"},
+    {"id": "message_options",   "screen_marker": "screen:message_options",
+     "dialog": true, "anchor": "thread"},
+    {"id": "delete_confirm",    "screen_marker": "screen:delete_confirm",
+     "dialog": true, "anchor": "thread"}
+  ],
+  "templates": {
+    "thread": ["alice", "bob", "dad"]
+  },
+  "actions": [
+    {"name": "inbox.thread_row.<thread_id>.open", "type": "click", "query": "inbox.thread_row.<thread_id>.open"},
+    {"name": "thread.message_input",              "type": "input", "query": "thread.message_input"},
+    {"name": "thread.send",                       "type": "click", "query": "thread.send"},
+    {"name": "thread.attach",                     "type": "click", "query": "thread.attach"},
+    {"name": "thread.message.<message_id>.options", "type": "click", "query": "thread.message.<message_id>.options"},
+    {"name": "attachment_picker.item.<attachment_id>", "type": "click", "query": "attachment_picker.item.<attachment_id>"},
+    {"name": "attachment_picker.cancel",          "type": "click", "query": "attachment_picker.cancel"},
+    {"name": "message_options.delete",            "type": "click", "query": "message_options.delete"},
+    {"name": "message_options.cancel",            "type": "click", "query": "message_options.cancel"},
+    {"name": "delete_confirm.confirm",            "type": "click", "query": "delete_confirm.confirm"},
+    {"name": "delete_confirm.cancel",             "type": "click", "query": "delete_confirm.cancel"},
+    {"name": "contacts.contact_row.<contact_id>.open", "type": "click", "query": "contacts.contact_row.<contact_id>.open"},
+    {"name": "settings.reset_demo",               "type": "click", "query": "settings.reset_demo"},
+    {"name": "settings.back_inbox",               "type": "click", "query": "settings.back_inbox"},
+    {"name": "nav.open_inbox",                    "type": "click", "query": "nav.open_inbox",    "global_nav": true},
+    {"name": "nav.open_contacts",                 "type": "click", "query": "nav.open_contacts", "global_nav": true},
+    {"name": "nav.open_settings",                 "type": "click", "query": "nav.open_settings", "global_nav": true},
+    {"name": "system.back",                       "type": "system_back", "query": "system.back"}
+  ],
+  "global_navigation": {
+    "$comment": "Material3 bottom nav visible on every non-dialog state. Dialogs consume back/cancel before navigation.",
+    "visible_on": ["inbox", "thread", "attachment_picker", "contacts", "settings"],
+    "actions": [
+      {"action": "nav.open_inbox",    "to": "inbox",    "kind": "nav"},
+      {"action": "nav.open_contacts", "to": "contacts", "kind": "nav"},
+      {"action": "nav.open_settings", "to": "settings", "kind": "nav"}
+    ]
+  },
+  "transitions": [
+    {"from": "inbox", "action": "inbox.thread_row.<thread_id>.open", "to": "thread", "kind": "nav",
+      "binds": {"thread_id": "<thread_id>"}},
+    {"from": "inbox", "action": "system.back", "to": "inbox", "kind": "system_back",
+      "note": "system.back on inbox exits the activity; no state change observable to FSM."},
+
+    {"from": "thread", "action": "thread.message_input", "to": "thread", "kind": "nav"},
+    {"from": "thread", "action": "thread.send",         "to": "thread", "kind": "nav",
+      "guard": "value(thread.message_input) != \"\""},
+    {"from": "thread", "action": "thread.attach",       "to": "attachment_picker", "kind": "nav"},
+    {"from": "thread", "action": "thread.message.<message_id>.options", "to": "message_options",
+      "kind": "dialog_open", "binds": {"message_id": "<message_id>"}},
+    {"from": "thread", "action": "system.back", "to": "inbox", "kind": "system_back"},
+
+    {"from": "attachment_picker", "action": "attachment_picker.item.<attachment_id>", "to": "thread",
+      "kind": "nav", "binds": {"attachment_id": "<attachment_id>"},
+      "side_effect": "append_attachment_message"},
+    {"from": "attachment_picker", "action": "attachment_picker.cancel", "to": "thread", "kind": "nav"},
+    {"from": "attachment_picker", "action": "system.back",              "to": "thread", "kind": "system_back"},
+
+    {"from": "message_options", "action": "message_options.delete", "to": "delete_confirm", "kind": "dialog_open"},
+    {"from": "message_options", "action": "message_options.cancel", "to": "thread",         "kind": "dialog_cancel"},
+    {"from": "message_options", "action": "system.back",            "to": "thread",         "kind": "system_back"},
+
+    {"from": "delete_confirm", "action": "delete_confirm.confirm", "to": "thread",          "kind": "dialog_confirm",
+      "side_effect": "remove_message_from_thread"},
+    {"from": "delete_confirm", "action": "delete_confirm.cancel",  "to": "message_options", "kind": "dialog_cancel"},
+    {"from": "delete_confirm", "action": "system.back",            "to": "message_options", "kind": "system_back"},
+
+    {"from": "contacts", "action": "contacts.contact_row.<contact_id>.open", "to": "thread", "kind": "nav",
+      "binds": {"thread_id": "<contact_id>"}},
+    {"from": "contacts", "action": "system.back", "to": "inbox", "kind": "system_back"},
+
+    {"from": "settings", "action": "settings.reset_demo", "to": "inbox", "kind": "nav",
+      "side_effect": "reset_all_state_including_thread_seqs"},
+    {"from": "settings", "action": "settings.back_inbox", "to": "inbox", "kind": "nav"},
+    {"from": "settings", "action": "system.back",         "to": "inbox", "kind": "system_back"}
+  ]
+}

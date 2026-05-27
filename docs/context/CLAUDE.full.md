@@ -961,15 +961,15 @@ uv run pytest tests/
 
 ### 19.2 Fidelity App Development Notes
 
-The first controlled benchmark app should be a small native Android app, provisionally `VigilMarket`, stored under `fidelity_app/` at the repository root. It should be buildable from the command line and installable on the user's Pixel 6a emulator, currently visible as `emulator-5554`.
+Controlled benchmark Android apps live under `fidelity_app/` at the repository root. Each app subdirectory is a standalone native Kotlin + Jetpack Compose Gradle project with its own `gradlew`, package name, build outputs, and hidden evaluator artifacts. Current projects are `vigilmarket`, `vigilbank`, `vigilchat`, and `vigilclock`.
 
 Recommended commands:
 
 ```bash
-cd fidelity_app
-./gradlew assembleDebug
-./gradlew installDebug
-adb -s emulator-5554 shell monkey -p com.vigil.market 1
+cd fidelity_app/vigilmarket && ./gradlew assembleDebug
+cd fidelity_app/vigilbank && ./gradlew assembleDebug
+cd fidelity_app/vigilchat && ./gradlew assembleDebug
+cd fidelity_app/vigilclock && ./gradlew assembleDebug
 ```
 
 Design goals:
@@ -977,7 +977,7 @@ Design goals:
 1. Keep UI intentionally simple and deterministic: no network, login, database, external images, or unnecessary runtime permissions.
 2. Cover Vigil's three error families with a compact shopping-style flow: home, search/catalog, product detail template, cart, address selection, payment confirmation, success, orders, settings, and confirmation dialogs.
 3. Expose stable observability for UIAutomator/accessibility: visible labels, `contentDescription` for non-text controls, consistent Compose `testTag`s, and a stable screen marker such as `screen:home`.
-4. Maintain hidden evaluator artifacts in `fidelity_app/gold/`, including `fsm.json`, `guards.json`, and `tasks.json`. These files are ground truth for evaluator comparison and must not be surfaced in the app UI.
+4. Maintain hidden evaluator artifacts in each app's `gold/` directory, including `fsm.json`, `guards.json`, and `tasks.json`. These files are ground truth for evaluator comparison and must not be surfaced in the app UI.
 5. Treat this app as a calibration target for `state_id`, canonical action identity `<tau,q,v>`, transition extraction, template abstraction, DSL guard evaluation, and replay confidence. Do not wire it into the Python pipeline until the app and gold artifacts are stable.
 
 ---

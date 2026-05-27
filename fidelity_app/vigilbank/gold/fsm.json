@@ -1,0 +1,108 @@
+{
+  "$comment": "Ground-truth FSM for VigilBank. Evaluator-only; not consumed by the running app.",
+  "app_id": "com.vigil.bank",
+  "model": "M_A = <S, s0, Sigma, delta, Gamma, I, rho>",
+  "transition_kinds": ["nav", "system_back", "terminal"],
+  "initial_state": "home",
+  "terminal_states": ["transfer_success"],
+  "states": [
+    {"id": "home",             "screen_marker": "screen:home"},
+    {"id": "recipients",       "screen_marker": "screen:recipients"},
+    {"id": "transfer_form",    "screen_marker": "screen:transfer_form"},
+    {"id": "transfer_confirm", "screen_marker": "screen:transfer_confirm"},
+    {"id": "otp_confirm",      "screen_marker": "screen:otp_confirm"},
+    {"id": "transfer_success", "screen_marker": "screen:transfer_success"},
+    {"id": "history",          "screen_marker": "screen:history"},
+    {"id": "settings",         "screen_marker": "screen:settings"}
+  ],
+  "templates": {},
+  "actions": [
+    {"name": "home.open_recipients",                          "type": "click", "query": "home.open_recipients"},
+    {"name": "home.open_history",                             "type": "click", "query": "home.open_history"},
+    {"name": "home.open_settings",                            "type": "click", "query": "home.open_settings"},
+
+    {"name": "recipients.recipient_row.<recipient_id>.open",  "type": "click", "query": "recipients.recipient_row.<recipient_id>.open"},
+
+    {"name": "transfer.amount.input",                         "type": "input", "query": "transfer.amount.input"},
+    {"name": "transfer.memo.input",                           "type": "input", "query": "transfer.memo.input"},
+    {"name": "transfer.continue",                             "type": "click", "query": "transfer.continue"},
+
+    {"name": "transfer_confirm.submit",                       "type": "click", "query": "transfer_confirm.submit"},
+    {"name": "transfer_confirm.cancel",                       "type": "click", "query": "transfer_confirm.cancel"},
+
+    {"name": "otp_confirm.otp_input",                         "type": "input", "query": "otp_confirm.otp_input"},
+    {"name": "otp_confirm.confirm",                           "type": "click", "query": "otp_confirm.confirm"},
+    {"name": "otp_confirm.cancel",                            "type": "click", "query": "otp_confirm.cancel"},
+
+    {"name": "transfer_success.back_home",                    "type": "click", "query": "transfer_success.back_home"},
+
+    {"name": "history.back_home",                             "type": "click", "query": "history.back_home"},
+
+    {"name": "settings.biometric_unlock",                     "type": "click", "query": "settings.biometric_unlock",      "inert": true},
+    {"name": "settings.transfer_notifications",               "type": "click", "query": "settings.transfer_notifications","inert": true},
+    {"name": "settings.reset_demo",                           "type": "click", "query": "settings.reset_demo"},
+    {"name": "settings.back_home",                            "type": "click", "query": "settings.back_home"},
+
+    {"name": "nav.open_home",                                 "type": "click", "query": "nav.open_home",       "global_nav": true},
+    {"name": "nav.open_recipients",                           "type": "click", "query": "nav.open_recipients", "global_nav": true},
+    {"name": "nav.open_history",                              "type": "click", "query": "nav.open_history",    "global_nav": true},
+    {"name": "nav.open_settings",                             "type": "click", "query": "nav.open_settings",   "global_nav": true},
+
+    {"name": "system.back",                                   "type": "system_back", "query": "system.back"}
+  ],
+  "global_navigation": {
+    "$comment": "Material3 bottom navigation bar is visible on every state. No dialogs exist in VigilBank.",
+    "visible_on": ["home", "recipients", "transfer_form", "transfer_confirm", "otp_confirm", "transfer_success", "history", "settings"],
+    "actions": [
+      {"action": "nav.open_home",       "to": "home",       "kind": "nav"},
+      {"action": "nav.open_recipients", "to": "recipients", "kind": "nav"},
+      {"action": "nav.open_history",    "to": "history",    "kind": "nav"},
+      {"action": "nav.open_settings",   "to": "settings",   "kind": "nav"}
+    ]
+  },
+  "transitions": [
+    {"from": "home", "action": "home.open_recipients", "to": "recipients", "kind": "nav"},
+    {"from": "home", "action": "home.open_history",    "to": "history",    "kind": "nav"},
+    {"from": "home", "action": "home.open_settings",   "to": "settings",   "kind": "nav"},
+
+    {"from": "recipients", "action": "recipients.recipient_row.<recipient_id>.open", "to": "transfer_form", "kind": "nav",
+      "binds": {"recipient_id": "<recipient_id>"}},
+    {"from": "recipients", "action": "system.back", "to": "home", "kind": "system_back"},
+
+    {"from": "transfer_form", "action": "transfer.amount.input", "to": "transfer_form", "kind": "nav"},
+    {"from": "transfer_form", "action": "transfer.memo.input",   "to": "transfer_form", "kind": "nav"},
+    {"from": "transfer_form", "action": "transfer.continue",     "to": "transfer_confirm", "kind": "nav",
+      "guard": "amount_cents > 0 && selected_recipient != null"},
+    {"from": "transfer_form", "action": "system.back", "to": "recipients", "kind": "system_back"},
+
+    {"from": "transfer_confirm", "action": "transfer_confirm.submit", "to": "otp_confirm", "kind": "nav",
+      "guard": "amount_cents <= balance_cents && amount_cents <= daily_limit_cents"},
+    {"from": "transfer_confirm", "action": "transfer_confirm.submit", "to": "transfer_confirm", "kind": "nav",
+      "guard": "amount_cents > balance_cents || amount_cents > daily_limit_cents",
+      "side_effect": "sets transferError; stays on transfer_confirm"},
+    {"from": "transfer_confirm", "action": "transfer_confirm.cancel", "to": "transfer_form", "kind": "nav",
+      "side_effect": "clears amount, memo, otp; keeps selected_recipient"},
+    {"from": "transfer_confirm", "action": "system.back", "to": "transfer_form", "kind": "system_back"},
+
+    {"from": "otp_confirm", "action": "otp_confirm.otp_input", "to": "otp_confirm", "kind": "nav"},
+    {"from": "otp_confirm", "action": "otp_confirm.confirm",   "to": "transfer_success", "kind": "nav",
+      "irreversible": true,
+      "side_effect": "append history entry; decrement balance"},
+    {"from": "otp_confirm", "action": "otp_confirm.cancel",    "to": "transfer_confirm", "kind": "nav"},
+    {"from": "otp_confirm", "action": "system.back", "to": "transfer_confirm", "kind": "system_back"},
+
+    {"from": "transfer_success", "action": "transfer_success.back_home", "to": "home", "kind": "terminal",
+      "side_effect": "reset selected_recipient, amount, memo, otp"},
+    {"from": "transfer_success", "action": "system.back", "to": "home", "kind": "system_back"},
+
+    {"from": "history", "action": "history.back_home", "to": "home", "kind": "nav"},
+    {"from": "history", "action": "system.back",       "to": "home", "kind": "system_back"},
+
+    {"from": "settings", "action": "settings.biometric_unlock",       "to": "settings", "kind": "nav", "inert": true},
+    {"from": "settings", "action": "settings.transfer_notifications", "to": "settings", "kind": "nav", "inert": true},
+    {"from": "settings", "action": "settings.reset_demo",             "to": "home",     "kind": "nav",
+      "side_effect": "reset_all_state_including_inert_toggles_and_balance_and_history"},
+    {"from": "settings", "action": "settings.back_home",              "to": "home",     "kind": "nav"},
+    {"from": "settings", "action": "system.back",                     "to": "home",     "kind": "system_back"}
+  ]
+}
