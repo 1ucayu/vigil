@@ -69,7 +69,7 @@ M_A = <S, s0, Sigma, delta, Gamma, I, rho>
 | `Sigma` | Canonical GUI action alphabet. An action is conceptually `<tau, q, v>`, where `tau` is the action type, `q` is the target widget/container, and `v` is an optional value. | `ActionType`, action dictionaries in `Transition.action` |
 | `delta` | Action-labeled GUI transition relation, `delta subseteq S x Sigma x S`. | `AppFSM.transitions`, `networkx.DiGraph` edges |
 | `Gamma` | Guard map from state-action pairs to DSL formulas, `Gamma:S x Sigma -> Phi`. Guards check semantic binding before execution. | `Transition.guard`, `DSLEvaluator` |
-| `I` | Invariant map from state-action pairs to sets of DSL formulas, `I:S x Sigma -> 2^Phi`. Invariants encode state, action, and side-effect constraints. | `AbstractState.state_invariants`, `InvariantChecker` |
+| `I` | Invariant map from state-action pairs to sets of DSL formulas, `I:S x Sigma -> 2^Phi`. Invariants encode state, action, and side-effect constraints. | `AbstractState.invariant_specs`, `InvariantChecker` |
 | `rho` | Replay confidence map, `rho:delta -> [0,1]`. Low-confidence edges route to `UNCERTAIN`, not high-trust `ALLOW`. | `Transition.confidence`, `FsmChecker` |
 
 Writing rule: describe `M_A` as a **DSL-guarded, confidence-annotated EFSM** built on the transition-system view underlying Kripke structures. A full Kripke structure additionally materializes atomic propositions `AP` and a labeling function `L:S -> 2^AP`; Vigil instead evaluates DSL predicates at runtime as transition contracts. Each verified transition may be read as a Hoare-style contract:
@@ -127,7 +127,7 @@ Keep the root implementation skeleton concise. The deeper literature survey, des
 
 **Stage 4: Semantic Grounding + DSL Guard Generation** (`vigil.neuro.semantic_grounder`, `vigil.neuro.dsl_generator`, `vigil.neuro.widget_templates`, `models.dsl`)
 - Technical challenge: topology alone cannot prove semantic correctness; the verifier must know which recipient, amount, field, contact, item, or constraint the action binds.
-- Implementation role: use offline LLM calls over the App Prior Card, compressed XML, screenshots, and widget templates to label page function, icon-only widgets, parameterized templates, required intent variables, high-risk actions, and grammar-valid DSL predicates. Parse every guard with `docs/dsl_grammar.lark` before admitting it to the bundle.
+- Implementation role: use offline LLM calls over the App Prior Card, compressed XML, screenshots, and widget templates to label page function, icon-only widgets, parameterized templates, required intent variables, high-risk actions, and grammar-valid DSL predicates. Parse every guard with `output_docs/dsl_grammar.lark` before admitting it to the bundle.
 - Artifact: transition guard map `Gamma: S x Sigma -> guard`, required `$intent.*` bindings, guard provenance, semantic profiles, high-risk action labels, and candidate state/action invariants.
 
 **Stage 5: Replay Verification + Confidence Scoring** (`vigil.neuro.replay_verifier`, `symbolic.trajectory_verifier`)
@@ -192,6 +192,10 @@ ALLOW iff (s_t, a_t, s') in delta
 As of May 2026, the repo already contains the main construction modules: `neuro/app_prior.py` extracts APK static priors; `core/ui_compressor.py` creates compact UI trees for LLM prompts; `neuro/fsm_builder.py` builds hierarchical FSMs with structural fingerprints, transition merging, dynamic-container classification, and sub-FSM templates; `neuro/semantic_grounder.py` injects static context into optional multimodal LLM labeling; `neuro/dsl_generator.py` generates grammar-checked guards with layout XML fallback; and `neuro/replay_verifier.py` defines the replay-confidence interface.
 
 The current bottleneck is **FSM construction and validation alignment**, not UI exploration. Existing Settings traces are sufficient for the next development pass. Do not rerun the emulator just to collect more UI exploration data until the builder and validator agree on current `state_id`, template, selector, and canonical action semantics. Rerun exploration only when coverage is demonstrably missing, trace files are stale, or replay trials are needed to estimate `rho`.
+
+Current schema status: `AbstractState` has completed the migration to schema v4 nested canonical storage. New FSM writes are nested-only; `AppFSM.deserialize()` still accepts v2 flat bundles and v3 nested-plus-flat-mirror bundles. New implementation work should use nested state paths directly and treat flat names only as legacy input aliases.
+
+Latest validation snapshot after the schema migration: Settings validation remains `total=385`, `ok=369`, with `action_signature_mismatch=14`, `template_binding_missing=1`, and `transition_not_in_fsm=1`; Fidelity replay remains `107/107 OK`. The full pytest suite is at `654 passed`, `3 skipped`, `1 failed`, where the remaining failure is the unrelated `tests/test_llm_client.py::TestProxyProvider::test_proxy_images_fallback`.
 
 ---
 
@@ -440,9 +444,9 @@ vigil/
 │       │
 │       ├── models/                 # Data structures & serialization
 │       │   ├── __init__.py
-│       │   ├── fsm.py             # AppFSM class (networkx DiGraph wrapper)
+│       │   ├── fsm.py             # AppFSM, AbstractState, Transition, SubFsmTemplate
 │       │   ├── dsl.py             # DSL guard data structures
-│       │   ├── state.py           # AbstractState, RawScreen definitions
+│       │   ├── state.py           # RawScreen / Screen runtime observations
 │       │   ├── action.py          # Action type definitions & templates
 │       │   └── schemas/           # JSON schemas for FSM/DSL bundles
 │       │       ├── fsm_schema.json
@@ -503,8 +507,11 @@ vigil/
 ├── docs/
 │   ├── architecture.md            # Architecture diagrams & decisions
 │   ├── error_taxonomy.md          # Paper taxonomy + module/benchmark mapping
-│   ├── nsdi_paper_outline.md      # Compact NSDI-style paper outline
-│   └── dsl_grammar.lark           # Formal grammar for DSL guards
+│   └── nsdi_paper_outline.md      # Compact NSDI-style paper outline
+│
+├── output_docs/                    # Generated documentation and visualization artifacts
+│   ├── dsl_grammar.lark           # Formal grammar for DSL guards
+│   └── *.html                     # Exported FSM viewers
 │
 └── android/                        # Android Accessibility Service (Kotlin, future)
     └── VigilService/
@@ -527,8 +534,10 @@ vigil/
 ### AppFSM (`src/vigil/models/fsm.py`)
 
 ```python
-from pydantic import BaseModel, Field
 from enum import StrEnum
+from typing import Any
+
+from pydantic import BaseModel, Field, computed_field
 
 class HierarchyLevel(StrEnum):
     APP = "app"
@@ -541,37 +550,104 @@ class ContainerType(StrEnum):
     DYNAMIC = "dynamic"
     NONE = "none"
 
+class StateKind(StrEnum):
+    NORMAL = "normal"
+    DIALOG = "dialog"
+    TERMINAL = "terminal"
+    ERROR = "error"
+    SYSTEM = "system"
+    EXTERNAL = "external"
+
 class StateSemanticProfile(BaseModel):
+    # Legacy synthesized view. StateAnnotations is canonical storage.
     alt_text: str = ""
     page_function: str = ""
     expected_actions: list[str] = Field(default_factory=list)
     icon_labels: dict[str, str] = Field(default_factory=dict)
     generation_confidence: float = 0.0
 
+class StateIdentity(BaseModel):
+    functional_hash: str
+    structural_hash: str | None = None
+    secondary_hash: str | None = None
+    identity_version: str = "v1"
+    algorithm: str = "hybrid_ui_identity"
+
+class AndroidStateContext(BaseModel):
+    activity_name: str | None = None
+    package_name: str | None = None
+    window_type: str | None = None
+
+class StateEvidence(BaseModel):
+    raw_screen_ids: list[str] = Field(default_factory=list)
+    construction_source: str = "observed_trace"
+    first_seen_trace: str | None = None
+    trust_level: str = "observed"
+
+    @computed_field
+    @property
+    def observation_count(self) -> int:
+        return len(self.raw_screen_ids)
+
+class StateAbstraction(BaseModel):
+    container_type: ContainerType = ContainerType.NONE
+    container_selector: dict[str, Any] = Field(default_factory=dict)
+    template_id: str | None = None
+    template_role: str = "normal"
+    parameter_schema: dict[str, str] = Field(default_factory=dict)
+    parameter_bindings: dict[str, str] = Field(default_factory=dict)
+
+class StateInvariant(BaseModel):
+    expr: str
+    confidence: float = 0.0
+    source: str = "unknown"
+    evidence_count: int = 0
+
+class StateAnnotations(BaseModel):
+    display_name: str = ""
+    alt_text: str = ""
+    page_function: str = ""
+    expected_actions: list[str] = Field(default_factory=list)
+    widget_aliases: list[dict[str, Any]] = Field(default_factory=list)
+    generation_confidence: float = 0.0
+
 class AbstractState(BaseModel):
+    # Schema v4 canonical shape. Do not add new top-level flat fields.
     state_id: str
     name: str
-    fingerprint: str                              # functional (FsmBuilder dedup)
-    structural_fingerprint: str | None = None      # structural (online matching)
     hierarchy_level: HierarchyLevel
     parent_state: str | None = None
-    activity_name: str | None = None
-    invariants: list[str] = Field(default_factory=list)
-    raw_screens: list[str] = Field(default_factory=list)
-    container_type: ContainerType = ContainerType.NONE
-    container_resource_id: str | None = None
-    semantic_profile: StateSemanticProfile | None = None
-    state_invariants: list[str] = Field(default_factory=list)
-    invariant_confidence: float = 0.0
-    sub_fsm_template_id: str | None = None
+    kind: StateKind = StateKind.NORMAL
+    identity: StateIdentity
+    android_context: AndroidStateContext = Field(default_factory=AndroidStateContext)
+    evidence: StateEvidence = Field(default_factory=StateEvidence)
+    abstraction: StateAbstraction = Field(default_factory=StateAbstraction)
+    invariant_specs: list[StateInvariant] = Field(default_factory=list)
+    annotations: StateAnnotations = Field(default_factory=StateAnnotations)
+    legacy_invariants: list[str] = Field(default_factory=list)
+
+    # Backward-compatible property aliases still accept/read old names:
+    # fingerprint, structural_fingerprint, activity_name, raw_screens,
+    # container_type, container_resource_id, sub_fsm_template_id,
+    # semantic_profile, state_invariants, invariant_confidence, invariants.
+    # These aliases must route to nested storage and must not be serialized
+    # as schema v4 top-level state keys.
+
+class ProvenanceEntry(BaseModel):
+    trace_step_index: int = -1
+    source_screen_id: str | None = None
+    target_screen_id: str | None = None
+    confidence_source: str = "observed"
 
 class Transition(BaseModel):
     source: str
     target: str
     action: dict[str, Any]                         # {"type": "click", "target": ..., "target_text": ...}
     guard: str | None = None                       # DSL guard expression
-    confidence: float = 0.0                        # 1.0=observed, 0.5=inferred
+    confidence: float = 0.0                        # replay success_count / total_trials
+    low_trust: bool = False
     observed_count: int = 0
+    provenance: list[ProvenanceEntry] = Field(default_factory=list)
 
 class SubFsmTemplate(BaseModel):
     template_id: str
@@ -595,14 +671,17 @@ class AppFSM:
 
     def add_state(self, state: AbstractState): ...
     def add_transition(self, trans: Transition): ...
-    def is_valid_transition(self, from_state: str, action: dict) -> bool: ...
+    def resolve_transition(self, from_state: str, action: dict): ...
+    def is_valid_transition(self, from_state: str, action: dict) -> bool | None: ...
     def is_reachable(self, from_state: str, goal_state: str) -> bool: ...
-    def serialize(self, path: str | Path): ...
+    def serialize(self, path: str | Path): ...      # writes schema_version "4"
     @classmethod
-    def deserialize(cls, path: str | Path) -> 'AppFSM': ...
+    def deserialize(cls, path: str | Path) -> 'AppFSM': ...  # accepts schema 2/3/4
 ```
 
-### DSL Guard Grammar (`docs/dsl_grammar.lark`)
+Serialization contract: schema v2 is flat-only legacy, schema v3 is transitional nested + flat mirrors, and schema v4 is the current nested-only canonical output. New code should consume nested fields directly and must not rely on top-level flat state keys outside the compatibility validator / alias boundary.
+
+### DSL Guard Grammar (`output_docs/dsl_grammar.lark`)
 
 ```lark
 start: guard
@@ -816,7 +895,7 @@ Create files in this sequence:
 5. `src/vigil/py.typed` — empty file
 6. All `__init__.py` stubs in subpackages (`neuro/`, `symbolic/`, `models/`, `core/`, `scripts/`)
 7. `configs/default.yaml` — from §13
-8. `docs/dsl_grammar.lark` — from §12
+8. `output_docs/dsl_grammar.lark` — from §12
 9. `tests/conftest.py` — shared fixtures
 10. Run: `uv venv .venv --python 3.11 && uv pip install -e ".[dev]" && pre-commit install`
 
@@ -855,6 +934,7 @@ Implemented pieces already in the repo:
 4. `neuro/semantic_grounder.py` can add LLM-assisted state descriptions, icon labels, and invariant candidates with static context.
 5. `neuro/dsl_generator.py` can generate grammar-validated guards and use layout XML as widget-template fallback.
 6. `neuro/replay_verifier.py` defines the replay-verification interface, but the end-to-end `vigil-verify` pipeline is not fully wired yet.
+7. `models/fsm.py` now stores `AbstractState` in nested canonical submodels and serializes new FSM bundles as schema v4 nested-only JSON.
 
 Highest-priority alignment patches before the implementation section freezes:
 
@@ -868,8 +948,15 @@ Highest-priority alignment patches before the implementation section freezes:
 Latest local validation snapshot for the relevant construction modules:
 
 ```bash
-uv run pytest tests/test_app_prior.py tests/test_fsm_builder.py tests/test_semantic_grounder.py tests/test_dsl_generator.py tests/test_replay_verifier.py tests/test_validate_fsm.py
-# 148 passed, 3 skipped
+uv run pytest tests/test_models.py tests/test_visualize_fsm.py tests/test_validate_fsm.py
+# 84 passed
+
+uv run pytest tests/test_fsm_builder.py tests/test_state_identity.py tests/test_fsm_checker.py tests/test_invariant_checker.py tests/test_decision_engine.py tests/test_evolution.py tests/test_visualize_fsm.py
+# 166 passed, 3 skipped
+
+uv run pytest tests/
+# 654 passed, 3 skipped, 1 failed
+# Known unrelated failure: tests/test_llm_client.py::TestProxyProvider::test_proxy_images_fallback
 ```
 
 ### 19.2 Fidelity App Development Notes

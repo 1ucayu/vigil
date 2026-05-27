@@ -44,6 +44,14 @@ Focus on making the builder and validator agree on:
 
 Existing Settings traces are sufficient for the next development pass. Do not rerun the emulator just to collect more exploration data unless coverage is demonstrably missing, trace files are stale, or replay trials are needed to estimate `rho`.
 
+Current verified snapshot after the AbstractState schema migration:
+
+- New FSM JSON writes use `schema_version` 4, nested-only state payloads.
+- Reader-side compatibility still accepts schema versions 2/3/4.
+- Settings validation baseline: `total=385`, `ok=369`, `action_signature_mismatch=14`, `template_binding_missing=1`, `transition_not_in_fsm=1`.
+- Fidelity replay baseline: `107/107 OK`.
+- Full suite baseline: `654 passed`, `3 skipped`, `1 failed`; the remaining known failure is `tests/test_llm_client.py::TestProxyProvider::test_proxy_images_fallback`, unrelated to the FSM schema migration.
+
 ---
 
 ## Non-Negotiable Engineering Rules
@@ -69,6 +77,21 @@ uv run pytest tests/test_app_prior.py tests/test_fsm_builder.py tests/test_seman
 uv run vigil-explore --app com.android.settings --steps 20
 ```
 
+Current FSM state schema:
+
+- `AbstractState` canonical storage is nested: `identity`, `android_context`, `evidence`, `abstraction`, `invariant_specs`, `annotations`, and `legacy_invariants`.
+- Use nested paths in new code, e.g. `state.identity.functional_hash`, `state.evidence.raw_screen_ids`, `state.abstraction.container_type`, `state.invariant_specs`, and `state.annotations`.
+- Flat names such as `fingerprint`, `raw_screens`, `container_type`, `semantic_profile`, `state_invariants`, and `invariant_confidence` are compatibility aliases for old kwargs/JSON only.
+- `AppFSM.serialize()` writes schema v4 nested-only JSON. Do not add new serialize-side flat mirrors.
+- `legacy_invariants` is a non-runtime compatibility bag and must not be merged into `invariant_specs`.
+
+FSM JSON schema versions:
+
+- `schema_version` 2 = flat-only legacy.
+- `schema_version` 3 = nested + flat mirrors transitional.
+- `schema_version` 4 = nested-only canonical current.
+- `AppFSM.deserialize()` accepts 2/3/4.
+
 ---
 
 ## Paper Model
@@ -86,7 +109,7 @@ M_A = <S, s0, Sigma, delta, Gamma, I, rho>
 | `Sigma` | Canonical GUI action alphabet `<tau, q, v>` | `ActionType`, `Transition.action` |
 | `delta` | Action-labeled transition relation | `AppFSM.transitions`, `networkx.DiGraph` edges |
 | `Gamma` | Guard map from state/action pairs to DSL formulas | `Transition.guard`, `DSLEvaluator` |
-| `I` | State/action/side-effect invariants | `AbstractState.state_invariants`, `InvariantChecker` |
+| `I` | State/action/side-effect invariants | `AbstractState.invariant_specs`, `InvariantChecker` |
 | `rho` | Replay confidence map | `Transition.confidence`, `FsmChecker` |
 
 Describe `M_A` as a DSL-guarded, confidence-annotated EFSM built on the transition-system view underlying Kripke structures. Each verified transition may be read as:

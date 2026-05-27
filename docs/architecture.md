@@ -43,6 +43,22 @@ Online verification
 | Online symbolic layer | `symbolic/state_locator.py`, `symbolic/fsm_checker.py`, `symbolic/dsl_evaluator.py`, `symbolic/invariant_checker.py`, `symbolic/trajectory_verifier.py`, `symbolic/decision_engine.py` | Check each proposed action before execution. |
 | Integration | `integration/agent_runner.py`, `scripts/verify_action.py` | Wrap external GUI agents and expose CLI/runtime entry points. |
 
+## Current FSM Schema
+
+`AbstractState` now uses nested canonical storage:
+
+- `identity`: deterministic functional and structural hashes.
+- `android_context`: Android activity/package/window observation context.
+- `evidence`: trace-derived raw screen IDs and construction trust.
+- `abstraction`: dynamic container and sub-FSM template metadata.
+- `invariant_specs`: runtime-checkable invariants with confidence and provenance.
+- `annotations`: LLM-derived, non-authoritative labels and widget aliases.
+- `legacy_invariants`: non-runtime compatibility data; never merge this into `invariant_specs`.
+
+New code should read and write nested paths such as `state.identity.functional_hash`, `state.evidence.raw_screen_ids`, `state.abstraction.container_type`, `state.invariant_specs`, and `state.annotations`. Flat names remain only as compatibility aliases for old kwargs and old FSM JSON.
+
+`AppFSM.serialize()` writes `schema_version` 4 nested-only JSON. `AppFSM.deserialize()` accepts schema versions 2, 3, and 4 so historical flat bundles still load, but new writers must not reintroduce top-level flat state mirrors.
+
 ## Taxonomy Alignment
 
 | Runtime Question | Error Family | Main Check |
