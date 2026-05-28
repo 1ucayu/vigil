@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Hashable
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,9 @@ from vigil.models.fsm import (
     canonical_action_key,
 )
 from vigil.neuro.app_prior import AppPrior
+from vigil.neuro.behavioral_signature import (
+    signature_hash,
+)
 
 _REFINED_SECONDARY_MARKER = "::secondary:"
 
@@ -200,6 +204,22 @@ class FsmBuilder:
         if merged or removed:
             logger.info(
                 f"Post-processing: merged {merged} duplicate states, removed {removed} error states"
+            )
+
+        # Step 8.5: Behavioral quotient via trace-observation-compatible
+        # partition refinement. States are grouped by their schema-only
+        # quotient label (activity, window, dialog flag, action surface
+        # with per-instance rids stripped, form coarse status, anchored
+        # landmark/label *schema* — no literal title/contact text), then
+        # refined while their observed (quotient_action_key ->
+        # target_block) maps agree on shared keys. A post-quotient
+        # determinism guard splits any block that would still violate
+        # the verifier invariant after lifting.
+        behavioral_merged = self._coarsen_behavioral_duplicates(fsm, raw_screens)
+        if behavioral_merged:
+            logger.info(
+                f"Behavioral quotient: merged {behavioral_merged} states "
+                "(trace-observation-compatible partition refinement)"
             )
 
         # Step 9: Build Sub-FSM templates for dynamic containers
@@ -430,6 +450,417 @@ class FsmBuilder:
             logger.debug(f"Removed error states: {to_remove}")
 
         return len(to_remove)
+
+    # --- Behavioral coarsening (post-build abstraction layer) ---
+
+    _COARSEN_MEANINGFUL_SELF_LOOPS = frozenset({"scroll_up", "scroll_down", "input_text"})
+
+    @classmethod
+    def _action_kept_self_loop(cls, action: Any) -> bool:
+        """A self-loop survives lifting iff the action is a meaningful
+        affordance (scroll/input) or an identity-bearing click."""
+        action_dict = action if isinstance(action, dict) else {}
+        atype = (action_dict.get("type") or action_dict.get("action_type") or "").lower()
+        if atype in cls._COARSEN_MEANINGFUL_SELF_LOOPS:
+            return True
+        return atype == "click" and _click_action_has_identity(action_dict)
+
+    def _coarsen_behavioral_duplicates(
+        self,
+        fsm: AppFSM,
+        raw_screens: dict[str, Any],
+    ) -> int:
+        """Compute a verifier-preserving behavioral quotient and rewrite
+        the FSM to one representative per equivalence class.
+
+        Replaces an older signature-equality + global-redirect collapse
+        with a fixed-point partition refinement (see
+        :mod:`vigil.neuro.behavioral_quotient`):
+
+          1. Initial partition by ``compute_quotient_label`` on each
+             state's representative raw screen (volatile text, per-row
+             content, EditText literals, and bounds excluded).
+          2. Refinement: split a block whenever its members disagree on
+             ``{ (quotient_action_key(a), block_id(target)) for outgoing
+             high-trust edges }``. Iterate until fixed point.
+          3. Lifting: pick a representative per block (the initial state
+             when present, otherwise lowest deterministic id), absorb
+             every absorbed state's ``evidence.raw_screen_ids``, and
+             rewrite every transition through the redirect map.
+          4. Concrete-selector preservation: distinct
+             ``canonical_action_key`` variants under the same
+             ``quotient_action_key`` and same target block are kept as
+             separate ``Transition`` rows (parameterized members of the
+             quotient action class) so replay can locate the concrete
+             selector.
+          5. Quotient-aware determinism guard: after lifting, any
+             ``(source, quotient_action_key)`` still mapping to multiple
+             distinct target blocks among high-trust transitions triggers
+             a defensive re-split of the offending source block.
+
+        The refinement is fully driven by transition *block* targets, so
+        thread variants A, B that send → A', B' (themselves block-equal)
+        no longer cause a spurious "conflicting raw target" rejection —
+        they coalesce by construction.
+
+        Returns:
+            Number of states absorbed away (i.e., ``initial_states -
+            len(blocks)``).
+        """
+        from vigil.neuro.behavioral_quotient import (
+            QuotientResult,
+            TransitionRow,
+            quotient_states,
+        )
+        from vigil.neuro.behavioral_signature import (
+            compute_quotient_label,
+            quotient_action_key,
+        )
+
+        if not fsm.states:
+            return 0
+
+        screen_elements_cache: dict[str, list[dict[str, Any]]] = {}
+        for sid, screen in raw_screens.items():
+            screen_elements_cache[sid] = screen.get(
+                "interactable_elements", screen.get("elements", [])
+            )
+
+        def _representative_screen(state: AbstractState) -> dict[str, Any] | None:
+            for sid in state.evidence.raw_screen_ids:
+                screen = raw_screens.get(sid)
+                if isinstance(screen, dict) and (
+                    screen.get("elements") or screen.get("interactable_elements")
+                ):
+                    return screen
+            return None
+
+        # ---- 1. Per-state label, with the dialog flag taken from the
+        # state-level detector so the FSM-side dialog partition stays
+        # consistent with downstream `_detect_dialog_states`.
+        label_cache: dict[str, dict[str, Any]] = {}
+        for state_id, state in fsm.states.items():
+            screen = _representative_screen(state)
+            if screen is None:
+                # No raw screen evidence — label by activity alone so the
+                # state lands in its own (singleton) block rather than
+                # accidentally merging with a labelled block.
+                label_cache[state_id] = {
+                    "_no_screen": True,
+                    "state_id": state_id,
+                    "activity": state.android_context.activity_name or "",
+                }
+                continue
+            dialog_flag = self._is_dialog_state(state, raw_screens, screen_elements_cache)
+            label_cache[state_id] = compute_quotient_label(screen, dialog_flag=dialog_flag)
+
+        def _label_fn(state_id: str) -> dict[str, Any]:
+            return label_cache.get(state_id, {"state_id": state_id})
+
+        rows = [
+            TransitionRow(
+                source=t.source,
+                target=t.target,
+                action=t.action,
+                low_trust=t.low_trust,
+            )
+            for t in fsm.transitions
+        ]
+
+        result: QuotientResult = quotient_states(
+            states=list(fsm.states.keys()),
+            transitions=rows,
+            label_fn=_label_fn,
+            label_hash_fn=signature_hash,
+            action_key_fn=quotient_action_key,
+            initial_state=fsm.initial_state,
+        )
+
+        # ---- 2. Quotient-aware determinism guard. The refinement step
+        # already partitions by block-level successors, but low-trust
+        # edges were excluded from refinement and the lifted result must
+        # still satisfy the high-trust verifier invariant
+        # "(source_block, quotient_action_key) -> at most one target
+        # block among high-trust edges". Where a conflict is found we
+        # split the offending source block, recompute representatives,
+        # and rebuild the redirect map **before** applying it to the
+        # live FSM. We never simply log a conflict and proceed.
+        redirect = result.redirect_map()
+        guarded_passes = 0
+        while guarded_passes < 16:
+            guarded_passes += 1
+            qak_targets: dict[tuple[str, Hashable], set[str]] = defaultdict(set)
+            qak_owners: dict[tuple[str, Hashable], set[str]] = defaultdict(set)
+            for t in fsm.transitions:
+                if t.low_trust:
+                    continue
+                src_p = redirect.get(t.source, t.source)
+                tgt_p = redirect.get(t.target, t.target)
+                if src_p == tgt_p and not self._action_kept_self_loop(t.action):
+                    continue
+                qak = quotient_action_key(t.action)
+                src_block = result.state_to_block.get(t.source) or src_p
+                tgt_block = result.state_to_block.get(t.target) or tgt_p
+                qak_targets[(src_block, qak)].add(tgt_block)
+                qak_owners[(src_block, qak)].add(t.source)
+            conflicts = [
+                (src_block, qak, tgts)
+                for (src_block, qak), tgts in qak_targets.items()
+                if len(tgts) > 1
+            ]
+            if not conflicts:
+                break
+            # Resplit each offending source block by (qak, target_block).
+            for src_block, _qak, _tgts in conflicts:
+                members = result.block_to_members.get(src_block)
+                if not members or len(members) <= 1:
+                    continue
+                # Group members by the discriminating (qak -> tgt_block)
+                # pattern across all of their outgoing high-trust edges.
+                pattern_to_states: dict[tuple[tuple[Hashable, str], ...], list[str]] = defaultdict(
+                    list
+                )
+                for sid in members:
+                    pattern: dict[Hashable, str] = {}
+                    for t in fsm.transitions:
+                        if t.low_trust or t.source != sid:
+                            continue
+                        pattern.setdefault(
+                            quotient_action_key(t.action),
+                            result.state_to_block.get(t.target, t.target),
+                        )
+                    pattern_to_states[
+                        tuple(sorted(pattern.items(), key=lambda kv: repr(kv)))
+                    ].append(sid)
+                if len(pattern_to_states) <= 1:
+                    # Nothing further to split — bail to avoid loops.
+                    break
+                sorted_groups = sorted(
+                    pattern_to_states.items(),
+                    key=lambda kv: (-len(kv[1]), sorted(kv[1])[0]),
+                )
+                keep_pattern, keep_states = sorted_groups[0]
+                result.block_to_members[src_block] = set(keep_states)
+                for _pat, sub_states in sorted_groups[1:]:
+                    new_block_id = f"{src_block}__guard_{len(result.block_to_members)}"
+                    result.block_to_members[new_block_id] = set(sub_states)
+                    result.block_label_hash[new_block_id] = result.block_label_hash.get(
+                        src_block, ""
+                    )
+                    for sid in sub_states:
+                        result.state_to_block[sid] = new_block_id
+                    # Pick a representative for the new block.
+                    rep = fsm.initial_state if fsm.initial_state in sub_states else min(sub_states)
+                    result.block_to_representative[new_block_id] = rep
+                # Refresh the representative for the kept piece.
+                if fsm.initial_state in keep_states:
+                    result.block_to_representative[src_block] = fsm.initial_state
+                else:
+                    result.block_to_representative[src_block] = min(keep_states)
+            redirect = result.redirect_map()
+
+        # ---- 2b. Final safety net. The in-loop guard groups members by
+        # their *full* outgoing ``(qak -> tgt_block)`` pattern with
+        # ``setdefault`` (first observation wins). That grouping can
+        # silently mask a single-qak conflict when a state's first
+        # observation of qak happens to match another state's only
+        # observation. The safety net rescans the post-loop redirect
+        # map and, for every ``(source_block, qak)`` that still maps to
+        # multiple target blocks among high-trust edges, splits the
+        # offending source block by ``tgt_block`` for that specific qak
+        # (members that didn't observe qak stay in the largest piece).
+        # The redirect is rebuilt before being applied to the live FSM,
+        # so the verifier invariant is never violated by a behavioral
+        # merge. A ``builder_diagnostic`` evolution-log entry records
+        # what was split for downstream comparators.
+        for _safety_pass in range(8):
+            qak_targets_final: dict[tuple[str, Hashable], set[str]] = defaultdict(set)
+            qak_state_to_tgt: dict[tuple[str, Hashable], dict[str, str]] = defaultdict(dict)
+            for t in fsm.transitions:
+                if t.low_trust:
+                    continue
+                src_p = redirect.get(t.source, t.source)
+                tgt_p = redirect.get(t.target, t.target)
+                if src_p == tgt_p and not self._action_kept_self_loop(t.action):
+                    continue
+                qak = quotient_action_key(t.action)
+                src_block = result.state_to_block.get(t.source) or src_p
+                tgt_block = result.state_to_block.get(t.target) or tgt_p
+                qak_targets_final[(src_block, qak)].add(tgt_block)
+                qak_state_to_tgt[(src_block, qak)].setdefault(t.source, tgt_block)
+            residual_conflicts = [
+                (src_block, qak, tgts)
+                for (src_block, qak), tgts in qak_targets_final.items()
+                if len(tgts) > 1
+            ]
+            if not residual_conflicts:
+                break
+            for src_block, qak, tgts in residual_conflicts:
+                members = set(result.block_to_members.get(src_block, set()))
+                if len(members) <= 1:
+                    continue
+                state_to_tgt = qak_state_to_tgt.get((src_block, qak), {})
+                groups: dict[str, list[str]] = defaultdict(list)
+                no_obs: list[str] = []
+                for sid in members:
+                    tb = state_to_tgt.get(sid)
+                    if tb is None:
+                        no_obs.append(sid)
+                    else:
+                        groups[tb].append(sid)
+                if len(groups) <= 1:
+                    continue
+                ordered = sorted(
+                    groups.items(),
+                    key=lambda kv: (-len(kv[1]), sorted(kv[1])[0]),
+                )
+                keep_tgt, keep_states = ordered[0]
+                keep_states = sorted(set(keep_states) | set(no_obs))
+                result.block_to_members[src_block] = set(keep_states)
+                if fsm.initial_state in keep_states:
+                    result.block_to_representative[src_block] = fsm.initial_state
+                else:
+                    result.block_to_representative[src_block] = min(keep_states)
+                for _tb, sub_states in ordered[1:]:
+                    new_block_id = f"{src_block}__safety_{len(result.block_to_members)}"
+                    result.block_to_members[new_block_id] = set(sub_states)
+                    result.block_label_hash[new_block_id] = result.block_label_hash.get(
+                        src_block, ""
+                    )
+                    for sid in sub_states:
+                        result.state_to_block[sid] = new_block_id
+                    if fsm.initial_state in sub_states:
+                        result.block_to_representative[new_block_id] = fsm.initial_state
+                    else:
+                        result.block_to_representative[new_block_id] = min(sub_states)
+                result.evolution_log_entries.append(
+                    {
+                        "action": "builder_diagnostic",
+                        "kind": "quotient_residual_conflict",
+                        "source_block": src_block,
+                        "quotient_action_key": (list(qak) if isinstance(qak, tuple) else qak),
+                        "distinct_target_blocks": sorted(tgts),
+                        "split_groups": {tb: sorted(states) for tb, states in ordered},
+                    }
+                )
+            redirect = result.redirect_map()
+
+        # ---- 3. Apply the redirect map to the live FSM. Concrete-selector
+        # variants under one quotient class survive because dedup is keyed
+        # on the *raw* canonical_action_key, not the quotient class.
+        absorbed_total = self._apply_redirect_map(
+            fsm,
+            redirect,
+            evolution_entries=result.evolution_log_entries,
+        )
+        if absorbed_total:
+            logger.debug(
+                "Behavioral quotient: {} blocks (was {} states), {} passes",
+                len(result.block_to_members),
+                len(fsm.states) + absorbed_total,
+                result.refinement_passes,
+            )
+        return absorbed_total
+
+    def _apply_redirect_map(
+        self,
+        fsm: AppFSM,
+        redirect: dict[str, str],
+        *,
+        evolution_entries: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """Apply a state-id redirect map to ``fsm``.
+
+        Absorbs ``evidence.raw_screen_ids`` from absorbed states onto
+        their representatives, rewrites every transition through the
+        redirect (dropping meaningless self-loops, deduping by
+        ``(source, target, canonical_action_key)`` via
+        :meth:`_merge_transition_trust`), deletes absorbed states,
+        rebuilds the graph, and follows ``fsm.initial_state`` through
+        the redirect. Returns the number of states absorbed away.
+
+        Identity entries (``redirect[s] == s``) are no-ops. Used by
+        :meth:`_coarsen_behavioral_duplicates`; the helper exists so the
+        rewire is testable in isolation.
+        """
+        absorbed_total: set[str] = {
+            s for s, rep in redirect.items() if s != rep and rep in fsm.states
+        }
+        if not absorbed_total:
+            return 0
+
+        # Absorb raw_screen_ids.
+        rep_to_absorbed: dict[str, list[str]] = defaultdict(list)
+        for s, rep in redirect.items():
+            if s == rep:
+                continue
+            if rep not in fsm.states:
+                continue
+            rep_to_absorbed[rep].append(s)
+        for rep, absorbed in rep_to_absorbed.items():
+            rep_state = fsm.states[rep]
+            rep_screens = set(rep_state.evidence.raw_screen_ids)
+            for abs_id in absorbed:
+                abs_state = fsm.states.get(abs_id)
+                if abs_state is None:
+                    continue
+                for raw_sid in abs_state.evidence.raw_screen_ids:
+                    if raw_sid not in rep_screens:
+                        rep_state.evidence.raw_screen_ids.append(raw_sid)
+                        rep_screens.add(raw_sid)
+
+        # Rewrite transitions.
+        new_transitions: list[Transition] = []
+        seen_keys: dict[tuple[str, str, tuple[tuple[str, object], ...]], Transition] = {}
+        for t in fsm.transitions:
+            src = redirect.get(t.source, t.source)
+            tgt = redirect.get(t.target, t.target)
+            if src == tgt and not self._action_kept_self_loop(t.action):
+                continue
+            key = (src, tgt, canonical_action_key(t.action))
+            if key in seen_keys:
+                self._merge_transition_trust(seen_keys[key], t)
+                continue
+            new_t = Transition(
+                source=src,
+                target=tgt,
+                action=t.action,
+                guard=t.guard,
+                confidence=t.confidence,
+                low_trust=t.low_trust,
+                observed_count=t.observed_count,
+                provenance=list(t.provenance),
+            )
+            seen_keys[key] = new_t
+            new_transitions.append(new_t)
+
+        # Delete absorbed states.
+        for abs_id in absorbed_total:
+            if abs_id in fsm.states:
+                del fsm.states[abs_id]
+            if abs_id in fsm.graph:
+                fsm.graph.remove_node(abs_id)
+
+        fsm.transitions = new_transitions
+        fsm.graph.remove_edges_from(list(fsm.graph.edges))
+        for t in new_transitions:
+            if t.source in fsm.graph and t.target in fsm.graph:
+                fsm.graph.add_edge(
+                    t.source,
+                    t.target,
+                    action=t.action,
+                    guard=t.guard,
+                    confidence=t.confidence,
+                    low_trust=t.low_trust,
+                    observed_count=t.observed_count,
+                )
+
+        if fsm.initial_state in absorbed_total:
+            fsm.initial_state = redirect[fsm.initial_state]
+
+        if evolution_entries:
+            fsm.evolution_log.extend(evolution_entries)
+        return len(absorbed_total)
 
     def _detect_dialog_states(
         self,
