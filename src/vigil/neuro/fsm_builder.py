@@ -590,7 +590,6 @@ class FsmBuilder:
         while guarded_passes < 16:
             guarded_passes += 1
             qak_targets: dict[tuple[str, Hashable], set[str]] = defaultdict(set)
-            qak_owners: dict[tuple[str, Hashable], set[str]] = defaultdict(set)
             for t in fsm.transitions:
                 if t.low_trust:
                     continue
@@ -602,7 +601,6 @@ class FsmBuilder:
                 src_block = result.state_to_block.get(t.source) or src_p
                 tgt_block = result.state_to_block.get(t.target) or tgt_p
                 qak_targets[(src_block, qak)].add(tgt_block)
-                qak_owners[(src_block, qak)].add(t.source)
             conflicts = [
                 (src_block, qak, tgts)
                 for (src_block, qak), tgts in qak_targets.items()
@@ -639,7 +637,7 @@ class FsmBuilder:
                     pattern_to_states.items(),
                     key=lambda kv: (-len(kv[1]), sorted(kv[1])[0]),
                 )
-                keep_pattern, keep_states = sorted_groups[0]
+                _, keep_states = sorted_groups[0]
                 result.block_to_members[src_block] = set(keep_states)
                 for _pat, sub_states in sorted_groups[1:]:
                     new_block_id = f"{src_block}__guard_{len(result.block_to_members)}"
@@ -714,7 +712,7 @@ class FsmBuilder:
                     groups.items(),
                     key=lambda kv: (-len(kv[1]), sorted(kv[1])[0]),
                 )
-                keep_tgt, keep_states = ordered[0]
+                _, keep_states = ordered[0]
                 keep_states = sorted(set(keep_states) | set(no_obs))
                 result.block_to_members[src_block] = set(keep_states)
                 if fsm.initial_state in keep_states:

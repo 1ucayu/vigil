@@ -38,9 +38,9 @@ The root-level `overleaf/` path is a local symlink to the Dropbox-backed Overlea
 
 ## Current Priority
 
-The current bottleneck is FSM construction and validation alignment, not UI exploration.
+FSM construction now has a stable behavior-aware quotienting baseline. The next default paper/implementation focus can move to semantic grounding, DSL guard generation, and verifier integration, while preserving the FSM construction invariants below. Do not keep tuning the fidelity apps toward exact gold counts unless the user explicitly asks; residual splits should be explained before being optimized.
 
-Focus on making the builder and validator agree on:
+When touching FSM construction, focus on making the builder and validator agree on:
 
 - `state_id`
 - abstract-state templates
@@ -51,13 +51,16 @@ Focus on making the builder and validator agree on:
 
 Existing Settings traces are sufficient for the next development pass. Do not rerun the emulator just to collect more exploration data unless coverage is demonstrably missing, trace files are stale, or replay trials are needed to estimate `rho`.
 
-Current verified snapshot after the AbstractState schema migration:
+Current verified snapshot after the AbstractState schema migration and behavioral quotient pass:
 
 - New FSM JSON writes use `schema_version` 4, nested-only state payloads.
 - Reader-side compatibility still accepts schema versions 2/3/4.
 - Settings validation baseline: `total=385`, `ok=369`, `action_signature_mismatch=14`, `template_binding_missing=1`, `transition_not_in_fsm=1`.
 - Fidelity replay baseline: `107/107 OK`.
-- Full suite baseline: `654 passed`, `3 skipped`, `1 failed`; the remaining known failure is `tests/test_llm_client.py::TestProxyProvider::test_proxy_images_fallback`, unrelated to the FSM schema migration.
+- Behavioral quotient focused baseline: `195 passed`, `4 skipped` for `tests/test_behavioral_signature.py tests/test_behavioral_quotient.py tests/test_fsm_builder.py tests/test_replay_verifier.py tests/test_semantic_grounder.py`.
+- Full suite baseline: `726 passed`, `4 skipped`, `1 failed`; the remaining known failure is `tests/test_llm_client.py::TestProxyProvider::test_proxy_images_fallback`, unrelated to FSM construction.
+- Fidelity generated-vs-gold snapshot after quotienting: market `14/13`, bank `11/8`, chat `19/7`, clock `14/10`; all four generated FSMs have `0` high-trust `(state, quotient_action_key) -> multiple targets` conflicts.
+- Known residual fidelity gaps: market `payment_dialog` / `remove_dialog` are marker/instrumentation mapping gaps; bank residual splits are form-status variants; chat `thread` is still split by form-status and optional repeated-row action presence; clock residual split is `timer_setup`; `system.back` and natural `$tick_elapsed_eq_duration` remain out-of-scope coverage/environment gaps.
 
 ---
 
@@ -124,6 +127,23 @@ Describe `M_A` as a DSL-guarded, confidence-annotated EFSM built on the transiti
 ```text
 { Gamma(s, a) } a { I(s', a) }
 ```
+
+Current FSM action-scope boundary:
+
+- `Sigma` is the agent/user-visible GUI action alphabet only: component-level actions (`click`, `long_press`, `input_text`, `scroll/swipe`) plus app/navigation actions needed for GUI control (`navigate_back`, `navigate_home`, launch/reset when used by tooling).
+- Current offline FSM construction builds `delta_agent` only. Do not model `wait`, `time_elapsed`, `timeout`, or async/no-op observation as ordinary actions in `Sigma`.
+- Time-driven or autonomous UI changes may be discussed as a future environment relation `delta_env` (`wait_until_idle`, `async_update`, `timeout`, `time_elapsed`), but they are out of scope for the current builder unless explicitly added as a separate extension.
+- Volatile observations such as clock/stopwatch text, loading animation frames, timestamps, or list-content churn should not split abstract states unless they change the stable action schema, enabledness, guard facts, modal/dialog boundary, or safety-relevant side effects.
+- Benchmark-only fast-forward buttons are ordinary component actions if they appear in the UI and have stable selectors; natural timer completion such as `$tick_elapsed_eq_duration` is an environment transition and should be treated as out of scope for current generated-vs-gold comparisons.
+
+Current FSM abstraction/refinement baseline:
+
+- State construction uses a post-build, verifier-preserving behavioral quotient, implemented mainly in `src/vigil/neuro/behavioral_signature.py`, `src/vigil/neuro/behavioral_quotient.py`, and `src/vigil/neuro/fsm_builder.py`.
+- The quotient is a deterministic, trace-observation-compatible partition refinement, not exact textbook bisimulation/DFA minimization. States may merge when their observed `quotient_action_key -> target_block` maps are compatible; a final determinism guard preserves the verifier invariant.
+- `compute_quotient_label()` is schema-oriented: it keeps activity/window/dialog boundaries, action-surface affordances and enabledness/checked/selected facts, coarse form status, coarse error/status facts, and repeated-row action slots. It excludes volatile text, literal title/contact/message values, raw EditText contents, bounds, capture-local element ids, and repeated-list row content.
+- `_action_surface()` performs sibling-aware repeated-row canonicalization for same-parent/same-skeleton row actions, wildcarding varying row-instance segments only under conservative repeated-row eligibility. This is what collapses named row actions such as per-contact message options without merging functional controls like pause/lap/reset.
+- `quotient_action_key()` is for quotient refinement only. It uses whitelisted selector fields and coarse value classes, while `canonical_action_key()` remains concrete for replay, transition deduplication, and provenance. Do not replace or weaken `canonical_action_key()` with quotient keys.
+- Do not hardcode fidelity app package names, resource ids, contacts, product names, timer labels, or other benchmark-specific strings in the abstraction. If a residual split remains, report whether it is caused by label fields, transition refinement, missing exploration coverage, or an environment transition before proposing a fix.
 
 ---
 

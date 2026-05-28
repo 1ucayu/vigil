@@ -117,6 +117,12 @@ class TestCanonicalRoot:
         assert _rid_canonical_root("stopwatch.pause") == "stopwatch.pause"
         assert _rid_canonical_root("thread.send") == "thread.send"
 
+    def test_keeps_semantic_underscore_fields(self) -> None:
+        # Short semantic prefixes are common in real field ids and must
+        # not be treated as row-instance carriers without a numeric suffix.
+        assert _rid_canonical_root("payment.cc_number.input") == "payment.cc.number.input"
+        assert _rid_canonical_root("payment.cv_code.input") == "payment.cv.code.input"
+
 
 class TestVolatileTextDoesNotSplit:
     """A timer-running screen with changing elapsed text must collapse to
@@ -790,6 +796,25 @@ class TestQuotientActionKey:
         a = {"type": "click", "resource_id": "screen.send"}
         b = {"type": "long_press", "resource_id": "screen.send"}
         assert quotient_action_key(a) != quotient_action_key(b)
+
+    def test_semantic_field_ids_stay_distinct(self) -> None:
+        """Semantic underscore fields are not row instances. The quotient
+        must keep fields such as credit-card number and CVV/code distinct."""
+        from vigil.neuro.behavioral_signature import quotient_action_key
+
+        card_number = {
+            "type": "input_text",
+            "resource_id": "payment.cc_number.input",
+            "target_resource_id": "payment.cc_number.input",
+            "text": "4111111111111111",
+        }
+        security_code = {
+            "type": "input_text",
+            "resource_id": "payment.cv_code.input",
+            "target_resource_id": "payment.cv_code.input",
+            "text": "123",
+        }
+        assert quotient_action_key(card_number) != quotient_action_key(security_code)
 
     def test_raw_canonical_key_unaffected(self) -> None:
         """The quotient does not modify the raw canonical_action_key —

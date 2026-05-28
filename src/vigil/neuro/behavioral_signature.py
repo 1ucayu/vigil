@@ -112,7 +112,6 @@ _STATUS_CLASS_PRESENT = "status_present"
 
 _REPEATED_MIN_SIBLINGS = 3  # k+ same-shape siblings -> repeated container
 _REPEATED_MIN_SIBLINGS_LIST_LIKE = 2  # relaxed minimum when parent looks list-like
-_RID_TRAILING_INDEX = re.compile(r"^(.*?)([_.\-#]?\d+|[_.\-#]?[a-z]\d+)$", re.IGNORECASE)
 _LIST_LIKE_PARENT_CLASS_TOKENS: tuple[str, ...] = (
     "RecyclerView",
     "ListView",
@@ -220,11 +219,11 @@ def _rid_canonical_root(rid: str) -> str:
     summaries. Conservative: if no numeric/index segment is detected,
     the rid is returned unchanged.
 
-    Compound dot-segments matching ``<one-or-two-char-prefix>_<name>
-    (_<digits>)?`` (e.g., ``m_alice_1``, ``mb_bob``) are dropped
-    wholesale on a first pass: the single-letter prefix marks them as
-    pure instance carriers, distinct from generic ``<word>_<digits>``
-    segments (e.g., ``lap_3``) where the word is the meaningful name.
+    Compound dot-segments matching
+    ``<one-or-two-char-prefix>_<name>_<digits>`` (e.g.,
+    ``m_alice_1``) are dropped wholesale on a first pass. The required
+    trailing numeric suffix is important: semantic field names such as
+    ``cc_number`` and ``cv_code`` must not collapse into one field.
     """
     tail = _short_rid_tail(rid)
     if not tail:
@@ -239,7 +238,7 @@ def _rid_canonical_root(rid: str) -> str:
     for seg in tail.split("."):
         if not seg:
             continue
-        if re.fullmatch(r"[A-Za-z]{1,2}_[A-Za-z]+(_\d+)?", seg):
+        if re.fullmatch(r"[A-Za-z]{1,2}_[A-Za-z]+_\d+", seg):
             continue
         surviving.append(seg)
     rejoined = ".".join(surviving)
@@ -357,10 +356,6 @@ def _sibling_aware_canonical_rid(
         return candidate
 
     return rid_tail
-
-
-def _children_of(parent_id: str, elements: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [e for e in elements if e.get("parent_id") == parent_id]
 
 
 def _element_to_dict(element: Any) -> dict[str, Any] | None:
@@ -1364,10 +1359,6 @@ def _coarse_value_class(value: Any) -> str:
     return _VALUE_CLASS_NONEMPTY_TEXT
 
 
-def _coerce_str(value: Any) -> str:
-    return value if isinstance(value, str) else ""
-
-
 def _hashable(value: Any) -> Any:
     """Convert a JSON-like value into a fully hashable form (lists/dicts -> tuples)."""
     if isinstance(value, dict):
@@ -1411,12 +1402,11 @@ def _quotient_selector(selector: Any) -> tuple[tuple[str, Any], ...]:
     by_field = dict(items)
     raw_rid = by_field.get("resource_id")
     rid_reduced = False
+    new_rid: Any = raw_rid
     if isinstance(raw_rid, str) and raw_rid:
         root = _rid_canonical_root(raw_rid)
         new_rid = root or _short_rid_tail(raw_rid)
         rid_reduced = new_rid != raw_rid
-    else:
-        new_rid = raw_rid
 
     out: list[tuple[str, Any]] = []
     for field in _QUOTIENT_SELECTOR_WHITELIST:
