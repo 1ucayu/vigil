@@ -86,6 +86,10 @@ class LLMConfig(BaseModel):
     model: str = "claude-sonnet-4.6"
     max_tokens: int = 4096
     temperature: float = 0.0
+    openai_base_url: str = "http://localhost:4141/v1"
+    openai_api_key: str | None = "dummy_key"
+    anthropic_base_url: str = "http://localhost:4141"
+    anthropic_api_key: str | None = "dummy_key"
     proxy_base_url: str = "http://localhost:4141/v1"
     proxy_api_key: str = "dummy_key"
     proxy_model: str = "claude-sonnet-4.6"

@@ -44,7 +44,8 @@ No source edits were made to the agent.
 ## Proxy routing (Vigil convention)
 
 Vigil routes all LLM traffic through a local OpenAI-compatible proxy at
-`http://localhost:4141/v1`. M3A's `Gpt4Wrapper` in
+`http://localhost:4141/v1` and a local Anthropic-compatible proxy at
+`http://localhost:4141`. M3A's `Gpt4Wrapper` in
 `android_world/agents/infer.py` hardcodes
 `https://api.openai.com/v1/chat/completions`, so we monkey-patch it from
 outside the repo:

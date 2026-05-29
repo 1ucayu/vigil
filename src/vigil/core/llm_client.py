@@ -34,13 +34,18 @@ class LlmClient:
     Providers:
         - google: Google Gemini via google-genai SDK
         - anthropic: Anthropic Claude via anthropic SDK
-        - proxy: OpenAI-compatible local proxy (text-only, no image support)
+        - openai: OpenAI-compatible chat completions API
+        - proxy: OpenAI-compatible local proxy
     """
 
     _ENV_KEYS: dict[str, str] = {
         "google": "GOOGLE_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "openai": "OPENAI_API_KEY",
+    }
+    _BASE_URL_ENV_KEYS: dict[str, str] = {
+        "anthropic": "ANTHROPIC_BASE_URL",
+        "openai": "OPENAI_BASE_URL",
     }
 
     def __init__(self, config: LLMConfig) -> None:
@@ -57,7 +62,11 @@ class LlmClient:
             self._model = config.proxy_model
         else:
             env_key = self._ENV_KEYS.get(self._provider, "")
-            api_key = os.environ.get(env_key, "")
+            configured_api_key = {
+                "anthropic": config.anthropic_api_key,
+                "openai": config.openai_api_key,
+            }.get(self._provider)
+            api_key = os.environ.get(env_key) or configured_api_key or ""
             if not api_key:
                 msg = f"Missing API key: set {env_key} environment variable"
                 raise ValueError(msg)
@@ -70,8 +79,19 @@ class LlmClient:
             elif self._provider == "anthropic":
                 import anthropic
 
-                self._client = anthropic.Anthropic(api_key=api_key)
+                self._client = anthropic.Anthropic(
+                    api_key=api_key,
+                    base_url=self._base_url_for("anthropic", config.anthropic_base_url),
+                )
                 self._model = config.model or "claude-sonnet-4.6"
+            elif self._provider == "openai":
+                import openai
+
+                self._client = openai.OpenAI(
+                    base_url=self._base_url_for("openai", config.openai_base_url),
+                    api_key=api_key,
+                )
+                self._model = config.model or "gpt-4.1"
             else:
                 msg = f"Provider '{self._provider}' not yet implemented"
                 raise NotImplementedError(msg)
@@ -80,8 +100,8 @@ class LlmClient:
         """Text-only generation."""
         if self._provider == "google":
             return self._generate_google(system_prompt, user_prompt, contents=[user_prompt])
-        if self._provider == "proxy":
-            return self._generate_proxy(system_prompt, user_prompt)
+        if self._provider in {"openai", "proxy"}:
+            return self._generate_openai_compatible(system_prompt, user_prompt)
         return self._generate_anthropic(system_prompt, user_prompt)
 
     def generate_with_images(
@@ -96,8 +116,8 @@ class LlmClient:
         Each image is loaded, resized to max 1280px longest edge,
         and sent as image content blocks.
         """
-        if self._provider == "proxy":
-            return self._generate_proxy_with_images(
+        if self._provider in {"openai", "proxy"}:
+            return self._generate_openai_compatible_with_images(
                 system_prompt, text_prompt, images, image_labels
             )
 
@@ -198,7 +218,7 @@ class LlmClient:
             )
         return response.content[0].text
 
-    def _generate_proxy(self, system_prompt: str, user_prompt: str) -> str:
+    def _generate_openai_compatible(self, system_prompt: str, user_prompt: str) -> str:
         def _call() -> Any:
             return self._client.chat.completions.create(
                 model=self._model,
@@ -213,12 +233,12 @@ class LlmClient:
         response = self._call_with_retry(_call)
         if hasattr(response, "usage") and response.usage:
             logger.debug(
-                f"Proxy tokens: input={response.usage.prompt_tokens}, "
+                f"OpenAI-compatible tokens: input={response.usage.prompt_tokens}, "
                 f"output={response.usage.completion_tokens}"
             )
         return response.choices[0].message.content or ""
 
-    def _generate_proxy_with_images(
+    def _generate_openai_compatible_with_images(
         self,
         system_prompt: str,
         text_prompt: str,
@@ -258,10 +278,14 @@ class LlmClient:
         response = self._call_with_retry(_call)
         if hasattr(response, "usage") and response.usage:
             logger.debug(
-                f"Proxy tokens: input={response.usage.prompt_tokens}, "
+                f"OpenAI-compatible tokens: input={response.usage.prompt_tokens}, "
                 f"output={response.usage.completion_tokens}"
             )
         return response.choices[0].message.content or ""
+
+    def _base_url_for(self, provider: str, configured_base_url: str) -> str:
+        env_key = self._BASE_URL_ENV_KEYS.get(provider, "")
+        return os.environ.get(env_key) or configured_base_url
 
     @staticmethod
     def _preprocess_image(path: Path) -> Image.Image:

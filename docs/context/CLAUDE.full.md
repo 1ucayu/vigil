@@ -745,6 +745,10 @@ llm:
   model: "claude-sonnet-4.6"
   max_tokens: 4096
   temperature: 0.0
+  openai_base_url: "http://localhost:4141/v1"
+  openai_api_key: "dummy_key"
+  anthropic_base_url: "http://localhost:4141"
+  anthropic_api_key: "dummy_key"
   proxy_base_url: "http://localhost:4141/v1"
   proxy_api_key: "dummy_key"
   proxy_model: "claude-sonnet-4.6"

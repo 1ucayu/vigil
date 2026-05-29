@@ -75,6 +75,82 @@ class TestGenerate:
             assert gen_config.system_instruction == "my system prompt"
 
 
+class TestAnthropicProvider:
+    """Test Anthropic provider initialization."""
+
+    @patch("anthropic.Anthropic")
+    def test_anthropic_init_uses_local_service_by_default(
+        self, mock_anthropic_cls: MagicMock
+    ) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = LLMConfig(
+                provider="anthropic",
+                model="claude-sonnet-4.6",
+            )
+            client = LlmClient(config)
+
+        mock_anthropic_cls.assert_called_once_with(
+            api_key="dummy_key",
+            base_url="http://localhost:4141",
+        )
+        assert client._model == "claude-sonnet-4.6"
+
+    @patch.dict(
+        os.environ,
+        {"ANTHROPIC_API_KEY": "env-key", "ANTHROPIC_BASE_URL": "http://example.test"},
+    )
+    @patch("anthropic.Anthropic")
+    def test_anthropic_init_env_overrides_config(self, mock_anthropic_cls: MagicMock) -> None:
+        config = LLMConfig(
+            provider="anthropic",
+            anthropic_api_key="config-key",
+            anthropic_base_url="http://localhost:4141",
+        )
+        LlmClient(config)
+
+        mock_anthropic_cls.assert_called_once_with(
+            api_key="env-key",
+            base_url="http://example.test",
+        )
+
+
+class TestOpenAIProvider:
+    """Test OpenAI-compatible provider initialization."""
+
+    @patch("openai.OpenAI")
+    def test_openai_init_uses_local_v1_service_by_default(self, mock_openai_cls: MagicMock) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = LLMConfig(
+                provider="openai",
+                model="gpt-4.1",
+            )
+            client = LlmClient(config)
+
+        mock_openai_cls.assert_called_once_with(
+            base_url="http://localhost:4141/v1",
+            api_key="dummy_key",
+        )
+        assert client._model == "gpt-4.1"
+
+    @patch.dict(
+        os.environ,
+        {"OPENAI_API_KEY": "env-key", "OPENAI_BASE_URL": "http://example.test/v1"},
+    )
+    @patch("openai.OpenAI")
+    def test_openai_init_env_overrides_config(self, mock_openai_cls: MagicMock) -> None:
+        config = LLMConfig(
+            provider="openai",
+            openai_api_key="config-key",
+            openai_base_url="http://localhost:4141/v1",
+        )
+        LlmClient(config)
+
+        mock_openai_cls.assert_called_once_with(
+            base_url="http://example.test/v1",
+            api_key="env-key",
+        )
+
+
 class TestRetry:
     """Test retry logic."""
 
@@ -244,7 +320,7 @@ class TestProxyProvider:
 
     @patch("openai.OpenAI")
     def test_proxy_images_fallback(self, mock_openai_cls: MagicMock, tmp_path: Path) -> None:
-        """generate_with_images should fall back to text-only for proxy."""
+        """generate_with_images should send OpenAI-compatible image content."""
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         mock_response = MagicMock()
@@ -263,6 +339,8 @@ class TestProxyProvider:
         result = client.generate_with_images("system", "text prompt", images=[img_path])
 
         assert result == "text only"
-        # Should use chat completions (text-only), not process images
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-        assert call_kwargs["messages"][1]["content"] == "text prompt"
+        content = call_kwargs["messages"][1]["content"]
+        assert content[0]["type"] == "image_url"
+        assert content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        assert content[1] == {"type": "text", "text": "text prompt"}
