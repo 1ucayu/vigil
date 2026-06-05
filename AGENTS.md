@@ -74,6 +74,7 @@ Current verified snapshot after the AbstractState schema migration and behaviora
 - XML/runtime traces remain the deterministic source of truth for fingerprinting, replay, selectors, and transition evidence.
 - The compressed LLM view is only for prompting; never use it as the source of truth for localization or replay.
 - Low-confidence or incomplete evidence should route to `UNCERTAIN`, not high-trust `ALLOW`.
+- DSL strings are an executable guard backend, not the semantic source of truth. Prefer typed guard contracts plus admission validation before writing `Transition.guard`.
 - Keep implementation scoped to the requested task and follow existing code patterns.
 - Do not revert unrelated user changes in the worktree.
 - Generated visualizations, exported FSM viewers, and code-produced documentation artifacts belong under `output_docs/`, not `docs/`.
@@ -147,6 +148,46 @@ Current FSM abstraction/refinement baseline:
 
 ---
 
+## DSL Guard Generation Direction
+
+The next guard-generation implementation should be contract-first:
+
+```text
+existing FSM + trace evidence
+-> transition evidence view
+-> stable widget/semantic registry
+-> typed GuardContract
+-> DSL compilation
+-> admission validation
+-> attach admitted guard metadata to the FSM
+```
+
+Do not rebuild or reshape the FSM graph just to add guards. Existing `S`, `Sigma`, `delta`, canonical action identities, provenance, and replay confidence should remain stable. Guard generation enriches existing transitions with `Gamma`; it must not add edges, modify `state_id`, weaken `canonical_action_key()`, or change `rho`.
+
+Recommended model direction:
+
+- Keep `Transition.guard` as the executable DSL string used by `DSLEvaluator`.
+- Add non-breaking metadata such as typed guard contracts, required intent slots, risk level, admission status/reason, and provenance when implementing this pass.
+- Build a stable widget registry from source observations before asking for guard candidates. Prefer aliases backed by `resource_id`, `content_description`, stable text role, synthesized class alias, or template alias; never admit guards that depend on capture-local `e_XXXX` handles unless they are only temporary evidence.
+- Generate `GuardContract` objects first, then compile them to the current DSL grammar. The DSL grammar should not be expanded unless the typed contract cannot be expressed with existing predicates.
+- Admission must parse the DSL, resolve element aliases against the source-state registry, verify `$intent.*` variables against the contract slot schema, evaluate literal source predicates when possible, and record rejection reasons.
+- High-risk actions (`send`, `pay`, `transfer`, `delete`, permission grants, irreversible confirms) require an admitted semantic/safety guard. If no guard can be admitted, runtime should return `UNCERTAIN`, not silently `ALLOW`.
+- `cancel`, `back`, ordinary navigation, and low-risk scroll/open actions may have no guard when topology and confidence are sufficient.
+- State invariants remain post-arrival checks in `AbstractState.invariant_specs`; transition guards are pre-action checks over the source screen, proposed action, and frozen intent.
+
+When an LLM is used for guard generation, prompt it to produce typed guard-contract candidates, not free-form DSL as the primary artifact. The prompt should include:
+
+- strict task boundary: no new transitions, no state/action/confidence edits, no runtime verdicts;
+- output JSON schema for required slots, predicates, risk level, confidence, evidence, and rejection/admission notes;
+- supported predicate vocabulary (`read`, `value`, `action`, `contains`, `count`, `in_state`, `time_in`) and readable UI properties;
+- source state summary, target state summary, proposed canonical action, source widget registry, sibling outgoing transitions, source-to-target diff, static app prior/resource hints, and risk policy;
+- explicit instruction that pre-action guards may reference only the source screen, proposed action, and frozen `$intent.*` variables, not target-only elements;
+- explicit fallback behavior: if evidence is insufficient, return a rejected/low-trust candidate with a reason instead of inventing selectors, slots, or literals.
+
+Guard reports, rejected candidates, and audit artifacts belong under `output_docs/`.
+
+---
+
 ## Three Error Families
 
 Vigil's narrative and tests should stay organized around:
@@ -167,7 +208,7 @@ Offline construction:
 - Stage 1: UI Exploration - `vigil.neuro.explorer`, `vigil.neuro.ape_explorer`, `core.ui_parser`, `core.action_types`
 - Stage 2: XML Normalization + State Abstraction - `vigil.neuro.state_abstractor`, `core.ui_compressor`, `core.ui_selectors`
 - Stage 3: Hierarchical FSM Construction - `vigil.neuro.fsm_builder`, `models.fsm`
-- Stage 4: Semantic Grounding + DSL Guard Generation - `vigil.neuro.semantic_grounder`, `vigil.neuro.dsl_generator`, `vigil.neuro.widget_templates`
+- Stage 4: Semantic Grounding + Executable Guard Synthesis - `vigil.neuro.semantic_grounder`, `vigil.neuro.dsl_generator`, guard contract/registry/compiler/admission modules, `vigil.neuro.widget_templates`
 - Stage 5: Replay Verification + Confidence Scoring - `vigil.neuro.replay_verifier`, `symbolic.trajectory_verifier`
 
 Online verification:
