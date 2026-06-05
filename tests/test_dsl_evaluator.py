@@ -300,6 +300,24 @@ class TestActionPredicate:
         )
         assert r.passed is False
 
+    def test_action_input_text_match(self) -> None:
+        action = {"action_type": "input_text", "input_text": "hello"}
+        r = self.ev.evaluate(
+            "action(input_text) == $intent.message_text",
+            intent_ctx=IntentContext(variables={"message_text": "hello"}),
+            action_ctx=action,
+        )
+        assert r.passed is True
+
+    def test_action_input_text_mismatch(self) -> None:
+        action = {"action_type": "input_text", "input_text": "bye"}
+        r = self.ev.evaluate(
+            "action(input_text) == $intent.message_text",
+            intent_ctx=IntentContext(variables={"message_text": "hello"}),
+            action_ctx=action,
+        )
+        assert r.passed is False
+
 
 class TestIntentVarInGrammar:
     def setup_method(self) -> None:

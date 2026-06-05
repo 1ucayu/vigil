@@ -32,6 +32,10 @@ from vigil.symbolic.fsm_checker import (
     VerifyReason,
     VerifyResult,
 )
+from vigil.symbolic.guard_policy import (
+    guard_policy_violation_details,
+    transition_requires_guard_policy,
+)
 from vigil.symbolic.intent_extractor import IntentExtractor
 from vigil.symbolic.invariant_checker import InvariantChecker
 from vigil.symbolic.llm_fallback import LlmFallback
@@ -102,21 +106,39 @@ class DecisionEngine:
         # Tier 1: structural FSM check (includes state localization)
         tier1_result = self._checker.verify(current_screen, proposed_action, goal_state)
 
-        if tier1_result.result == VerifyResult.UNCERTAIN:
+        if tier1_result.result is VerifyResult.DENY:
+            return tier1_result
+
+        # Guard-admission policy is enforced here (not in Tier 1). It takes precedence
+        # over a low-confidence UNCERTAIN and bypasses the LLM fallback.
+        policy_result = self._enforce_guard_policy(
+            tier1_result.current_state_id, proposed_action, tier1_result
+        )
+        if policy_result is not None:
+            return policy_result
+
+        if tier1_result.result is VerifyResult.UNCERTAIN:
             return self._apply_llm_fallback(
                 tier1_result, current_screen, proposed_action, raw_instruction
             )
-        if tier1_result.result != VerifyResult.ALLOW:
+
+        if tier1_result.current_state_id is None:
             return tier1_result
 
+        transition = self._fsm.get_transition(tier1_result.current_state_id, proposed_action)
+
         # Tier 2: DSL guard check
-        if self._evaluator is None or tier1_result.current_state_id is None:
+        if self._evaluator is None:
+            if transition_requires_guard_policy(transition):
+                return self._guard_policy_uncertain(
+                    tier1_result,
+                    "Guard policy requires evaluating an admitted guard, "
+                    "but the DSL evaluator is unavailable",
+                )
             return tier1_result
 
         screen_ctx = self._build_screen_context(current_screen)
         action_ctx = self._build_action_context(proposed_action, current_screen)
-
-        transition = self._fsm.get_transition(tier1_result.current_state_id, proposed_action)
         intent_ctx = self._resolve_intent(
             intent_ctx, raw_instruction, tier1_result.current_state_id
         )
@@ -166,20 +188,38 @@ class DecisionEngine:
         # Tier 1: structural check
         tier1_result = self._checker.verify_by_state(current_state_id, proposed_action, goal_state)
 
-        if tier1_result.result == VerifyResult.UNCERTAIN:
-            return self._apply_llm_fallback(tier1_result, None, proposed_action, raw_instruction)
-        if tier1_result.result != VerifyResult.ALLOW:
+        if tier1_result.result is VerifyResult.DENY:
             return tier1_result
+
+        # Guard-admission policy is enforced here (not in Tier 1). It takes precedence
+        # over a low-confidence UNCERTAIN and bypasses the LLM fallback.
+        policy_result = self._enforce_guard_policy(current_state_id, proposed_action, tier1_result)
+        if policy_result is not None:
+            return policy_result
+
+        if tier1_result.result is VerifyResult.UNCERTAIN:
+            return self._apply_llm_fallback(tier1_result, None, proposed_action, raw_instruction)
+
+        transition = self._fsm.get_transition(current_state_id, proposed_action)
 
         # Tier 2: DSL guard check
         if self._evaluator is None:
+            if transition_requires_guard_policy(transition):
+                return self._guard_policy_uncertain(
+                    tier1_result,
+                    "Guard policy requires evaluating an admitted guard, "
+                    "but the DSL evaluator is unavailable",
+                )
             return tier1_result
 
-        transition = self._fsm.get_transition(current_state_id, proposed_action)
         intent_ctx = self._resolve_intent(intent_ctx, raw_instruction, current_state_id)
 
         if screen_ctx is None:
             screen_ctx = ScreenContext()
+        if action_ctx is None:
+            # No RawScreen here — build a minimal action context straight from the
+            # proposed action so action(input_text)/action(target_text) guards evaluate.
+            action_ctx = self._build_minimal_action_context(proposed_action)
 
         if transition is not None and transition.guard is not None:
             guard_result = self._evaluator.evaluate(
@@ -279,6 +319,54 @@ class DecisionEngine:
             ),
         )
 
+    def _check_guard_policy(
+        self,
+        transition: Any,
+        tier1_result: VerificationOutput,
+    ) -> VerificationOutput | None:
+        """Gate Tier 1 ALLOW on guard admission policy before final ALLOW."""
+        details = guard_policy_violation_details(transition)
+        if details is None:
+            return None
+        return self._guard_policy_uncertain(tier1_result, details)
+
+    def _enforce_guard_policy(
+        self,
+        current_state_id: str | None,
+        proposed_action: dict[str, Any],
+        tier1_result: VerificationOutput,
+    ) -> VerificationOutput | None:
+        """Apply guard-admission policy to a concretely-resolved transition.
+
+        Enforced only when Tier 1 resolved a single transition — an exact-match ALLOW or
+        a low-confidence UNCERTAIN. Ambiguous, unknown, or fuzzy localization has no
+        single transition to gate, and structural DENY short-circuits upstream. Policy
+        failure takes precedence over a low-confidence verdict and bypasses LLM fallback.
+        """
+        if current_state_id is None:
+            return None
+        if tier1_result.reason not in (
+            VerifyReason.TRANSITION_VALID,
+            VerifyReason.LOW_CONFIDENCE,
+        ):
+            return None
+        transition = self._fsm.get_transition(current_state_id, proposed_action)
+        return self._check_guard_policy(transition, tier1_result)
+
+    @staticmethod
+    def _guard_policy_uncertain(
+        tier1_result: VerificationOutput,
+        details: str,
+    ) -> VerificationOutput:
+        return VerificationOutput(
+            result=VerifyResult.UNCERTAIN,
+            reason=VerifyReason.GUARD_POLICY_UNSATISFIED,
+            current_state_id=tier1_result.current_state_id,
+            target_state_id=tier1_result.target_state_id,
+            confidence=tier1_result.confidence,
+            details=details,
+        )
+
     def _check_invariants(
         self,
         target_state_id: str,
@@ -329,6 +417,8 @@ class DecisionEngine:
         the default "user" fallback semantics where callers handle UNCERTAIN
         themselves.
         """
+        if uncertain_result.reason is VerifyReason.GUARD_POLICY_UNSATISFIED:
+            return uncertain_result
         if self._llm_fallback is None:
             return uncertain_result
         return self._llm_fallback.resolve(
@@ -436,9 +526,13 @@ class DecisionEngine:
         """Build action context for action_pred evaluation.
 
         Extracts the target element's text and resource_id from current_screen
-        using the action's target element_id.
+        using the action's target element_id. Also exposes ``input_text`` (the typed
+        value of an input action) so ``action(input_text)`` guards can evaluate.
         """
-        ctx: dict[str, Any] = {"action_type": proposed_action.get("type", "")}
+        ctx: dict[str, Any] = {
+            "action_type": proposed_action.get("type", ""),
+            "input_text": proposed_action.get("input_text", proposed_action.get("text", "")),
+        }
         target_id = proposed_action.get("target")
         if target_id and current_screen:
             for e in current_screen.elements:
@@ -447,4 +541,29 @@ class DecisionEngine:
                     ctx["target_resource_id"] = e.resource_id or ""
                     ctx["target_content_desc"] = e.content_description or ""
                     break
+        return ctx
+
+    @staticmethod
+    def _build_minimal_action_context(
+        proposed_action: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Action context built solely from the proposed action (no RawScreen).
+
+        Used by ``verify_by_state`` when no ``action_ctx`` is supplied so that
+        ``action(...)`` guards — notably ``action(input_text)`` and
+        ``action(target_text)`` — can still evaluate.
+        """
+        ctx: dict[str, Any] = {
+            "action_type": proposed_action.get("type", ""),
+            "input_text": proposed_action.get("input_text", proposed_action.get("text", "")),
+        }
+        if "target_text" in proposed_action:
+            ctx["target_text"] = proposed_action.get("target_text") or ""
+        resource_id = proposed_action.get("target_resource_id") or proposed_action.get(
+            "resource_id"
+        )
+        if resource_id is not None:
+            ctx["target_resource_id"] = resource_id or ""
+        if "target_content_desc" in proposed_action:
+            ctx["target_content_desc"] = proposed_action.get("target_content_desc") or ""
         return ctx

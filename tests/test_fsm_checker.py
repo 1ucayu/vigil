@@ -203,3 +203,45 @@ class TestFsmChecker:
 
         assert out.result == VerifyResult.UNCERTAIN
         assert out.reason == VerifyReason.ACTION_AMBIGUOUS
+
+
+class TestStructuralPurity:
+    """FsmChecker stays purely structural — guard-admission policy is not enforced here.
+
+    Guard policy lives at the DecisionEngine layer (see tests/test_guard_policy.py).
+    """
+
+    def test_high_risk_missing_guard_still_allows_when_confidence_passes(self) -> None:
+        from vigil.models.guard import GuardAdmissionStatus, RiskLevel
+
+        fsm = AppFSM(app_package="com.test.app")
+        for sid, name, fp in [("s1", "Source", "fp_s1"), ("s2", "Target", "fp_s2")]:
+            fsm.add_state(
+                AbstractState(
+                    state_id=sid,
+                    name=name,
+                    fingerprint=fp,
+                    hierarchy_level=HierarchyLevel.ACTIVITY,
+                )
+            )
+        fsm.initial_state = "s1"
+        fsm.add_transition(
+            Transition(
+                source="s1",
+                target="s2",
+                action={"type": "click", "target": "pay_button", "target_text": "Pay"},
+                confidence=0.95,
+                requires_guard=True,
+                risk_level=RiskLevel.HIGH,
+                guard=None,
+                guard_admission_status=GuardAdmissionStatus.ADMITTED,
+            )
+        )
+
+        out = FsmChecker(fsm).verify_by_state(
+            "s1", {"type": "click", "target": "pay_button", "target_text": "Pay"}
+        )
+
+        # Structurally valid + confident -> ALLOW. Policy gating is DecisionEngine's job.
+        assert out.result == VerifyResult.ALLOW
+        assert out.reason == VerifyReason.TRANSITION_VALID

@@ -175,6 +175,13 @@ Recommended model direction:
 - `cancel`, `back`, ordinary navigation, and low-risk scroll/open actions may have no guard when topology and confidence are sufficient.
 - State invariants remain post-arrival checks in `AbstractState.invariant_specs`; transition guards are pre-action checks over the source screen, proposed action, and frozen intent.
 
+APK static artifacts are useful guard-generation priors but never transition or verdict proof:
+
+- Use manifest/activity labels, permissions, resource strings, string arrays, layout XML, menu/navigation resources, widget declarations, `inputType`, hints, and resource ids to enrich widget aliases, roles, value domains, and risk hints.
+- Static prior can suggest that `com.app:id/amount_input` is an amount field, a resource array is a closed-set option domain, or a `Transfer`/`Delete`/`Allow` label is high risk.
+- Runtime trace/XML evidence must still confirm element presence, source-state membership, action binding, and transition existence before a guard is admitted.
+- Do not create edges, mark guards high-trust, or return runtime `ALLOW` from APK static evidence alone. Replay confidence still gates trust.
+
 When an LLM is used for guard generation, prompt it to produce typed guard-contract candidates, not free-form DSL as the primary artifact. The prompt should include:
 
 - strict task boundary: no new transitions, no state/action/confidence edits, no runtime verdicts;

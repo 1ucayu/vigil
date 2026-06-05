@@ -23,6 +23,8 @@ from pydantic import (
     model_validator,
 )
 
+from vigil.models.guard import GuardAdmissionStatus, GuardContract, RiskLevel
+
 
 class HierarchyLevel(StrEnum):
     """Hierarchy levels for FSM state abstraction.
@@ -820,6 +822,17 @@ class Transition(BaseModel):
         low_trust: Whether the edge came from a low-trust observation scope.
         observed_count: Number of times this transition was observed during exploration.
         provenance: Evidence records explaining where this transition came from.
+        guard_contract: Optional typed guard-synthesis IR/metadata for this
+            transition. Does not by itself produce a runtime verdict; the executable
+            backend remains ``guard``.
+        requires_guard: Whether policy requires an admitted guard before this
+            transition may be trusted at runtime.
+        risk_level: Denormalized transition-level policy summary intended for future
+            runtime routing. Distinct from ``guard_contract.risk_level`` (which is
+            contract-level synthesis metadata); the two are not force-synchronized.
+        guard_admission_status: Admission lifecycle status surfaced at the
+            transition level, mirroring ``guard_contract.admission_status`` when set.
+        guard_admission_reason: Human-readable rationale for the admission status.
     """
 
     source: str
@@ -830,6 +843,11 @@ class Transition(BaseModel):
     low_trust: bool = False
     observed_count: int = 0
     provenance: list[ProvenanceEntry] = Field(default_factory=list)
+    guard_contract: GuardContract | None = None
+    requires_guard: bool = False
+    risk_level: RiskLevel = RiskLevel.UNKNOWN
+    guard_admission_status: GuardAdmissionStatus | None = None
+    guard_admission_reason: str = ""
 
 
 @dataclass(frozen=True)

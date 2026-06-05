@@ -593,3 +593,52 @@ class TestInvariantIntegration:
         )
         assert out.result == VerifyResult.UNCERTAIN
         assert out.reason == VerifyReason.GUARD_INCONCLUSIVE
+
+
+def test_verify_by_state_minimal_action_context_evaluates_input_text() -> None:
+    """verify_by_state builds a minimal action context (no RawScreen) for action(input_text)."""
+    from vigil.models.guard import GuardAdmissionStatus, RiskLevel
+
+    fsm = AppFSM(app_package="com.test.app")
+    fsm.add_state(
+        AbstractState(
+            state_id="s1",
+            name="Compose",
+            fingerprint="fp1",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+    )
+    fsm.add_state(
+        AbstractState(
+            state_id="s2",
+            name="Sent",
+            fingerprint="fp2",
+            hierarchy_level=HierarchyLevel.ACTIVITY,
+        )
+    )
+    fsm.initial_state = "s1"
+    action = {"type": "input_text", "target": "e_msg", "text": "hello"}
+    fsm.add_transition(
+        Transition(
+            source="s1",
+            target="s2",
+            action=action,
+            confidence=0.95,
+            guard="action(input_text) == $intent.message_text",
+            risk_level=RiskLevel.MEDIUM,
+            guard_admission_status=GuardAdmissionStatus.ADMITTED,
+        )
+    )
+    engine = DecisionEngine(fsm)
+
+    # No action_ctx and no screen_ctx -> minimal context derived from proposed_action.
+    out = engine.verify_by_state(
+        "s1", dict(action), intent_ctx=IntentContext(variables={"message_text": "hello"})
+    )
+    assert out.result is VerifyResult.ALLOW
+
+    out2 = engine.verify_by_state(
+        "s1", dict(action), intent_ctx=IntentContext(variables={"message_text": "other"})
+    )
+    assert out2.result is VerifyResult.DENY
+    assert out2.reason is VerifyReason.GUARD_FAILED
