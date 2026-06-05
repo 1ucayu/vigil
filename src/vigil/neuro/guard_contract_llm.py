@@ -21,6 +21,7 @@ Design constraints (CLAUDE.md → "DSL Guard Generation Direction"; plan):
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -35,11 +36,11 @@ from vigil.system_prompt import load_system_prompt
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.core.llm_client import LlmClient
-    from vigil.neuro.guard_evidence import GuardEvidence
+    from vigil.neuro.guard_evidence import GuardEvidence, ScreenEvidence
     from vigil.neuro.guard_registry import WidgetRegistry
 
 
-DEFAULT_GUARD_PROMPT = "guard_contract_generation.md"
+DEFAULT_GUARD_PROMPT = "guard_generation.spec"
 
 # RHS value kinds the LLM path is allowed to put inside a predicate. ``$bind.*`` and other
 # UI/action-side references must live in ``binding_requirements``, not predicates.
@@ -105,6 +106,82 @@ def _sibling_lines(siblings: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _fenced(label: str, value: str) -> str:
+    if not value.strip():
+        return f"{label}:\n(none)"
+    return f"{label}:\n```text\n{value}\n```"
+
+
+def _screen_section(title: str, screen: ScreenEvidence, *, source_readable: bool) -> str:
+    image_status = "not available"
+    if screen.screenshot_path:
+        image_status = "attached as image if the file exists"
+
+    purpose = (
+        "This is P/source: the ONLY UI state that guard predicates may read."
+        if source_readable
+        else (
+            "This is Q/target: EFFECT-ONLY evidence for understanding the known action. "
+            "Do NOT reference target-only elements in guard predicates."
+        )
+    )
+
+    parts = [
+        f"[{title}]",
+        f"Purpose: {purpose}",
+        f"- state_id: {screen.state_id}",
+        f"- screen_id: {screen.screen_id or '(none)'}",
+        f"- activity: {screen.activity_name or '(none)'}",
+        f"- package: {screen.package_name or '(none)'}",
+        f"- display_name: {screen.display_name!r}",
+        f"- page_function: {screen.page_function!r}",
+        f"- screenshot_path: {screen.screenshot_path or '(none)'} ({image_status})",
+        f"- xml_tree_path: {screen.xml_tree_path or '(none)'}",
+        _fenced("LLM-derived visual alt text / layout summary", screen.alt_text),
+        _fenced("Compact accessibility/XML tree summary", screen.compact_tree_text),
+        _fenced("Bounded XML file excerpt", screen.xml_excerpt),
+    ]
+    return "\n".join(parts)
+
+
+def _existing_image_path(raw_path: str) -> Path | None:
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if path.exists() and path.is_file():
+        return path
+    return None
+
+
+def guard_image_paths(evidence: GuardEvidence) -> tuple[list[Path], list[str]]:
+    """Return existing source/target screenshots to attach to the LLM request."""
+    images: list[Path] = []
+    labels: list[str] = []
+    seen: set[Path] = set()
+    for side, screen, label in (
+        (
+            "SOURCE",
+            evidence.source_screen,
+            "SOURCE screenshot: pre-state P. Guard predicates may read this UI.",
+        ),
+        (
+            "TARGET",
+            evidence.target_screen,
+            "TARGET screenshot: post-state Q/effect-only. Do not predicate on target-only UI.",
+        ),
+    ):
+        path = _existing_image_path(screen.screenshot_path)
+        if path is None:
+            continue
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        images.append(path)
+        labels.append(f"{label} state={screen.state_id} screen={screen.screen_id or side.lower()}")
+    return images, labels
+
+
 def build_guard_user_prompt(evidence: GuardEvidence) -> str:
     """Build the Hoare-style user prompt for one transition's guard contract."""
     reg_lines = _registry_lines(evidence.source_registry)
@@ -113,53 +190,89 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
 
     sections: list[str] = []
     sections.append(
-        "Generate the pre-action guard contract Gamma for this known transition.\n"
-        "Reason over the SOURCE screen + the proposed action + frozen $intent.*; the\n"
-        "TARGET screen is effect-only evidence and must not be referenced by predicates."
+        "/* Hoare-style Transition Evidence */\n"
+        "Generate only the pre-action GuardContract Gamma for this transition:\n"
+        "{ Gamma(source screen P, known_action properties, frozen $intent.*) } "
+        "known_action { target_state / effect-only evidence Q }.\n"
+        "$bind.* needs are metadata in binding_requirements, not executable Gamma predicates."
     )
 
     sections.append(
-        "## Transition\n"
+        "[Transition]\n"
         f"- index: {evidence.transition_index}\n"
         f"- source_state_id: {evidence.source_state_id}\n"
         f"- target_state_id: {evidence.target_state_id}\n"
         f"- source_state_name: {evidence.source_state_name!r}\n"
         f"- source_page_function: {evidence.source_page_function!r}\n"
+        f"- source_screen_ids: {evidence.source_screen_ids}\n"
         f"- replay_confidence: {evidence.replay_confidence}\n"
         f"- low_trust: {evidence.low_trust}"
     )
 
     sections.append(
-        "## Known action (fixed — do not change)\n"
+        "[Known action]\n"
+        "Purpose: Fixed transition action.\n"
         f"{json.dumps(evidence.action, ensure_ascii=False, indent=2)}\n"
         f"- resolved source-widget alias: {evidence.action_target_alias!r} "
         f"({evidence.action_target_alias_reason})"
     )
 
     sections.append(
-        "## Source widget registry (the ONLY elements predicates may reference)\n"
+        _screen_section(
+            "Pre-state Evidence: P / source",
+            evidence.source_screen,
+            source_readable=True,
+        )
+    )
+
+    sections.append(
+        "[Source widget registry]\n"
+        "Purpose: The ONLY source element aliases executable predicates may reference.\n"
         + ("\n".join(reg_lines) if reg_lines else "- (none resolved)")
     )
 
     sections.append(
-        "## Target state (EFFECT-ONLY — never reference in predicates)\n"
+        _screen_section(
+            "Post-state Evidence: Q / target (effect-only)",
+            evidence.target_screen,
+            source_readable=False,
+        )
+    )
+
+    sections.append(
+        "[Source-to-target semantic/evidence diff]\n"
+        "Purpose: Effect-only semantic disambiguation; do not predicate on target-only UI.\n"
         f"- target_state_name: {evidence.target_state_name!r}\n"
         f"- target_page_function: {evidence.target_page_function!r}\n"
+        f"- target_screen_ids: {evidence.target_screen_ids}\n"
         f"- source->target diff: {evidence.diff_summary or '(none)'}"
     )
 
     sections.append(
-        "## Sibling outgoing actions from the source state\n"
+        "[Sibling outgoing actions]\n"
+        "Purpose: Distinguish choices, form controls, commits, navigation, and cancel actions.\n"
         + ("\n".join(sib_lines) if sib_lines else "- (none)")
     )
 
     sections.append(
-        "## Static APK prior hints (hints only — never proof)\n"
+        "[Global Information / Static APK Priors]\n"
+        "Purpose: Hints only; never transition proof, runtime proof, or post-state checks.\n"
         + ("\n".join(f"- {h}" for h in hints) if hints else "- (none)")
     )
 
     sections.append(
-        "## Output\n"
+        "[Verifier Basis]\n"
+        "- Output typed GuardContract JSON.\n"
+        "- Predicates compile to conjunctions over: read, value, action, contains, count, "
+        "in_state, time_in.\n"
+        "- Predicates may reference only source widget aliases, proposed action properties, "
+        "literal values, and declared frozen $intent.* slots.\n"
+        "- Put UI/action-side $bind.* needs in binding_requirements metadata only; never "
+        "inside executable predicates."
+    )
+
+    sections.append(
+        "[Output]\n"
         "Return ONLY the JSON object described in the system prompt. No prose, no code\n"
         "fences, no DSL string. Put any $bind.* UI-side binding in binding_requirements,\n"
         "never in predicates."
@@ -249,17 +362,23 @@ def generate_llm_guard_candidate(
     llm: LlmClient,
     *,
     prompt_name: str = DEFAULT_GUARD_PROMPT,
+    use_images: bool = True,
 ) -> LlmGuardContractCandidate:
     """Generate a guard-contract candidate for one transition via the LLM.
 
     Loads the system prompt by name, builds the Hoare user prompt from ``evidence``, calls
-    ``llm.generate``, and parses the response into a validated candidate. Any LLM/parse
-    failure degrades to a rejected candidate rather than raising.
+    the LLM (multimodal when source/target screenshots exist), and parses the response
+    into a validated candidate. Any LLM/parse failure degrades to a rejected candidate
+    rather than raising.
     """
     system_prompt = load_system_prompt(prompt_name)
     user_prompt = build_guard_user_prompt(evidence)
     try:
-        raw = llm.generate(system_prompt, user_prompt)
+        images, image_labels = guard_image_paths(evidence) if use_images else ([], [])
+        if images and hasattr(llm, "generate_with_images"):
+            raw = llm.generate_with_images(system_prompt, user_prompt, images, image_labels)
+        else:
+            raw = llm.generate(system_prompt, user_prompt)
     except Exception as exc:  # noqa: BLE001 - degrade gracefully, never crash the pipeline
         logger.warning(
             f"LLM guard generation failed for transition {evidence.transition_index}: {exc}"

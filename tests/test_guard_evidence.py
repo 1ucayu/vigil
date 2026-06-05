@@ -8,6 +8,8 @@ degradation when raw screens are missing. No LLM, DSL compilation, or admission 
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from vigil.models.fsm import (
     AbstractState,
     AppFSM,
@@ -44,6 +46,24 @@ def _screen(screen_id: str, *elements: dict) -> dict:
         "package_name": PKG,
         "interactable_elements": list(elements),
     }
+
+
+def _screen_with_artifacts(
+    screen_id: str,
+    *,
+    screenshot_path: str = "",
+    xml_tree_path: str = "",
+    compact_tree_text: str = "",
+    elements: list[dict] | None = None,
+) -> dict:
+    screen = _screen(screen_id, *(elements or []))
+    if screenshot_path:
+        screen["screenshot_path"] = screenshot_path
+    if xml_tree_path:
+        screen["xml_tree_path"] = xml_tree_path
+    if compact_tree_text:
+        screen["compact_tree_text"] = compact_tree_text
+    return screen
 
 
 def _state(state_id: str, name: str, screen_id: str, page_function: str = "") -> AbstractState:
@@ -171,6 +191,58 @@ def test_preserves_confidence_low_trust_and_provenance():
     assert len(ev.provenance) == 1
     assert ev.provenance[0]["trace_step_index"] == 7
     assert ev.provenance[0]["source_screen_id"] == "scr_s1"
+
+
+def test_builds_hoare_screen_evidence_from_trace_and_annotations(tmp_path: Path):
+    fsm, raw_screens = _two_state_fsm()
+    source_xml = tmp_path / "source.xml"
+    target_xml = tmp_path / "target.xml"
+    source_xml.write_text('<node resource-id="com.test.app:id/send" text="Send" />')
+    target_xml.write_text('<node resource-id="com.test.app:id/status" text="Delivered" />')
+    raw_screens["scr_s1"] = _screen_with_artifacts(
+        "scr_s1",
+        screenshot_path="data/screens/source.png",
+        xml_tree_path=str(source_xml),
+        compact_tree_text='[c_0001] Button send ;click; text="Send"',
+        elements=[
+            _el(
+                "e_send",
+                class_name="android.widget.Button",
+                resource_id=f"{PKG}:id/send",
+                text="Send",
+                is_clickable=True,
+            )
+        ],
+    )
+    raw_screens["scr_s2"] = _screen_with_artifacts(
+        "scr_s2",
+        screenshot_path="data/screens/target.png",
+        xml_tree_path=str(target_xml),
+        compact_tree_text='[c_0001] TextView status ;; text="Delivered"',
+        elements=[
+            _el(
+                "e_status",
+                class_name="android.widget.TextView",
+                resource_id=f"{PKG}:id/status",
+                text="Delivered",
+            )
+        ],
+    )
+    fsm.states["s1"].annotations.alt_text = "Source screen has composer controls."
+    fsm.states["s2"].annotations.alt_text = "Target screen shows delivered status."
+
+    ev = build_guard_evidence_for_transition(fsm, fsm.transitions[0], 0, raw_screens)
+
+    assert ev.source_screen_ids == ["scr_s1"]
+    assert ev.target_screen_ids == ["scr_s2"]
+    assert ev.source_screen.screenshot_path == "data/screens/source.png"
+    assert ev.source_screen.xml_tree_path == str(source_xml)
+    assert "Button send" in ev.source_screen.compact_tree_text
+    assert 'resource-id="com.test.app:id/send"' in ev.source_screen.xml_excerpt
+    assert ev.source_screen.alt_text == "Source screen has composer controls."
+    assert ev.target_screen.screenshot_path == "data/screens/target.png"
+    assert "Delivered" in ev.target_screen.xml_excerpt
+    assert ev.target_screen.alt_text == "Target screen shows delivered status."
 
 
 def test_diff_summary_reports_changed_text_and_checked():

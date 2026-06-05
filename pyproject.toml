@@ -78,6 +78,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vigil"]
+force-include = { "src/vigil/system_prompt/guard_generation.spec" = "vigil/system_prompt/guard_generation.spec" }
 
 [tool.ruff]
 target-version = "py311"

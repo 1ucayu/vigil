@@ -63,6 +63,8 @@ def _try_llm_contract(
     evidence: GuardEvidence,
     llm: LlmClient,
     guard_prompt: str,
+    *,
+    guard_use_images: bool = True,
 ) -> tuple[GuardContract | None, str, GuardAdmissionResult | None]:
     """Generate + vet an LLM contract.
 
@@ -71,7 +73,12 @@ def _try_llm_contract(
     deterministic fallback: invalid/unparseable, rejected by admission, or admitted yet
     semantically incomplete for a required/high-risk action.
     """
-    candidate = generate_llm_guard_candidate(evidence, llm, prompt_name=guard_prompt)
+    candidate = generate_llm_guard_candidate(
+        evidence,
+        llm,
+        prompt_name=guard_prompt,
+        use_images=guard_use_images,
+    )
     contract = candidate.contract
     if candidate.rejection_reason:
         return None, f"llm candidate rejected: {candidate.rejection_reason}", None
@@ -94,6 +101,8 @@ def _resolve_contract(
     guard_source: GuardSource,
     llm: LlmClient | None,
     guard_prompt: str,
+    *,
+    guard_use_images: bool = True,
 ) -> tuple[GuardContract, str, str, GuardAdmissionResult | None]:
     """Produce ``(contract, guard_origin, fallback_reason, precomputed_result)``.
 
@@ -105,12 +114,22 @@ def _resolve_contract(
 
     if guard_source == "llm":
         assert llm is not None
-        candidate = generate_llm_guard_candidate(evidence, llm, prompt_name=guard_prompt)
+        candidate = generate_llm_guard_candidate(
+            evidence,
+            llm,
+            prompt_name=guard_prompt,
+            use_images=guard_use_images,
+        )
         return candidate.contract, "llm", candidate.rejection_reason, None
 
     # hybrid
     assert llm is not None
-    contract, fallback_reason, result = _try_llm_contract(evidence, llm, guard_prompt)
+    contract, fallback_reason, result = _try_llm_contract(
+        evidence,
+        llm,
+        guard_prompt,
+        guard_use_images=guard_use_images,
+    )
     if contract is not None:
         return contract, "llm", "", result
     return synthesize_guard_contract(evidence), "fallback", fallback_reason, None
@@ -124,6 +143,7 @@ def generate_contract_guards(
     guard_source: GuardSource = "deterministic",
     llm: LlmClient | None = None,
     guard_prompt: str = DEFAULT_GUARD_PROMPT,
+    guard_use_images: bool = True,
 ) -> list[dict[str, Any]]:
     """Synthesize, admit, and attach contract guards across ``fsm``'s transitions.
 
@@ -141,7 +161,11 @@ def generate_contract_guards(
     for index, transition in enumerate(fsm.transitions):
         evidence = evidence_items[index]
         contract, guard_origin, fallback_reason, precomputed = _resolve_contract(
-            evidence, guard_source, llm, guard_prompt
+            evidence,
+            guard_source,
+            llm,
+            guard_prompt,
+            guard_use_images=guard_use_images,
         )
         result = precomputed or admit_guard_contract(contract, evidence)
 

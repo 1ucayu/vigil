@@ -7,7 +7,9 @@ transition that the later typed-``GuardContract`` synthesis pass consumes. It jo
 - the proposed canonical action and its resolved stable target alias,
 - sibling outgoing transitions from the same source state,
 - replay confidence / low-trust scope and transition provenance,
-- a lightweight deterministic source-to-target diff summary, and
+- a lightweight deterministic source-to-target diff summary,
+- Hoare-style source/target observation evidence (XML path/excerpt, screenshot path,
+  compact tree, LLM-derived alt text), and
 - short static-prior hints (activity label, permissions, string resources).
 
 This module only *reads* the existing FSM and raw trace screens. It does not add edges,
@@ -17,6 +19,7 @@ an LLM.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
@@ -32,6 +35,32 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.neuro.app_prior import AppPrior
 
 
+_MAX_COMPACT_TREE_CHARS = 6000
+_MAX_XML_EXCERPT_CHARS = 4000
+_MAX_STATIC_PRIOR_HINTS = 40
+
+
+class ScreenEvidence(BaseModel):
+    """Bounded observation evidence for one side of a transition.
+
+    Paths are provenance/debug metadata. The prompt also carries bounded textual content
+    (compact tree and XML excerpt) because an ordinary LLM API cannot open local paths.
+    Screenshots are attached separately by the LLM call path when the file exists.
+    """
+
+    state_id: str
+    screen_id: str = ""
+    activity_name: str = ""
+    package_name: str = ""
+    screenshot_path: str = ""
+    xml_tree_path: str = ""
+    compact_tree_text: str = ""
+    xml_excerpt: str = ""
+    alt_text: str = ""
+    page_function: str = ""
+    display_name: str = ""
+
+
 class GuardEvidence(BaseModel):
     """Deterministic evidence bundle for one transition's guard synthesis."""
 
@@ -43,6 +72,10 @@ class GuardEvidence(BaseModel):
     target_state_name: str = ""
     source_page_function: str = ""
     target_page_function: str = ""
+    source_screen_ids: list[str] = Field(default_factory=list)
+    target_screen_ids: list[str] = Field(default_factory=list)
+    source_screen: ScreenEvidence = Field(default_factory=lambda: ScreenEvidence(state_id=""))
+    target_screen: ScreenEvidence = Field(default_factory=lambda: ScreenEvidence(state_id=""))
     source_registry: WidgetRegistry
     target_registry: WidgetRegistry | None = None
     sibling_actions: list[dict[str, Any]] = Field(default_factory=list)
@@ -131,6 +164,73 @@ def _provenance_screen_ids(transition: Transition, side: str) -> list[str]:
     return ids
 
 
+def _truncate(value: str, limit: int) -> str:
+    text = value.strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}\n...[truncated {len(text) - limit} chars]"
+
+
+def _path_text_excerpt(raw_path: Any, limit: int = _MAX_XML_EXCERPT_CHARS) -> str:
+    if not raw_path:
+        return ""
+    path = Path(str(raw_path))
+    try:
+        if not path.exists() or not path.is_file():
+            return ""
+        return _truncate(path.read_text(encoding="utf-8", errors="replace"), limit)
+    except OSError:
+        return ""
+
+
+def _first_observation(
+    candidate_ids: list[str],
+    raw_screens: dict[str, Any],
+) -> dict[str, Any] | None:
+    for sid in candidate_ids:
+        obs = raw_screens.get(sid)
+        if isinstance(obs, BaseModel):
+            obs = obs.model_dump()
+        if isinstance(obs, dict):
+            return obs
+    return None
+
+
+def _screen_evidence(
+    state: AbstractState | None,
+    state_id: str,
+    screen_ids: list[str],
+    raw_screens: dict[str, Any],
+) -> ScreenEvidence:
+    """Build bounded Hoare evidence for one transition side."""
+    annotations = state.annotations if state is not None else None
+    obs = _first_observation(screen_ids, raw_screens)
+    if obs is None:
+        return ScreenEvidence(
+            state_id=state_id,
+            alt_text=annotations.alt_text if annotations is not None else "",
+            page_function=annotations.page_function if annotations is not None else "",
+            display_name=annotations.display_name if annotations is not None else "",
+        )
+
+    xml_tree_path = str(obs.get("xml_tree_path") or "")
+    return ScreenEvidence(
+        state_id=state_id,
+        screen_id=str(obs.get("screen_id") or (screen_ids[0] if screen_ids else "")),
+        activity_name=str(obs.get("activity_name") or ""),
+        package_name=str(obs.get("package_name") or ""),
+        screenshot_path=str(obs.get("screenshot_path") or ""),
+        xml_tree_path=xml_tree_path,
+        compact_tree_text=_truncate(
+            str(obs.get("compact_tree_text") or ""), _MAX_COMPACT_TREE_CHARS
+        ),
+        xml_excerpt=_path_text_excerpt(xml_tree_path),
+        alt_text=annotations.alt_text if annotations is not None else "",
+        page_function=annotations.page_function if annotations is not None else "",
+        display_name=annotations.display_name if annotations is not None else "",
+    )
+
+
 def _side_registry(
     state: AbstractState,
     provenance_ids: list[str],
@@ -204,6 +304,9 @@ def _static_prior_hints(
         return []
 
     hints: list[str] = []
+    hints.append(f"package:{app_prior.package_name}")
+    if app_prior.entry_activity:
+        hints.append(f"entry_activity:{app_prior.entry_activity}")
 
     activity = None
     if source is not None:
@@ -215,15 +318,29 @@ def _static_prior_hints(
                 hints.append(f"activity:{info.name}" + (f"({label})" if label else ""))
                 break
 
-    # A couple of risk-relevant permissions, kept short.
-    for perm in app_prior.permissions[:2]:
+    for info in app_prior.activities[:5]:
+        label = info.label or ""
+        function = info.predicted_function or ""
+        launcher = ":launcher" if info.is_launcher else ""
+        hints.append(f"activity_prior:{info.name}{launcher} label={label!r} function={function!r}")
+
+    for perm in app_prior.permissions[:8]:
         hints.append(f"perm:{perm.rsplit('.', 1)[-1]}")
 
-    if app_prior.string_arrays:
-        first_array = sorted(app_prior.string_arrays)[0]
-        hints.append(f"string_array:{first_array}")
+    for name in sorted(app_prior.string_arrays)[:5]:
+        values = app_prior.string_arrays.get(name) or []
+        preview = ", ".join(repr(str(v)) for v in values[:8])
+        hints.append(f"string_array:{name} values=[{preview}]")
 
-    return hints
+    for name, value in sorted(app_prior.string_constants.items())[:10]:
+        hints.append(f"string:{name}={value!r}")
+
+    for decl in app_prior.widget_declarations[:10]:
+        hints.append(
+            "layout_widget:" f"{decl.layout_file} id={decl.widget_id!r} class={decl.widget_class!r}"
+        )
+
+    return hints[:_MAX_STATIC_PRIOR_HINTS]
 
 
 # ---------------------------------------------------------------------------
@@ -246,11 +363,17 @@ def build_guard_evidence_for_transition(
     """
     source = fsm.states.get(transition.source)
     target = fsm.states.get(transition.target)
+    source_screen_ids = _provenance_screen_ids(transition, "source")
+    target_screen_ids = _provenance_screen_ids(transition, "target")
+    if source is not None:
+        source_screen_ids = source_screen_ids or list(source.evidence.raw_screen_ids)
+    if target is not None:
+        target_screen_ids = target_screen_ids or list(target.evidence.raw_screen_ids)
 
     if source is not None:
         source_registry = _side_registry(
             source,
-            _provenance_screen_ids(transition, "source"),
+            source_screen_ids,
             raw_screens,
             app_prior,
         )
@@ -261,7 +384,7 @@ def build_guard_evidence_for_transition(
     if target is not None:
         target_registry = _side_registry(
             target,
-            _provenance_screen_ids(transition, "target"),
+            target_screen_ids,
             raw_screens,
             app_prior,
         )
@@ -277,6 +400,10 @@ def build_guard_evidence_for_transition(
         target_state_name=target.name if target is not None else "",
         source_page_function=(source.annotations.page_function if source is not None else ""),
         target_page_function=(target.annotations.page_function if target is not None else ""),
+        source_screen_ids=source_screen_ids,
+        target_screen_ids=target_screen_ids,
+        source_screen=_screen_evidence(source, transition.source, source_screen_ids, raw_screens),
+        target_screen=_screen_evidence(target, transition.target, target_screen_ids, raw_screens),
         source_registry=source_registry,
         target_registry=target_registry,
         sibling_actions=_sibling_actions(fsm, transition),

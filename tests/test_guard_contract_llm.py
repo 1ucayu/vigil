@@ -9,9 +9,10 @@ from vigil.models.guard import GuardKind, RiskLevel
 from vigil.neuro.guard_contract_llm import (
     build_guard_user_prompt,
     generate_llm_guard_candidate,
+    guard_image_paths,
     parse_llm_guard_candidate,
 )
-from vigil.neuro.guard_evidence import GuardEvidence
+from vigil.neuro.guard_evidence import GuardEvidence, ScreenEvidence
 from vigil.neuro.guard_registry import WidgetRegistry, WidgetRegistryEntry, WidgetRole
 
 
@@ -22,9 +23,22 @@ class FakeLlmClient:
         self.response = response
         self.raise_exc = raise_exc
         self.calls: list[tuple[str, str]] = []
+        self.image_calls: list[tuple[str, str, list[Any], list[str] | None]] = []
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         self.calls.append((system_prompt, user_prompt))
+        if self.raise_exc is not None:
+            raise self.raise_exc
+        return self.response
+
+    def generate_with_images(
+        self,
+        system_prompt: str,
+        text_prompt: str,
+        images: list[Any],
+        image_labels: list[str] | None = None,
+    ) -> str:
+        self.image_calls.append((system_prompt, text_prompt, images, image_labels))
         if self.raise_exc is not None:
             raise self.raise_exc
         return self.response
@@ -49,6 +63,28 @@ def _evidence() -> GuardEvidence:
         source_page_function="messaging/thread",
         target_state_name="Sent",
         target_page_function="messaging/sent",
+        source_screen_ids=["scr_source"],
+        target_screen_ids=["scr_target"],
+        source_screen=ScreenEvidence(
+            state_id="s1",
+            screen_id="scr_source",
+            screenshot_path="screens/source.png",
+            xml_tree_path="trees/source.xml",
+            compact_tree_text='[c_0001] Button send ;click; text="Send"',
+            xml_excerpt='<node resource-id="com.test:id/send" text="Send" />',
+            alt_text="A chat thread with a message composer and Send button.",
+            page_function="messaging/thread",
+        ),
+        target_screen=ScreenEvidence(
+            state_id="s2",
+            screen_id="scr_target",
+            screenshot_path="screens/target.png",
+            xml_tree_path="trees/target.xml",
+            compact_tree_text='[c_0001] TextView banner ;; text="Sent"',
+            xml_excerpt='<node resource-id="com.test:id/banner" text="Sent" />',
+            alt_text="The sent confirmation banner is visible.",
+            page_function="messaging/sent",
+        ),
         source_registry=reg,
         action_target_alias="send",
         sibling_actions=[{"type": "click", "target_text": "Attach"}],
@@ -95,9 +131,38 @@ def test_user_prompt_includes_evidence_and_marks_target_effect_only():
     assert "Send" in prompt
     assert "EFFECT-ONLY" in prompt
     assert "messaging/thread" in prompt
+    assert "[Transition]" in prompt
+    assert "[Known action]" in prompt
+    assert "[Pre-state Evidence: P / source]" in prompt
+    assert "[Post-state Evidence: Q / target" in prompt
+    assert "[Global Information / Static APK Priors]" in prompt
+    assert "trees/source.xml" in prompt
+    assert "screens/source.png" in prompt
+    assert "Bounded XML file excerpt" in prompt
+    assert 'resource-id="com.test:id/send"' in prompt
+    assert "Button send" in prompt
+    assert "A chat thread with a message composer" in prompt
+    assert "target-only" in prompt
     # Source registry alias is offered as a referenceable element.
     assert "alias=send" in prompt
     assert "perm:SEND_SMS" in prompt
+
+
+def test_guard_image_paths_uses_existing_source_and_target_screenshots(tmp_path):
+    source_img = tmp_path / "source.png"
+    target_img = tmp_path / "target.png"
+    source_img.write_bytes(b"fake")
+    target_img.write_bytes(b"fake")
+    ev = _evidence()
+    ev.source_screen.screenshot_path = str(source_img)
+    ev.target_screen.screenshot_path = str(target_img)
+
+    images, labels = guard_image_paths(ev)
+
+    assert images == [source_img, target_img]
+    assert labels is not None
+    assert "SOURCE screenshot" in labels[0]
+    assert "TARGET screenshot" in labels[1]
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +247,27 @@ def test_generate_calls_client_and_returns_candidate():
     assert len(llm.calls) == 1
     system_prompt, user_prompt = llm.calls[0]
     assert "guard contract" in system_prompt.lower() or "GuardContract" in system_prompt
-    assert "Known action" in user_prompt
+    assert "[Known action]" in user_prompt
     assert candidate.contract.kind is GuardKind.CONFIRM_COMMIT
+
+
+def test_generate_uses_images_when_screenshot_files_exist(tmp_path):
+    source_img = tmp_path / "source.png"
+    source_img.write_bytes(b"fake")
+    ev = _evidence()
+    ev.source_screen.screenshot_path = str(source_img)
+    ev.target_screen.screenshot_path = ""
+    llm = FakeLlmClient(json.dumps({"contract": _contract_json()}))
+
+    candidate = generate_llm_guard_candidate(ev, llm)
+
+    assert candidate.contract.kind is GuardKind.CONFIRM_COMMIT
+    assert len(llm.calls) == 0
+    assert len(llm.image_calls) == 1
+    _, prompt, images, labels = llm.image_calls[0]
+    assert "Pre-state Evidence: P / source" in prompt
+    assert images == [source_img]
+    assert labels is not None and "SOURCE screenshot" in labels[0]
 
 
 def test_generate_handles_client_exception():

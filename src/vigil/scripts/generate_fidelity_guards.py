@@ -136,6 +136,11 @@ def main() -> None:
         help="System-prompt file name (under src/vigil/system_prompt/) for the LLM path.",
     )
     parser.add_argument(
+        "--guard-no-images",
+        action="store_true",
+        help="Disable source/target screenshot attachments for LLM guard generation.",
+    )
+    parser.add_argument(
         "--force-visual",
         action="store_true",
         help="Regenerate visual annotations even when state annotations already exist.",
@@ -184,6 +189,7 @@ def main() -> None:
                 max_states=args.max_states,
                 guard_source=args.guard_source,
                 guard_prompt=args.guard_prompt,
+                guard_use_images=not args.guard_no_images,
             )
         )
 
@@ -241,6 +247,7 @@ def run_one_app(
     max_states: int | None,
     guard_source: str = "deterministic",
     guard_prompt: str = DEFAULT_GUARD_PROMPT,
+    guard_use_images: bool = True,
 ) -> dict[str, Any]:
     app_data_dir = data_root / spec.package
     bundle_dir = bundle_root / spec.package
@@ -286,6 +293,7 @@ def run_one_app(
             guard_source=guard_source,  # type: ignore[arg-type]
             llm=llm if guard_source in ("llm", "hybrid") else None,
             guard_prompt=guard_prompt,
+            guard_use_images=guard_use_images,
         )
         write_guard_generation_report(guard_report, app_report_dir / "guard_generation.json")
 
@@ -305,6 +313,7 @@ def run_one_app(
         "visual_annotated": sum(1 for row in visual_report if row.get("status") == "annotated"),
         "visual_failed": sum(1 for row in visual_report if row.get("status") == "failed"),
         "guard_source": guard_source,
+        "guard_use_images": guard_use_images,
         "guards_attached": sum(1 for t in fsm.transitions if t.guard),
         "guards_required": sum(1 for t in fsm.transitions if t.requires_guard),
         "guards_semantic_incomplete": sum(

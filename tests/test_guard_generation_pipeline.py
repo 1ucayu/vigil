@@ -354,7 +354,7 @@ def test_try_llm_contract_rejects_incomplete_high_risk():
         }
     )
     contract, reason, result = _try_llm_contract(
-        _binding_evidence(), _FakeLlm(enabled_only), "guard_contract_generation.md"
+        _binding_evidence(), _FakeLlm(enabled_only), "guard_generation.spec"
     )
     assert contract is None
     assert result is None
@@ -382,7 +382,7 @@ def test_try_llm_contract_accepts_complete_binding():
         }
     )
     contract, reason, result = _try_llm_contract(
-        _binding_evidence(), _FakeLlm(complete), "guard_contract_generation.md"
+        _binding_evidence(), _FakeLlm(complete), "guard_generation.spec"
     )
     assert contract is not None
     assert reason == ""
