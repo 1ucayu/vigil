@@ -743,7 +743,6 @@ ape:
 llm:
   provider: "proxy"                 # anthropic | openai | google | proxy
   model: "claude-sonnet-4.6"
-  max_tokens: 4096
   temperature: 0.0
   openai_base_url: "http://localhost:4141/v1"
   openai_api_key: "dummy_key"

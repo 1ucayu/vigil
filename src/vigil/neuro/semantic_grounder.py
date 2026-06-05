@@ -39,7 +39,7 @@ You are annotating mobile app UI states for a runtime verification system.
 You will receive a screenshot and an accessibility tree of one screen.
 Return ONLY valid JSON with these fields:
 {
-  "alt_text": "1-2 sentence description a blind user would understand",
+  "alt_text": "description a blind user would understand",
   "page_function": "hierarchical/slash/path (e.g. settings/wifi/list)",
   "expected_actions": ["semantic_action_name", ...]
 }
@@ -52,12 +52,12 @@ Each element has no text and no accessibility label — you must infer its \
 function from its visual appearance at the given screen coordinates.
 Return ONLY valid JSON: {"element_id": "snake_case_label", ...}
 Use functional names (e.g. delete_button, share_icon, back_arrow), \
-not visual descriptions (e.g. red_circle). Labels must be 2-3 words, \
+not visual descriptions (e.g. red_circle). Labels must be \
 semantically stable across app versions."""
 
 _INVARIANT_SYSTEM_PROMPT = """\
 You are mining structural invariants for a mobile app UI state.
-Given one observation of a screen's accessibility tree, propose 3-8 \
+Given one observation of a screen's accessibility tree, propose \
 invariant expressions that should ALWAYS be true regardless of when/where \
 this screen is visited.
 
@@ -104,57 +104,33 @@ def _build_static_context(
             if _match_layout_to_activity(w.layout_file, activity_name)
         ]
         if not relevant:
-            seen: set[str] = set()
-            for w in app_prior.widget_declarations:
-                if w.widget_class not in seen:
-                    relevant.append(w)
-                    seen.add(w.widget_class)
-                    if len(relevant) >= 10:
-                        break
+            relevant = list(app_prior.widget_declarations)
         if relevant:
-            wl = ", ".join(f"{w.widget_class}(id={w.widget_id})" for w in relevant[:15])
+            wl = ", ".join(f"{w.widget_class}(id={w.widget_id})" for w in relevant)
             parts.append(f"Declared widgets in layout XML: {wl}")
 
     if app_prior.string_constants and elements:
         visible_texts = {e.get("text", "") for e in elements if e.get("text")}
         matched = [
             f"{k}={v!r}" for k, v in app_prior.string_constants.items() if v in visible_texts
-        ][:8]
+        ]
         if matched:
             parts.append(f"Matched string constants: {', '.join(matched)}")
+        else:
+            constants = [f"{k}={v!r}" for k, v in app_prior.string_constants.items()]
+            if constants:
+                parts.append(f"String constants: {', '.join(constants)}")
 
     if app_prior.string_arrays:
         summaries: list[str] = []
-        for name, values in list(app_prior.string_arrays.items())[:5]:
-            preview = values[:3]
-            suffix = f"... ({len(values)} total)" if len(values) > 3 else ""
-            summaries.append(f"{name}: [{', '.join(preview)}{suffix}]")
+        for name, values in app_prior.string_arrays.items():
+            summaries.append(f"{name}: [{', '.join(str(value) for value in values)}]")
         if summaries:
             parts.append(f"String arrays: {'; '.join(summaries)}")
 
     if app_prior.permissions:
-        interesting_kw = [
-            "CAMERA",
-            "LOCATION",
-            "CONTACTS",
-            "CALENDAR",
-            "SMS",
-            "CALL",
-            "RECORD_AUDIO",
-            "BLUETOOTH",
-            "NFC",
-            "WIFI",
-            "INTERNET",
-            "STORAGE",
-            "NOTIFICATIONS",
-        ]
-        interesting = [
-            p.replace("android.permission.", "")
-            for p in app_prior.permissions
-            if any(kw in p for kw in interesting_kw)
-        ][:8]
-        if interesting:
-            parts.append(f"App permissions: {', '.join(interesting)}")
+        permissions = [p.replace("android.permission.", "") for p in app_prior.permissions]
+        parts.append(f"App permissions: {', '.join(permissions)}")
 
     if not parts:
         return ""
@@ -343,7 +319,7 @@ class SemanticGrounder:
                 if _match_layout_to_activity(w.layout_file, state.android_context.activity_name)
             ]
             if relevant:
-                wids = ", ".join(f"{w.widget_class}(id={w.widget_id})" for w in relevant[:10])
+                wids = ", ".join(f"{w.widget_class}(id={w.widget_id})" for w in relevant)
                 user_prompt += f"\n\nKnown widget IDs from layout XML: {wids}"
 
         screenshot_path = obs.get("screenshot_path")
@@ -498,7 +474,7 @@ class SemanticGrounder:
         user_prompt = (
             f"{static_hint}"
             f"Accessibility tree elements:\n{element_table}\n\n"
-            "Propose 3-8 structural invariant expressions for this screen."
+            "Propose structural invariant expressions for this screen."
         )
 
         screenshot_path = observation.get("screenshot_path")
@@ -641,7 +617,7 @@ def _functions_consistent(page_fn: str, predicted: str) -> bool:
 
 
 def _build_element_table(obs: dict[str, Any]) -> str:
-    """Build a concise element summary table from an observation dict."""
+    """Build an element summary table from an observation dict."""
     elements = obs.get("interactable_elements", [])
     if not elements:
         return "(no interactable elements)"

@@ -41,16 +41,15 @@ FIDELITY_APPS: tuple[FidelityAppSpec, ...] = (
 )
 
 _PREFERRED_MODELS = (
-    # These two have been observed to work on the local OpenAI-compatible
-    # /v1/chat/completions endpoint. Some listed Anthropic models advertise the
-    # endpoint but currently return model_not_supported from the proxy.
+    # Prefer the explicitly tested local proxy model before falling back to other
+    # vision-capable chat-completions models.
+    "claude-sonnet-4.6",
     "gpt-5-mini",
     "gpt-5.4",
     "gemini-3.5-flash[1m]",
     "gemini-3-flash-preview",
     "gemini-2.5-pro",
     "claude-sonnet-4.6[1m]",
-    "claude-sonnet-4.6",
 )
 
 
@@ -80,12 +79,6 @@ def main() -> None:
         "--models-url",
         default="http://localhost:4141/models",
         help="Model-list URL used when --model is omitted.",
-    )
-    parser.add_argument(
-        "--max-tokens",
-        type=int,
-        default=1400,
-        help="Max tokens per visual grounding response.",
     )
     parser.add_argument(
         "--data-root",
@@ -168,7 +161,6 @@ def main() -> None:
                 proxy_base_url=args.base_url,
                 proxy_api_key="dummy_key",
                 proxy_model=model,
-                max_tokens=args.max_tokens,
                 temperature=0.0,
             )
         )

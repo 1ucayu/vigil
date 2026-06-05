@@ -1505,7 +1505,7 @@ class TestCompactUITree:
         # Selector summary present
         assert "selector=" in out
 
-    def test_respects_max_nodes(self) -> None:
+    def test_compact_ui_tree_text_emits_all_semantic_nodes(self) -> None:
         elements: list[UIElement] = []
         for i in range(50):
             elements.append(
@@ -1519,8 +1519,8 @@ class TestCompactUITree:
                     bounds=[0, i * 100, 1080, (i + 1) * 100],
                 )
             )
-        out = compact_ui_tree_text(elements, max_nodes=5)
-        assert out.count("[c_") == 5
+        out = compact_ui_tree_text(elements)
+        assert out.count("[c_") == 50
 
 
 class TestScrollObservations:

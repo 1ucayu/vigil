@@ -8,9 +8,9 @@ transition that the later typed-``GuardContract`` synthesis pass consumes. It jo
 - sibling outgoing transitions from the same source state,
 - replay confidence / low-trust scope and transition provenance,
 - a lightweight deterministic source-to-target diff summary,
-- Hoare-style source/target observation evidence (XML path/excerpt, screenshot path,
+- Hoare-style source/target observation evidence (XML path/full text, screenshot path,
   compact tree, LLM-derived alt text), and
-- short static-prior hints (activity label, permissions, string resources).
+- static-prior hints (activity label, permissions, string resources).
 
 This module only *reads* the existing FSM and raw trace screens. It does not add edges,
 modify state identity, change replay confidence, compile DSL, validate admission, or call
@@ -35,16 +35,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.neuro.app_prior import AppPrior
 
 
-_MAX_COMPACT_TREE_CHARS = 6000
-_MAX_XML_EXCERPT_CHARS = 4000
-_MAX_STATIC_PRIOR_HINTS = 40
-
-
 class ScreenEvidence(BaseModel):
-    """Bounded observation evidence for one side of a transition.
+    """Observation evidence for one side of a transition.
 
-    Paths are provenance/debug metadata. The prompt also carries bounded textual content
-    (compact tree and XML excerpt) because an ordinary LLM API cannot open local paths.
+    Paths are provenance/debug metadata. The prompt also carries textual content
+    (compact tree and XML text) because an ordinary LLM API cannot open local paths.
     Screenshots are attached separately by the LLM call path when the file exists.
     """
 
@@ -164,21 +159,14 @@ def _provenance_screen_ids(transition: Transition, side: str) -> list[str]:
     return ids
 
 
-def _truncate(value: str, limit: int) -> str:
-    text = value.strip()
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit].rstrip()}\n...[truncated {len(text) - limit} chars]"
-
-
-def _path_text_excerpt(raw_path: Any, limit: int = _MAX_XML_EXCERPT_CHARS) -> str:
+def _path_text(raw_path: Any) -> str:
     if not raw_path:
         return ""
     path = Path(str(raw_path))
     try:
         if not path.exists() or not path.is_file():
             return ""
-        return _truncate(path.read_text(encoding="utf-8", errors="replace"), limit)
+        return path.read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         return ""
 
@@ -202,7 +190,7 @@ def _screen_evidence(
     screen_ids: list[str],
     raw_screens: dict[str, Any],
 ) -> ScreenEvidence:
-    """Build bounded Hoare evidence for one transition side."""
+    """Build Hoare evidence for one transition side."""
     annotations = state.annotations if state is not None else None
     obs = _first_observation(screen_ids, raw_screens)
     if obs is None:
@@ -221,10 +209,8 @@ def _screen_evidence(
         package_name=str(obs.get("package_name") or ""),
         screenshot_path=str(obs.get("screenshot_path") or ""),
         xml_tree_path=xml_tree_path,
-        compact_tree_text=_truncate(
-            str(obs.get("compact_tree_text") or ""), _MAX_COMPACT_TREE_CHARS
-        ),
-        xml_excerpt=_path_text_excerpt(xml_tree_path),
+        compact_tree_text=str(obs.get("compact_tree_text") or "").strip(),
+        xml_excerpt=_path_text(xml_tree_path),
         alt_text=annotations.alt_text if annotations is not None else "",
         page_function=annotations.page_function if annotations is not None else "",
         display_name=annotations.display_name if annotations is not None else "",
@@ -299,7 +285,7 @@ def _static_prior_hints(
     source: AbstractState | None,
     app_prior: AppPrior | None,
 ) -> list[str]:
-    """Short list of matched static-prior facts. Empty when no prior is supplied."""
+    """List matched static-prior facts. Empty when no prior is supplied."""
     if app_prior is None:
         return []
 
@@ -318,29 +304,29 @@ def _static_prior_hints(
                 hints.append(f"activity:{info.name}" + (f"({label})" if label else ""))
                 break
 
-    for info in app_prior.activities[:5]:
+    for info in app_prior.activities:
         label = info.label or ""
         function = info.predicted_function or ""
         launcher = ":launcher" if info.is_launcher else ""
         hints.append(f"activity_prior:{info.name}{launcher} label={label!r} function={function!r}")
 
-    for perm in app_prior.permissions[:8]:
+    for perm in app_prior.permissions:
         hints.append(f"perm:{perm.rsplit('.', 1)[-1]}")
 
-    for name in sorted(app_prior.string_arrays)[:5]:
+    for name in sorted(app_prior.string_arrays):
         values = app_prior.string_arrays.get(name) or []
-        preview = ", ".join(repr(str(v)) for v in values[:8])
-        hints.append(f"string_array:{name} values=[{preview}]")
+        rendered_values = ", ".join(repr(str(v)) for v in values)
+        hints.append(f"string_array:{name} values=[{rendered_values}]")
 
-    for name, value in sorted(app_prior.string_constants.items())[:10]:
+    for name, value in sorted(app_prior.string_constants.items()):
         hints.append(f"string:{name}={value!r}")
 
-    for decl in app_prior.widget_declarations[:10]:
+    for decl in app_prior.widget_declarations:
         hints.append(
             "layout_widget:" f"{decl.layout_file} id={decl.widget_id!r} class={decl.widget_class!r}"
         )
 
-    return hints[:_MAX_STATIC_PRIOR_HINTS]
+    return hints
 
 
 # ---------------------------------------------------------------------------

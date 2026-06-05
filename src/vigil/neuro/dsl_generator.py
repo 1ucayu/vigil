@@ -24,8 +24,6 @@ from vigil.core.llm_client import LlmClient
 from vigil.core.paths import resolve_dsl_grammar_path
 from vigil.models.fsm import AbstractState, AppFSM, Transition
 
-_MAX_ELEMENTS_PER_SCREEN = 30
-
 _SKIP_ACTIONS = frozenset({"navigate_back", "navigate_home", "scroll_up", "scroll_down"})
 
 # ---------------------------------------------------------------------------
@@ -403,7 +401,7 @@ class DslGenerator:
 
         source_elements = self._get_elements(source_state, raw_screens)
         lines = ["## Other click targets from the same screen:"]
-        for sib in siblings[:5]:
+        for sib in siblings:
             target_state = self._fsm.states.get(sib.target)
             target_name = target_state.name if target_state else sib.target
             target_eid = sib.action.get("target", "")
@@ -686,11 +684,6 @@ class DslGenerator:
         text = response.strip()
         text = re.sub(r"^```\w*\n?", "", text)
         text = re.sub(r"\n?```$", "", text)
-        for line in text.split("\n"):
-            line = line.strip()
-            if line:
-                text = line
-                break
         text = text.strip("\"'`")
         return text
 
@@ -769,7 +762,7 @@ class DslGenerator:
             or e.get("is_editable")
             or e.get("is_checkable")
         ]
-        return interactable[:_MAX_ELEMENTS_PER_SCREEN]
+        return interactable
 
     @staticmethod
     def _format_elements(elements: list[dict[str, Any]]) -> str:
@@ -794,15 +787,9 @@ class DslGenerator:
             ("Selected", "is_selected"),
             ("Password", "is_password"),
         ]
-        # Drop columns that are uniformly False across the screen — saves tokens
-        # without hiding signal the LLM could act on.
-        active_cols = [
-            (label, key) for label, key in prop_cols if any(el.get(key) for el in elements)
-        ]
-
         header = (
             "| Alias (use in guards) | Class | Text | "
-            + " | ".join(label for label, _ in active_cols)
+            + " | ".join(label for label, _ in prop_cols)
             + " |"
         )
         lines = [header]
@@ -811,7 +798,7 @@ class DslGenerator:
             cls = el.get("class_name", "")
             if cls and "." in cls:
                 cls = cls.rsplit(".", maxsplit=1)[-1]
-            text = (el.get("text", "") or "")[:30]
-            row_vals = [str(el.get(key, False)) for _, key in active_cols]
+            text = el.get("text", "") or ""
+            row_vals = [str(el.get(key, False)) for _, key in prop_cols]
             lines.append(f"| {alias} | {cls} | {text} | " + " | ".join(row_vals) + " |")
         return "\n".join(lines)

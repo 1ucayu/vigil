@@ -1,9 +1,9 @@
-"""Compact plain-text UI tree exporter for LLM prompts.
+"""Plain-text UI tree exporter for LLM prompts.
 
-Produces a token-efficient representation of a parsed UI tree for use in
-LLM prompts (state abstraction, semantic grounding, DSL guard generation,
-Tier-3 evolution). The output is *lossy* — it drops bounds, package, and
-non-interactive structural wrappers — so it must NEVER be used for
+Produces a representation of a parsed UI tree for use in LLM prompts
+(state abstraction, semantic grounding, DSL guard generation, Tier-3
+evolution). The output is semantic rather than canonical — it drops bounds,
+package, and non-interactive structural wrappers — so it must NEVER be used for
 fingerprinting, state identity, or replay. Those consumers must operate
 on the canonical ``UIElement`` graph.
 
@@ -70,11 +70,11 @@ def _selector_summary(e: UIElement, elements: list[UIElement]) -> str:
     if sel.get("resource_id"):
         return f"rid:{_short_rid(sel['resource_id'])}"
     if sel.get("text"):
-        return f"text:{sel['text'][:30].replace(' ', '_')}"
+        return f"text:{sel['text'].replace(' ', '_')}"
     if sel.get("content_description"):
-        return f"cd:{sel['content_description'][:30].replace(' ', '_')}"
+        return f"cd:{sel['content_description'].replace(' ', '_')}"
     if sel.get("nearby_text"):
-        return f"near:{sel['nearby_text'][:30].replace(' ', '_')}"
+        return f"near:{sel['nearby_text'].replace(' ', '_')}"
     cls = _class_leaf(sel.get("class_name") or "")
     return f"cls:{cls}" if cls else "cls:?"
 
@@ -114,12 +114,11 @@ def _format_node(e: UIElement, elements: list[UIElement], handle: str) -> str:
     return " ".join(parts)
 
 
-def compact_ui_tree_text(elements: list[UIElement], max_nodes: int = 120) -> str:
+def compact_ui_tree_text(elements: list[UIElement]) -> str:
     """Render ``elements`` as an indented plain-text tree for LLM prompts.
 
     Walks the element tree in document order (DFS via ``children`` lists),
-    emits semantic nodes only (see ``_is_semantic``), and caps the output
-    at ``max_nodes`` to avoid blowing past prompt budgets on huge screens.
+    and emits semantic nodes only (see ``_is_semantic``).
     Indentation is based on the depth relative to the first emitted ancestor
     so a deeply-nested but otherwise flat hierarchy doesn't waste columns.
 
@@ -138,8 +137,6 @@ def compact_ui_tree_text(elements: list[UIElement], max_nodes: int = 120) -> str
     handle_counter = [0]
 
     def visit(eid: str, indent_level: int) -> None:
-        if len(lines) >= max_nodes:
-            return
         e = by_id.get(eid)
         if e is None:
             return
@@ -152,13 +149,9 @@ def compact_ui_tree_text(elements: list[UIElement], max_nodes: int = 120) -> str
             emitted = True
             child_indent = indent_level + 1
         for cid in e.children:
-            if len(lines) >= max_nodes:
-                break
             visit(cid, child_indent if emitted else indent_level)
 
     for root in roots:
         visit(root.element_id, 0)
-        if len(lines) >= max_nodes:
-            break
 
     return "\n".join(lines)

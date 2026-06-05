@@ -31,8 +31,7 @@ known_action
 transition guard. `$bind.*` is recorded separately in `binding_requirements`; it is
 not an executable `Gamma` predicate.
 
-Only output one JSON object conforming to [GUARANTEE].
-Do not output markdown, prose, free-form DSL, Hoare triples, or runtime verdicts.
+Return JSON only.
 
 First derive the contract from [RELY], [GUARANTEE], and [SPECIFICATION].
 Then apply every section under ## Refine Prompt as additional constraints.
@@ -78,7 +77,7 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
     role: only executable UI read scope
     state_id: string
     screen_id: string
-    xml_excerpt: string
+    xml_excerpt: string       // full XML text when available; field name is legacy
     compact_tree_text: string
     screenshot_image?: image
     alt_text: string
@@ -95,7 +94,7 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
     role: effect-only semantic evidence
     state_id: string
     screen_id: string
-    xml_excerpt: string
+    xml_excerpt: string       // full XML text when available; field name is legacy
     compact_tree_text: string
     screenshot_image?: image
     alt_text: string
@@ -227,7 +226,7 @@ ReadableActionProperty:
   * `[Pre-state Evidence: P / source]` is the only executable UI read scope.
   * `[Post-state Evidence: Q / target]` is effect-only evidence.
   * `[Global Information / Static APK Priors]` is prior knowledge only.
-  * Local paths are provenance only; use `xml_excerpt`, `compact_tree_text`,
+  * Local paths are provenance only; use full `xml_excerpt`, `compact_tree_text`,
     `alt_text`, source widget registry facts, and attached images as evidence.
   * The current runtime evaluator executes only the listed `PredicateBasis`.
 
@@ -258,7 +257,7 @@ ReadableActionProperty:
     * Set `risk_level` and `required` conservatively.
     * For high-risk or semantic-required transitions, set
       `semantic_binding_incomplete = true`.
-    * Set `rejection_reason` to a short evidence-based reason.
+    * Set `rejection_reason` to an evidence-based reason.
 
 **Always-Enforced Rules**:
   * No FSM states, actions, transitions, replay confidence, or runtime verdicts are
@@ -272,7 +271,7 @@ ReadableActionProperty:
   * Element predicates are executable only when the referenced registry entry exposes
     a runtime-resolvable `resource_id`; prefer such aliases.
   * Every predicate must be independently executable. A single non-executable predicate
-    rejects the whole guard, so prefer fewer certain predicates over speculative ones.
+    rejects the whole guard, so emit only predicates supported by evidence.
   * No executable predicate uses `$bind.*`.
   * No executable predicate uses an undeclared `$intent.*`.
   * No executable predicate uses a predicate outside `PredicateBasis`.

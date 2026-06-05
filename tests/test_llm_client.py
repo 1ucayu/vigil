@@ -317,6 +317,22 @@ class TestProxyProvider:
             {"role": "system", "content": "system prompt"},
             {"role": "user", "content": "user prompt"},
         ]
+        assert "max_tokens" not in call_kwargs
+
+    @patch("openai.OpenAI")
+    def test_proxy_empty_choices_raises_clear_error(self, mock_openai_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = []
+        mock_response.usage = None
+        mock_client.chat.completions.create.return_value = mock_response
+
+        config = LLMConfig(provider="proxy")
+        client = LlmClient(config)
+
+        with pytest.raises(ValueError, match="contained no choices"):
+            client.generate("system prompt", "user prompt")
 
     @patch("openai.OpenAI")
     def test_proxy_images_fallback(self, mock_openai_cls: MagicMock, tmp_path: Path) -> None:
@@ -340,6 +356,7 @@ class TestProxyProvider:
 
         assert result == "text only"
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert "max_tokens" not in call_kwargs
         content = call_kwargs["messages"][1]["content"]
         assert content[0]["type"] == "image_url"
         assert content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")

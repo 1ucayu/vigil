@@ -24,8 +24,8 @@ You receive one screenshot plus a compact accessibility element table.
 
 Return ONLY valid JSON with this exact shape:
 {
-  "alt_text": "one concise paragraph focused on visual layout and visible controls",
-  "layout_summary": "short description of regions, lists/forms/dialogs, and hierarchy",
+  "alt_text": "description focused on visual layout and visible controls",
+  "layout_summary": "description of regions, lists/forms/dialogs, and hierarchy",
   "page_function": "stable slash/path such as chat/thread or banking/transfer/form",
   "expected_actions": ["semantic_action", "..."],
   "icon_labels": [
@@ -33,7 +33,7 @@ Return ONLY valid JSON with this exact shape:
       "element_id": "e_0001",
       "label": "snake_case_functional_label",
       "confidence": 0.0,
-      "basis": "short visual/accessibility reason"
+      "basis": "visual/accessibility reason"
     }
   ],
   "confidence": 0.0
@@ -282,7 +282,7 @@ def _element_lines(elements: list[dict[str, Any]]) -> list[str]:
         return ["  (no elements)"]
 
     lines: list[str] = []
-    for element in elements[:80]:
+    for element in elements:
         eid = str(element.get("element_id") or "?")
         cls = str(element.get("class_name") or "").rsplit(".", 1)[-1]
         rid = str(element.get("resource_id") or "")
@@ -324,13 +324,13 @@ def _static_prior_summary(app_prior: AppPrior) -> str:
                 f"{activity.name} label={activity.label or ''} "
                 f"function={activity.predicted_function or ''}"
             )
-            for activity in app_prior.activities[:5]
+            for activity in app_prior.activities
         ]
         parts.append("activities: " + "; ".join(labels))
     if app_prior.permissions:
-        parts.append("permissions: " + ", ".join(app_prior.permissions[:8]))
+        parts.append("permissions: " + ", ".join(app_prior.permissions))
     if app_prior.string_arrays:
-        names = list(app_prior.string_arrays)[:5]
+        names = list(app_prior.string_arrays)
         parts.append("string_arrays: " + ", ".join(names))
     return "\n".join(parts)
 

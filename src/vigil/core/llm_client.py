@@ -140,7 +140,6 @@ class LlmClient:
 
         config = types.GenerateContentConfig(
             systemInstruction=system_prompt,
-            maxOutputTokens=self._config.max_tokens,
             temperature=self._config.temperature,
         )
 
@@ -163,13 +162,13 @@ class LlmClient:
 
     def _generate_anthropic(self, system_prompt: str, user_prompt: str) -> str:
         def _call() -> Any:
-            return self._client.messages.create(
-                model=self._model,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-                max_tokens=self._config.max_tokens,
-                temperature=self._config.temperature,
-            )
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "temperature": self._config.temperature,
+            }
+            return self._client.messages.create(**kwargs)
 
         response = self._call_with_retry(_call)
         if hasattr(response, "usage"):
@@ -202,13 +201,13 @@ class LlmClient:
         content.append({"type": "text", "text": text_prompt})
 
         def _call() -> Any:
-            return self._client.messages.create(
-                model=self._model,
-                system=system_prompt,
-                messages=[{"role": "user", "content": content}],
-                max_tokens=self._config.max_tokens,
-                temperature=self._config.temperature,
-            )
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": content}],
+                "temperature": self._config.temperature,
+            }
+            return self._client.messages.create(**kwargs)
 
         response = self._call_with_retry(_call)
         if hasattr(response, "usage"):
@@ -220,15 +219,15 @@ class LlmClient:
 
     def _generate_openai_compatible(self, system_prompt: str, user_prompt: str) -> str:
         def _call() -> Any:
-            return self._client.chat.completions.create(
-                model=self._model,
-                messages=[
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=self._config.max_tokens,
-                temperature=self._config.temperature,
-            )
+                "temperature": self._config.temperature,
+            }
+            return self._client.chat.completions.create(**kwargs)
 
         response = self._call_with_retry(_call)
         if hasattr(response, "usage") and response.usage:
@@ -236,7 +235,7 @@ class LlmClient:
                 f"OpenAI-compatible tokens: input={response.usage.prompt_tokens}, "
                 f"output={response.usage.completion_tokens}"
             )
-        return response.choices[0].message.content or ""
+        return self._openai_message_content(response)
 
     def _generate_openai_compatible_with_images(
         self,
@@ -265,15 +264,15 @@ class LlmClient:
         content.append({"type": "text", "text": text_prompt})
 
         def _call() -> Any:
-            return self._client.chat.completions.create(
-                model=self._model,
-                messages=[
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": content},
                 ],
-                max_tokens=self._config.max_tokens,
-                temperature=self._config.temperature,
-            )
+                "temperature": self._config.temperature,
+            }
+            return self._client.chat.completions.create(**kwargs)
 
         response = self._call_with_retry(_call)
         if hasattr(response, "usage") and response.usage:
@@ -281,7 +280,15 @@ class LlmClient:
                 f"OpenAI-compatible tokens: input={response.usage.prompt_tokens}, "
                 f"output={response.usage.completion_tokens}"
             )
-        return response.choices[0].message.content or ""
+        return self._openai_message_content(response)
+
+    @staticmethod
+    def _openai_message_content(response: Any) -> str:
+        choices = getattr(response, "choices", None)
+        if not choices:
+            raise ValueError("LLM response contained no choices")
+        message = getattr(choices[0], "message", None)
+        return getattr(message, "content", None) or ""
 
     def _base_url_for(self, provider: str, configured_base_url: str) -> str:
         env_key = self._BASE_URL_ENV_KEYS.get(provider, "")

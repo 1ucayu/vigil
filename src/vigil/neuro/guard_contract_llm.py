@@ -139,7 +139,7 @@ def _screen_section(title: str, screen: ScreenEvidence, *, source_readable: bool
         f"- xml_tree_path: {screen.xml_tree_path or '(none)'}",
         _fenced("LLM-derived visual alt text / layout summary", screen.alt_text),
         _fenced("Compact accessibility/XML tree summary", screen.compact_tree_text),
-        _fenced("Bounded XML file excerpt", screen.xml_excerpt),
+        _fenced("XML file text", screen.xml_excerpt),
     ]
     return "\n".join(parts)
 
@@ -273,9 +273,8 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
 
     sections.append(
         "[Output]\n"
-        "Return ONLY the JSON object described in the system prompt. No prose, no code\n"
-        "fences, no DSL string. Put any $bind.* UI-side binding in binding_requirements,\n"
-        "never in predicates."
+        "Return JSON only, using the GuardContract object described in the system prompt.\n"
+        "Put any $bind.* UI-side binding in binding_requirements, never in predicates."
     )
 
     return "\n\n".join(sections)

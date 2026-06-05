@@ -584,7 +584,7 @@ class TestCollectSiblingTransitions:
 
         assert result == ""
 
-    def test_max_5_siblings(self, synthetic_fsm_and_trace: tuple) -> None:
+    def test_includes_all_siblings(self, synthetic_fsm_and_trace: tuple) -> None:
         fsm, trace_path = synthetic_fsm_and_trace
         # Add 7 click transitions from s1
         for i in range(7):
@@ -612,8 +612,7 @@ class TestCollectSiblingTransitions:
         t1 = fsm.transitions[0]
         result = gen._collect_sibling_transitions(t1, fsm.states["s1"], raw_screens)
 
-        # Should cap at 5 siblings
-        assert result.count("Click on") <= 5
+        assert result.count("Click on") == 7
 
 
 # -----------------------------------------------------------------------

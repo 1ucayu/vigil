@@ -138,7 +138,7 @@ def test_user_prompt_includes_evidence_and_marks_target_effect_only():
     assert "[Global Information / Static APK Priors]" in prompt
     assert "trees/source.xml" in prompt
     assert "screens/source.png" in prompt
-    assert "Bounded XML file excerpt" in prompt
+    assert "XML file text" in prompt
     assert 'resource-id="com.test:id/send"' in prompt
     assert "Button send" in prompt
     assert "A chat thread with a message composer" in prompt

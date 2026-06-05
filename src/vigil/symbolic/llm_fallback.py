@@ -44,7 +44,7 @@ You will receive:
   - Candidate transitions from the current state (if the state is known)
 
 Return ONLY a JSON object of the form:
-  {"decision": "ALLOW" | "DENY", "reason": "<short explanation>"}
+  {"decision": "ALLOW" | "DENY", "reason": "<explanation>"}
 
 Guidance:
   - Prefer ALLOW for routine navigation (back, home, tapping menu items) \
@@ -190,7 +190,7 @@ class LlmFallback:
         return "\n".join(lines)
 
     @staticmethod
-    def _summarize_elements(screen: RawScreen, max_items: int = 20) -> list[str]:
+    def _summarize_elements(screen: RawScreen) -> list[str]:
         summaries: list[str] = []
         for e in screen.elements:
             is_interactable = e.is_clickable or e.is_scrollable or e.is_editable or e.is_checkable
@@ -206,8 +206,6 @@ class LlmFallback:
             if e.is_checkable:
                 tag += f" checked={e.is_checked}"
             summaries.append(tag)
-            if len(summaries) >= max_items:
-                break
         return summaries
 
     @staticmethod
