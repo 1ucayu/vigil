@@ -1,10 +1,12 @@
 """Stable widget registry for contract-first guard generation (Stage 4, step 2).
 
 This module builds a *deterministic, LLM-free* widget registry from runtime trace
-evidence. A ``WidgetRegistry`` assigns each interactable element on a source screen a
+evidence. A ``WidgetRegistry`` assigns each guard-relevant element on a source screen a
 stable alias (backed by ``resource_id`` / ``content_description`` / stable text role /
 class alias) plus a coarse role, selector-stability grade, readable DSL property list,
-and risk hints.
+and risk hints. Guard-relevant elements include both actionable widgets and
+runtime-readable semantic widgets (for example amount, recipient, address, selected
+item, status, or dialog text labels).
 
 It is one of the two inputs the later typed-``GuardContract`` synthesis pass consumes
 (the other being :mod:`vigil.neuro.guard_evidence`). Per project rules:
@@ -152,12 +154,44 @@ def _as_dict(obj: Any) -> dict[str, Any]:
     return {}
 
 
+def _element_merge_key(el: dict[str, Any]) -> tuple[str, str]:
+    """Stable de-dup key for elements that appear in both screen lists."""
+    return str(el.get("element_id") or ""), str(el.get("resource_id") or "")
+
+
+def _has_readable_semantic_content(el: dict[str, Any]) -> bool:
+    """True when a non-action element is useful as a guard-readable source fact."""
+    resource_id = str(el.get("resource_id") or "").strip()
+    if not resource_id:
+        return False
+    if bool(el.get("is_clickable")) or bool(el.get("is_editable")) or bool(el.get("is_checkable")):
+        return True
+    class_name = _short_class(str(el.get("class_name") or "")).lower()
+    has_readable_value = any(str(el.get(key) or "").strip() for key in ("text", "value"))
+    has_labelish_class = any(token in class_name for token in ("textview", "edittext", "button"))
+    return has_readable_value and has_labelish_class
+
+
 def _elements_of(screen: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return element dicts, preferring ``interactable_elements`` then ``elements``."""
-    raw = screen.get("interactable_elements")
-    if raw is None:
-        raw = screen.get("elements", [])
-    return [_as_dict(el) for el in (raw or [])]
+    """Return actionable elements plus runtime-readable semantic elements."""
+    ordered: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(raw_elements: Any, *, readable_filter: bool) -> None:
+        for raw_el in raw_elements or []:
+            el = _as_dict(raw_el)
+            if readable_filter and not _has_readable_semantic_content(el):
+                continue
+            key = _element_merge_key(el)
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(el)
+
+    # Keep action widgets first so action-target aliasing remains stable.
+    add(screen.get("interactable_elements"), readable_filter=False)
+    add(screen.get("elements"), readable_filter=True)
+    return ordered
 
 
 def _short_class(class_name: str) -> str:

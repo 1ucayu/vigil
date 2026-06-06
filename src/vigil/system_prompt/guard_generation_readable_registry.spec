@@ -4,16 +4,16 @@ Generate one typed `GuardContract` for one existing mobile-GUI FSM transition.
 Use this file as a structured specification:
 ```text
 [RELY]:
-  Defines the inputs, evidence packet, verifier interface, and read-only facts.
+  Defines inputs, evidence packet, verifier interface, and read-only facts.
 
 [GUARANTEE]:
   Defines the required output contract and field-level obligations.
 
 [SPECIFICATION]:
-  Defines the preconditions, legal outcomes, always-enforced rules, and synthesis algorithm.
+  Defines preconditions, legal outcomes, always-enforced rules, and synthesis algorithm.
 
 [SPECIFICATION of ...]:
-  Defines refinement rules for specific subcontracts; these rules are normative.
+  Defines normative refinement rules for specific subcontracts.
 ```
 
 If [RELY] provides evidence that cannot be used under [SPECIFICATION], follow
@@ -77,7 +77,7 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
     role: only executable UI read scope
     state_id: string
     screen_id: string
-    xml_excerpt: string       // full XML text when available; field name is legacy
+    xml_excerpt: string
     compact_tree_text: string
     screenshot_image?: image
     alt_text: string
@@ -86,15 +86,25 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
     page_function?: string
     display_name?: string
 
-  [Source widget registry]:
+  [Source guard registry]:
     entries: map<alias, WidgetRegistryEntry>
     meaning: only legal element aliases for executable element predicates
+    contents:
+      - actionable widgets: click/input/toggle/select/navigation/confirm/cancel controls
+      - readable semantic widgets: runtime-present labels, summary values, dialog text,
+        selected option labels, recipient/account/address labels, amount/price/total labels,
+        message/content previews, status/error text, permission/scope text
+    requirement:
+      - every entry must be observed in the source pre-state P
+      - every executable element predicate must reference an entry in this registry
+      - non-interactable readable TextView/label entries are legal when they expose
+        runtime-readable properties such as text, value, resource_id, class_name, is_enabled
 
   [Post-state Evidence: Q / target]:
     role: effect-only semantic evidence
     state_id: string
     screen_id: string
-    xml_excerpt: string       // full XML text when available; field name is legacy
+    xml_excerpt: string
     compact_tree_text: string
     screenshot_image?: image
     alt_text: string
@@ -117,7 +127,7 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
     resource_strings?: map<string, string>
     string_arrays?: map<string, list<string>>
     layout_widget_declarations?: list<string>
-    role: role/risk/domain hints only; not runtime proof
+    role: semantic role/domain/risk hints only; not runtime proof
 
   [Verifier Basis]:
     predicate_vocabulary: PredicateBasis
@@ -132,7 +142,7 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
         meaning: screen navigation, modal open/close, back/cancel, tab change
         usual_risk: low unless it commits state or hides a destructive step
       semantic_binding:
-        meaning: choosing the intended item/person/account/address/file/row/value
+        meaning: choosing or confirming intended item/person/account/address/file/row/value
         usual_risk: medium when wrong binding changes task meaning
       local_reversible_state:
         meaning: editable local app state that can be corrected before final commit
@@ -146,13 +156,6 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
                  account/security change, data deletion, permission grant, or device/app
                  state change outside the current screen
         usual_risk: high unless evidence proves the effect is reversible and local
-    classification_factors:
-      - source UI role and source widget registry facts
-      - known_action properties and sibling alternatives
-      - source->target semantic/evidence diff
-      - target Q as effect-only evidence
-      - static APK priors as hints only
-      - whether the user intent must bind item/value/recipient/account/address/content
 ```
 
 ```text
@@ -172,9 +175,12 @@ WidgetRegistryEntry:
   content_description?: string
   role?: button | text_field | toggle | checkbox | radio | list_container |
          list_item | title | menu_item | toolbar_action | dialog_action |
-         image_button | unknown
+         semantic_label | amount_label | address_label | recipient_label |
+         account_label | item_label | message_preview | status_text | unknown
+  semantic_role?: string
   readable_props: set<Property>
   risk_hints: set<string>
+  provenance?: runtime | runtime+apk_prior | runtime+llm | runtime+apk_prior+llm
 ```
 
 ```text
@@ -219,7 +225,7 @@ ReadableActionProperty:
     "predicates": [
       {
         "predicate_type": "read|value|action|contains|count|in_state|time_in",
-        "element": "<source registry alias or null>",
+        "element": "<source guard registry alias or null>",
         "property": "<readable property or null>",
         "operator": "==|!=|>|<|>=|<=|null",
         "expected": {
@@ -256,7 +262,7 @@ ReadableActionProperty:
   * `[Post-state Evidence: Q / target]` is effect-only evidence.
   * `[Global Information / Static APK Priors]` is prior knowledge only.
   * Local paths are provenance only; use full `xml_excerpt`, `compact_tree_text`,
-    `alt_text`, source widget registry facts, and attached images as evidence.
+    `alt_text`, source guard registry facts, and attached images as evidence.
   * The current runtime evaluator executes only the listed `PredicateBasis`.
 
 **Legal Outcomes**:
@@ -266,10 +272,13 @@ ReadableActionProperty:
     * Emit a typed `GuardContract`.
     * Declare every referenced `$intent.*` variable in `required_slots`.
     * Emit at least one predicate whose `expected.kind == "intent"`.
+    * Prefer `read(source_semantic_widget, text|value) == $intent.<slot>` for
+      source summary/confirmation facts such as product, recipient, account, address,
+      amount, message/content preview, permission scope, or selected option.
     * Prefer `action(input_text) == $intent.<slot>`,
       `action(target_text) == $intent.<slot>`, or
-      `action(target_resource_id) == $intent.<slot>` for user/task-side input or
-      item-selection bindings when action evidence supports it.
+      `action(target_resource_id) == $intent.<slot>` only when action evidence itself
+      carries the user/task-side value.
     * Set `semantic_binding_required` according to action risk.
     * Set `semantic_binding_incomplete = false`.
 
@@ -296,9 +305,10 @@ ReadableActionProperty:
   * Executable predicates may read only source evidence, known-action properties,
     literals supported by source/action evidence, and declared `$intent.*` slots.
   * No executable predicate references target-only UI.
-  * No executable predicate references an alias absent from `[Source widget registry]`.
+  * No executable predicate references an alias absent from `[Source guard registry]`.
   * Element predicates are executable only when the referenced registry entry exposes
     a runtime-resolvable `resource_id`; prefer such aliases.
+  * Runtime-present non-interactable readable widgets are legal predicate targets.
   * Every predicate must be independently executable. A single non-executable predicate
     rejects the whole guard, so emit only predicates supported by evidence.
   * No executable predicate uses `$bind.*`.
@@ -306,8 +316,8 @@ ReadableActionProperty:
   * No executable predicate uses a predicate outside `PredicateBasis`.
   * Do not assert literal equality against a source-known string property unless it
     matches the registry value.
-  * Static APK priors never prove runtime presence, transition existence, or safety,
-    and are never post-state checks.
+  * Static APK priors never prove runtime presence, current runtime values, transition
+    existence, safety, or post-state checks.
   * Enabledness/clickability alone never completes a high-risk or semantic-required guard.
   * The top-level `semantic_binding_incomplete` mirrors
     `contract.semantic_binding_incomplete`; keep them consistent.
@@ -315,11 +325,12 @@ ReadableActionProperty:
 **System Algorithm**:
   1. Classify action kind and risk using the Action Impact Taxonomy from
      source/action evidence, target effect, siblings, and static priors as hints.
-  2. Decide whether semantic binding is required.
-  3. Select only source/action predicates from `PredicateBasis`.
-  4. Declare `$intent.*` slots for user/task-side values.
-  5. Put UI/action-side binding needs into `binding_requirements`; do not compile them.
-  6. Return Case 1, Case 2, or Case 3.
+  2. Identify the user-intent dimensions that must be verified before `known_action`.
+  3. Match each intent dimension to a runtime-present source guard registry entry.
+  4. Select only source/action predicates from `PredicateBasis`.
+  5. Declare `$intent.*` slots for user/task-side values.
+  6. Put non-executable UI/action-side binding needs into `binding_requirements`.
+  7. Return Case 1, Case 2, or Case 3.
 
 ## Refine Prompt
 [SPECIFICATION of Hoare Guard Scope]
@@ -346,14 +357,28 @@ ReadableActionProperty:
   * A predicate is proposed for executable admission.
 
 **Post-Condition**:
-  * Element predicates must use a source registry alias backed by `resource_id`, or a
-    known source `resource_id` itself.
+  * Element predicates must use a source guard registry alias backed by `resource_id`,
+    or a known source `resource_id` itself.
   * `action(type)` is normalized to `action(action_type)`.
   * Action predicates may use only `action_type`, `target_text`,
     `target_resource_id`, `target_content_desc`, or `input_text`.
   * `in_state` requires `args.state`; `time_in` requires `args.start` and `args.end`.
   * If any predicate violates these rules, omit it. If no sound predicate remains,
     return Case 3.
+
+[SPECIFICATION of Source Semantic Facts]
+**Pre-Condition**:
+  * A runtime-present source registry entry exposes a readable semantic fact such as
+    product, amount, recipient, account, address, message preview, selected option,
+    permission scope, dialog text, status, or error text.
+
+**Post-Condition**:
+  * For medium/high semantic-required transitions, prefer executable predicates that
+    bind these source facts to declared `$intent.*` slots.
+  * Use exact `read(element, text) == $intent.<slot>` or `value(element) == $intent.<slot>`
+    forms when the entry exposes `text` or `value`.
+  * Do not compare to the observed literal value when the user's requested value is the
+    semantic source of truth; use `$intent.*`.
 
 [SPECIFICATION of `$intent.*`]
 **Pre-Condition**:
@@ -363,8 +388,6 @@ ReadableActionProperty:
   * `expected.slot` is non-null.
   * `required_slots` contains the same slot name.
   * The slot denotes user/task intent, not UI-side row binding.
-  * Common executable forms include `action(input_text) == $intent.<slot>` and
-    `action(target_text) == $intent.<slot>` when supported by the known action.
 
 [SPECIFICATION of `$bind.*`]
 **Pre-Condition**:
@@ -412,9 +435,15 @@ ReadableActionProperty:
   * Static APK prior fields are provided.
 
 **Post-Condition**:
-  * Use them only for role/risk/domain hints.
-  * Do not admit predicates based solely on static prior.
-  * Do not create transitions, post-state checks, or runtime verdicts from static prior.
+  * Use them only to enrich semantic roles, value domains, closed option sets, or risk
+    hints for widgets that are also runtime-present in source P.
+  * Static priors may identify that a runtime-present widget is an amount field,
+    recipient field, address field, product field, destructive action, payment action,
+    permission scope, or closed-set option.
+  * Static priors must not create source registry entries absent from source P.
+  * Static priors must not provide current runtime values for predicates.
+  * Static priors must not prove transition existence, action availability, safety, or
+    runtime verdicts.
 
 [SPECIFICATION of Invalid Output]
 **Pre-Condition**:

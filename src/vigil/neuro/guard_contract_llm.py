@@ -61,14 +61,50 @@ def _parse_json(response: str) -> Any | None:
     try:
         return json.loads(text)
     except (json.JSONDecodeError, ValueError):
+        pass
+
+    candidate = _first_balanced_json_object(text)
+    if candidate is None:
         start = text.find("{")
         end = text.rfind("}")
         if start == -1 or end == -1 or end <= start:
             return None
-        try:
-            return json.loads(text[start : end + 1])
-        except (json.JSONDecodeError, ValueError):
-            return None
+        candidate = text[start : end + 1]
+    try:
+        return json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _first_balanced_json_object(text: str) -> str | None:
+    """Return the first balanced JSON object substring, ignoring strings/escapes."""
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx in range(start, len(text)):
+        char = text[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -340,15 +376,57 @@ def parse_llm_guard_candidate(raw_response: str) -> LlmGuardContractCandidate:
         return LlmGuardContractCandidate(
             rejection_reason="LLM output is not valid JSON",
             raw_response=raw_response,
+            raw_responses=[raw_response],
+            parse_errors=["LLM output is not valid JSON"],
         )
     candidate, reason = _coerce_candidate(parsed)
     if candidate is None:
         return LlmGuardContractCandidate(
             rejection_reason=reason,
             raw_response=raw_response,
+            raw_responses=[raw_response],
+            parse_errors=[reason],
         )
     candidate.raw_response = raw_response
+    candidate.raw_responses = [raw_response]
     return candidate
+
+
+def _merge_candidates(
+    first: LlmGuardContractCandidate,
+    repaired: LlmGuardContractCandidate,
+) -> LlmGuardContractCandidate:
+    """Preserve first/repair audit metadata while returning the repair result."""
+    repaired.raw_responses = [
+        *(first.raw_responses or ([first.raw_response] if first.raw_response else [])),
+        *(repaired.raw_responses or ([repaired.raw_response] if repaired.raw_response else [])),
+    ]
+    repaired.parse_errors = [
+        *(first.parse_errors or ([first.rejection_reason] if first.rejection_reason else [])),
+        *(
+            repaired.parse_errors
+            or ([repaired.rejection_reason] if repaired.rejection_reason else [])
+        ),
+    ]
+    repaired.repair_attempted = True
+    return repaired
+
+
+def _repair_prompt(user_prompt: str, candidate: LlmGuardContractCandidate) -> str:
+    """Ask the model to repair only its JSON contract output."""
+    raw = candidate.raw_response or ""
+    reason = candidate.rejection_reason or "invalid GuardContract JSON"
+    return (
+        "Your previous guard-contract response could not be admitted because it was not "
+        f"valid GuardContract JSON: {reason}.\n\n"
+        "Return JSON only. Do not use markdown, prose, comments, or multiple JSON objects.\n\n"
+        "[Original transition evidence]\n"
+        f"{user_prompt}\n\n"
+        "[Previous invalid response]\n"
+        "```text\n"
+        f"{raw}\n"
+        "```"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -385,5 +463,19 @@ def generate_llm_guard_candidate(
         return LlmGuardContractCandidate(
             rejection_reason=f"llm call failed: {exc}",
             contract=GuardContract(risk_level=RiskLevel.UNKNOWN),
+            parse_errors=[f"llm call failed: {exc}"],
         )
-    return parse_llm_guard_candidate(raw)
+    candidate = parse_llm_guard_candidate(raw)
+    if not candidate.rejection_reason:
+        return candidate
+
+    try:
+        repaired_raw = llm.generate(system_prompt, _repair_prompt(user_prompt, candidate))
+    except Exception as exc:  # noqa: BLE001 - repair is best-effort only
+        logger.warning(
+            "LLM guard JSON repair failed for transition " f"{evidence.transition_index}: {exc}"
+        )
+        candidate.parse_errors.append(f"repair call failed: {exc}")
+        return candidate
+
+    return _merge_candidates(candidate, parse_llm_guard_candidate(repaired_raw))

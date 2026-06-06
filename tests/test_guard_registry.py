@@ -42,6 +42,20 @@ def _screen(*elements: dict, screen_id: str = "scr_001") -> dict:
     }
 
 
+def _screen_with_all(
+    interactable_elements: list[dict],
+    elements: list[dict],
+    screen_id: str = "scr_001",
+) -> dict:
+    return {
+        "screen_id": screen_id,
+        "activity_name": f"{PKG}.MainActivity",
+        "package_name": PKG,
+        "interactable_elements": interactable_elements,
+        "elements": elements,
+    }
+
+
 def _state(raw_screen_ids: list[str]) -> AbstractState:
     return AbstractState(
         state_id="s1",
@@ -206,6 +220,47 @@ def test_readable_props_empty_edittext_includes_text_and_value():
     assert "class_name" in props
     assert "is_editable" in props
     assert "is_enabled" in props
+
+
+def test_registry_includes_runtime_readable_semantic_elements_with_interactables():
+    pay = _el(
+        "e_pay",
+        class_name="android.view.View",
+        resource_id="payment_confirm.pay",
+        is_clickable=True,
+    )
+    product = _el(
+        "e_product",
+        class_name="android.widget.TextView",
+        resource_id="payment.product_name",
+        text="Espresso",
+        is_clickable=False,
+    )
+    amount = _el(
+        "e_amount",
+        class_name="android.widget.TextView",
+        resource_id="payment.total_amount",
+        text="Total: $4.50",
+        is_clickable=False,
+    )
+    decorative = _el(
+        "e_decor",
+        class_name="android.view.View",
+        resource_id="payment.summary_card",
+        text="",
+        is_clickable=False,
+    )
+    screen = _screen_with_all([pay], [product, amount, decorative, pay])
+
+    registry = build_widget_registry_from_screen("s1", screen)
+
+    assert "payment_confirm_pay" in registry.entries
+    assert "payment_product_name" in registry.entries
+    assert "payment_total_amount" in registry.entries
+    assert "payment_summary_card" not in registry.entries
+    assert registry.entries["payment_product_name"].text == "Espresso"
+    assert "text" in registry.entries["payment_total_amount"].readable_props
+    assert registry.resource_id_to_alias["payment.product_name"] == "payment_product_name"
 
 
 def test_risk_hints_detect_high_risk_labels():

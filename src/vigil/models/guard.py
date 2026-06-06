@@ -181,3 +181,6 @@ class LlmGuardContractCandidate(BaseModel):
     semantic_binding_incomplete: bool = False
     rejection_reason: str = ""
     raw_response: str = ""
+    raw_responses: list[str] = Field(default_factory=list)
+    parse_errors: list[str] = Field(default_factory=list)
+    repair_attempted: bool = False

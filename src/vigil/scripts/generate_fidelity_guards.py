@@ -19,6 +19,7 @@ from vigil.neuro.app_prior import AppPrior
 from vigil.neuro.guard_contract_llm import DEFAULT_GUARD_PROMPT
 from vigil.neuro.guard_generation_pipeline import (
     generate_contract_guards,
+    guard_action_schema_key,
     write_guard_generation_report,
 )
 from vigil.neuro.visual_grounder import (
@@ -274,9 +275,11 @@ def run_one_app(
 
     guard_report: list[dict[str, Any]] = []
     if not skip_guards:
+        action_schema_count = len({guard_action_schema_key(t.action) for t in fsm.transitions})
         logger.info(
             f"[{spec.name}] contract guard generation ({guard_source}) "
-            f"{len(fsm.transitions)} transitions"
+            f"{action_schema_count} guard action schemas over "
+            f"{len(fsm.transitions)} edge transitions"
         )
         guard_report = generate_contract_guards(
             fsm,
@@ -286,6 +289,9 @@ def run_one_app(
             llm=llm if guard_source in ("llm", "hybrid") else None,
             guard_prompt=guard_prompt,
             guard_use_images=guard_use_images,
+            llm_audit_dir=(
+                app_report_dir / "llm_guard_attempts" if guard_source in ("llm", "hybrid") else None
+            ),
         )
         write_guard_generation_report(guard_report, app_report_dir / "guard_generation.json")
 

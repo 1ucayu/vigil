@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from vigil.neuro.guard_evidence import GuardEvidence
 from vigil.neuro.guard_generation_pipeline import (
     _try_llm_contract,
     generate_contract_guards,
+    guard_action_schema_key,
     write_guard_generation_report,
 )
 from vigil.neuro.guard_registry import WidgetRegistry, WidgetRegistryEntry
@@ -257,8 +259,10 @@ def test_serialize_deserialize_preserves_guard_metadata(tmp_path):
 class _FakeLlm:
     def __init__(self, response: str) -> None:
         self.response = response
+        self.calls = 0
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
+        self.calls += 1
         return self.response
 
 
@@ -307,6 +311,47 @@ def test_hybrid_falls_back_to_deterministic_on_invalid_llm():
     assert all(row["fallback_reason"] for row in report)
     # Deterministic synthesis still attaches the item-binding guard.
     assert report[0]["guard"] == "action(target_text) == $intent.contact_name"
+
+
+def test_hybrid_prompts_once_per_canonical_action_but_reports_every_edge():
+    fsm, raw_screens = _build_fsm()
+    fsm.add_transition(
+        Transition(
+            source="s2",
+            target="s3",
+            action={"type": "click", "target": "e_send", "target_text": "Send"},
+            confidence=0.9,
+        )
+    )
+    llm = _FakeLlm(_VALID_ITEM_CONTRACT)
+
+    report = generate_contract_guards(fsm, raw_screens, guard_source="hybrid", llm=llm)
+
+    unique_actions = {guard_action_schema_key(t.action) for t in fsm.transitions}
+    assert llm.calls == len(unique_actions)
+    assert len(report) == len(fsm.transitions)
+    assert report[2]["action_schema_index"] == report[-1]["action_schema_index"]
+
+
+def test_hybrid_writes_llm_audit_for_invalid_candidate(tmp_path):
+    fsm, raw_screens = _build_fsm()
+    audit_dir = tmp_path / "llm_guard_attempts"
+    report = generate_contract_guards(
+        fsm,
+        raw_screens,
+        guard_source="hybrid",
+        llm=_FakeLlm("not json at all"),
+        llm_audit_dir=audit_dir,
+    )
+    assert audit_dir.exists()
+    first_audit = report[0]["llm_audit_path"]
+    assert first_audit
+    payload = json.loads(Path(first_audit).read_text(encoding="utf-8"))
+    assert payload["transition_index"] == 0
+    assert payload["raw_responses"]
+    assert "not valid JSON" in payload["parse_errors"][0]
+    assert "prompt_hash" in payload
+    assert "guard_class_key" not in report[0]
 
 
 def test_hybrid_graph_is_unchanged_on_fallback():

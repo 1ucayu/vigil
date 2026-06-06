@@ -20,7 +20,9 @@ Guard sources:
 
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -36,10 +38,27 @@ from vigil.neuro.guard_evidence import build_all_guard_evidence
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.core.llm_client import LlmClient
     from vigil.models.fsm import AppFSM
+    from vigil.models.guard import LlmGuardContractCandidate
     from vigil.neuro.app_prior import AppPrior
     from vigil.neuro.guard_evidence import GuardEvidence
 
 GuardSource = Literal["deterministic", "llm", "hybrid"]
+
+
+@dataclass(frozen=True)
+class _ResolvedContract:
+    contract: GuardContract
+    guard_origin: str
+    fallback_reason: str
+    precomputed_result: GuardAdmissionResult | None = None
+    llm_audit_path: str = ""
+
+
+@dataclass(frozen=True)
+class _CachedLlmCandidate:
+    candidate: LlmGuardContractCandidate
+    audit_path: str
+    action_schema_index: int
 
 
 def _action_summary(action: dict[str, Any]) -> dict[str, Any]:
@@ -47,7 +66,55 @@ def _action_summary(action: dict[str, Any]) -> dict[str, Any]:
         "type": action.get("type", ""),
         "target": action.get("target", ""),
         "target_text": action.get("target_text", ""),
+        "target_resource_id": action.get("target_resource_id", action.get("resource_id", "")),
     }
+
+
+def _first_nonempty(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def guard_action_schema_key(action: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """Action-schema key used only to amortize LLM guard prompting.
+
+    This deliberately excludes capture-local element handles and selector internals used
+    by structural replay. Guard candidates are generated once per stable GUI action
+    schema, then admitted separately against each concrete source-state registry.
+    """
+    selector = action.get("target_selector")
+    selector_map = selector if isinstance(selector, dict) else {}
+    resource_id = _first_nonempty(
+        action.get("target_resource_id"),
+        action.get("resource_id"),
+        selector_map.get("resource_id"),
+    )
+    target_text = _first_nonempty(
+        action.get("target_text"),
+        selector_map.get("text"),
+        selector_map.get("nearby_text"),
+    )
+    return (
+        ("type", _first_nonempty(action.get("type"), action.get("action_type"))),
+        ("resource_id", resource_id),
+        ("target_text", target_text),
+        (
+            "target_content_desc",
+            _first_nonempty(
+                action.get("target_content_desc"),
+                selector_map.get("content_description"),
+            ),
+        ),
+        (
+            "value",
+            _first_nonempty(action.get("input_text"), action.get("text"), action.get("value")),
+        ),
+    )
 
 
 def _binding_required(contract: GuardContract) -> bool:
@@ -57,6 +124,48 @@ def _binding_required(contract: GuardContract) -> bool:
         or contract.risk_level == RiskLevel.HIGH
         or contract.semantic_binding_required
     )
+
+
+def _prompt_hash(evidence: GuardEvidence, guard_prompt: str) -> str:
+    payload = {
+        "guard_prompt": guard_prompt,
+        "transition_index": evidence.transition_index,
+        "source": evidence.source_state_id,
+        "target": evidence.target_state_id,
+        "action": evidence.action,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _write_llm_attempt_audit(
+    evidence: GuardEvidence,
+    candidate: LlmGuardContractCandidate,
+    audit_dir: Path | None,
+    guard_prompt: str,
+) -> str:
+    """Persist raw LLM guard attempts under output_docs for debugging/repro."""
+    if audit_dir is None:
+        return ""
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    prompt_hash = _prompt_hash(evidence, guard_prompt)
+    filename = f"transition_{evidence.transition_index:04d}_{prompt_hash}.json"
+    path = audit_dir / filename
+    payload = {
+        "transition_index": evidence.transition_index,
+        "prompt_hash": prompt_hash,
+        "source": evidence.source_state_id,
+        "target": evidence.target_state_id,
+        "action": evidence.action,
+        "rejection_reason": candidate.rejection_reason,
+        "parse_errors": candidate.parse_errors,
+        "repair_attempted": candidate.repair_attempted,
+        "contract": candidate.contract.model_dump(mode="json"),
+        "raw_responses": candidate.raw_responses
+        or ([candidate.raw_response] if candidate.raw_response else []),
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return str(path)
 
 
 def _try_llm_contract(
@@ -103,36 +212,131 @@ def _resolve_contract(
     guard_prompt: str,
     *,
     guard_use_images: bool = True,
-) -> tuple[GuardContract, str, str, GuardAdmissionResult | None]:
-    """Produce ``(contract, guard_origin, fallback_reason, precomputed_result)``.
+    llm_audit_dir: Path | None = None,
+) -> _ResolvedContract:
+    """Resolve the guard contract source for one transition evidence object.
 
-    ``precomputed_result`` is the admission result already computed for an accepted LLM
-    contract (so we do not admit twice); ``None`` otherwise.
+    ``precomputed_result`` is the admission result already computed for an accepted
+    LLM contract (so we do not admit twice); ``None`` otherwise.
     """
     if guard_source == "deterministic":
-        return synthesize_guard_contract(evidence), "deterministic", "", None
-
-    if guard_source == "llm":
-        assert llm is not None
-        candidate = generate_llm_guard_candidate(
-            evidence,
-            llm,
-            prompt_name=guard_prompt,
-            use_images=guard_use_images,
+        return _ResolvedContract(
+            contract=synthesize_guard_contract(evidence),
+            guard_origin="deterministic",
+            fallback_reason="",
         )
-        return candidate.contract, "llm", candidate.rejection_reason, None
 
-    # hybrid
     assert llm is not None
-    contract, fallback_reason, result = _try_llm_contract(
+    candidate = generate_llm_guard_candidate(
         evidence,
         llm,
-        guard_prompt,
-        guard_use_images=guard_use_images,
+        prompt_name=guard_prompt,
+        use_images=guard_use_images,
     )
-    if contract is not None:
-        return contract, "llm", "", result
-    return synthesize_guard_contract(evidence), "fallback", fallback_reason, None
+    audit_path = _write_llm_attempt_audit(evidence, candidate, llm_audit_dir, guard_prompt)
+
+    if guard_source == "llm":
+        return _ResolvedContract(
+            contract=candidate.contract,
+            guard_origin="llm",
+            fallback_reason=candidate.rejection_reason,
+            llm_audit_path=audit_path,
+        )
+
+    # hybrid
+    contract = candidate.contract
+    if candidate.rejection_reason:
+        return _ResolvedContract(
+            contract=synthesize_guard_contract(evidence),
+            guard_origin="fallback",
+            fallback_reason=f"llm candidate rejected: {candidate.rejection_reason}",
+            llm_audit_path=audit_path,
+        )
+
+    result = admit_guard_contract(contract, evidence)
+    if not result.admitted:
+        return _ResolvedContract(
+            contract=synthesize_guard_contract(evidence),
+            guard_origin="fallback",
+            fallback_reason=f"llm contract rejected by admission: {result.reason}",
+            llm_audit_path=audit_path,
+        )
+    if result.semantic_binding_incomplete and _binding_required(contract):
+        return _ResolvedContract(
+            contract=synthesize_guard_contract(evidence),
+            guard_origin="fallback",
+            fallback_reason=(
+                "llm contract admitted but semantic binding incomplete for a "
+                "required/high-risk action"
+            ),
+            llm_audit_path=audit_path,
+        )
+    return _ResolvedContract(
+        contract=contract,
+        guard_origin="llm",
+        fallback_reason="",
+        precomputed_result=result,
+        llm_audit_path=audit_path,
+    )
+
+
+def _resolve_contract_from_llm_candidate(
+    evidence: GuardEvidence,
+    guard_source: GuardSource,
+    cached: _CachedLlmCandidate,
+) -> _ResolvedContract:
+    """Resolve one edge using an LLM candidate generated for its action schema.
+
+    LLM prompting is per stable guard action schema; admission remains per concrete
+    ``(source, action, target)`` edge so a reused candidate must still parse, resolve,
+    and evaluate against the current source-state widget registry.
+    """
+    candidate = cached.candidate
+    audit_path = cached.audit_path
+
+    contract = candidate.contract.model_copy(deep=True)
+    if guard_source == "llm":
+        return _ResolvedContract(
+            contract=contract,
+            guard_origin="llm",
+            fallback_reason=candidate.rejection_reason,
+            llm_audit_path=audit_path,
+        )
+
+    # hybrid
+    if candidate.rejection_reason:
+        return _ResolvedContract(
+            contract=synthesize_guard_contract(evidence),
+            guard_origin="fallback",
+            fallback_reason=f"llm candidate rejected: {candidate.rejection_reason}",
+            llm_audit_path=audit_path,
+        )
+
+    result = admit_guard_contract(contract, evidence)
+    if not result.admitted:
+        return _ResolvedContract(
+            contract=synthesize_guard_contract(evidence),
+            guard_origin="fallback",
+            fallback_reason=f"llm contract rejected by admission: {result.reason}",
+            llm_audit_path=audit_path,
+        )
+    if result.semantic_binding_incomplete and _binding_required(contract):
+        return _ResolvedContract(
+            contract=synthesize_guard_contract(evidence),
+            guard_origin="fallback",
+            fallback_reason=(
+                "llm contract admitted but semantic binding incomplete for a "
+                "required/high-risk action"
+            ),
+            llm_audit_path=audit_path,
+        )
+    return _ResolvedContract(
+        contract=contract,
+        guard_origin="llm",
+        fallback_reason="",
+        precomputed_result=result,
+        llm_audit_path=audit_path,
+    )
 
 
 def generate_contract_guards(
@@ -144,6 +348,7 @@ def generate_contract_guards(
     llm: LlmClient | None = None,
     guard_prompt: str = DEFAULT_GUARD_PROMPT,
     guard_use_images: bool = True,
+    llm_audit_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Synthesize, admit, and attach contract guards across ``fsm``'s transitions.
 
@@ -157,16 +362,49 @@ def generate_contract_guards(
 
     evidence_items = build_all_guard_evidence(fsm, raw_screens, app_prior)
     report: list[dict[str, Any]] = []
+    llm_candidates_by_action: dict[tuple[tuple[str, str], ...], _CachedLlmCandidate] = {}
 
     for index, transition in enumerate(fsm.transitions):
         evidence = evidence_items[index]
-        contract, guard_origin, fallback_reason, precomputed = _resolve_contract(
-            evidence,
-            guard_source,
-            llm,
-            guard_prompt,
-            guard_use_images=guard_use_images,
-        )
+        action_schema_key = guard_action_schema_key(transition.action)
+        action_schema_index = None
+        if guard_source in ("llm", "hybrid"):
+            cached = llm_candidates_by_action.get(action_schema_key)
+            if cached is None:
+                assert llm is not None
+                candidate = generate_llm_guard_candidate(
+                    evidence,
+                    llm,
+                    prompt_name=guard_prompt,
+                    use_images=guard_use_images,
+                )
+                audit_path = _write_llm_attempt_audit(
+                    evidence,
+                    candidate,
+                    llm_audit_dir,
+                    guard_prompt,
+                )
+                cached = _CachedLlmCandidate(
+                    candidate=candidate,
+                    audit_path=audit_path,
+                    action_schema_index=len(llm_candidates_by_action),
+                )
+                llm_candidates_by_action[action_schema_key] = cached
+            action_schema_index = cached.action_schema_index
+            resolved = _resolve_contract_from_llm_candidate(evidence, guard_source, cached)
+        else:
+            resolved = _resolve_contract(
+                evidence,
+                guard_source,
+                llm,
+                guard_prompt,
+                guard_use_images=guard_use_images,
+                llm_audit_dir=llm_audit_dir,
+            )
+        contract = resolved.contract
+        guard_origin = resolved.guard_origin
+        fallback_reason = resolved.fallback_reason
+        precomputed = resolved.precomputed_result
         result = precomputed or admit_guard_contract(contract, evidence)
 
         # Sync the admission outcome onto the contract so it survives serialize/
@@ -196,10 +434,12 @@ def generate_contract_guards(
                 "source": transition.source,
                 "target": transition.target,
                 "action": _action_summary(transition.action),
+                "action_schema_index": action_schema_index,
                 "kind": contract.kind.value,
                 "risk": contract.risk_level.value,
                 "required": contract.required,
                 "guard_origin": guard_origin,
+                "llm_audit_path": resolved.llm_audit_path,
                 "fallback_reason": fallback_reason,
                 "status": result.status.value,
                 "reason": result.reason,

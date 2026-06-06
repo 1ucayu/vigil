@@ -63,6 +63,28 @@ _READABLE_PROPS: frozenset[str] = frozenset(
     }
 )
 
+_READABLE_BOOL_PROPS: frozenset[str] = frozenset(
+    {
+        "is_clickable",
+        "is_long_clickable",
+        "is_checkable",
+        "is_checked",
+        "is_enabled",
+        "is_editable",
+        "is_scrollable",
+        "is_focusable",
+        "is_focused",
+        "is_selected",
+        "is_password",
+    }
+)
+
+_READABLE_STRING_PROPS: frozenset[str] = frozenset(
+    {"text", "content_description", "value", "class_name", "resource_id"}
+)
+
+_READABLE_NUMERIC_PROPS: frozenset[str] = frozenset({"children_count", "item_count"})
+
 # Action properties the runtime action context exposes (decision_engine._build_action_context).
 _ALLOWED_ACTION_PROPS: frozenset[str] = frozenset(
     {
@@ -81,6 +103,24 @@ _KNOWN_STRING_PROPS: tuple[str, ...] = (
     "resource_id",
     "class_name",
 )
+
+
+def _literal_type_error(ptype: str, prop: str, value: object) -> str:
+    """Return an admission rejection reason for literal/property type mismatch."""
+    if ptype == "read":
+        if prop in _READABLE_BOOL_PROPS and not isinstance(value, bool):
+            return f"literal for boolean property '{prop}' must be JSON boolean"
+        if prop in _READABLE_NUMERIC_PROPS and (
+            isinstance(value, bool) or not isinstance(value, int | float)
+        ):
+            return f"literal for numeric property '{prop}' must be JSON number"
+        if prop in _READABLE_STRING_PROPS and not isinstance(value, str):
+            return f"literal for string property '{prop}' must be JSON string"
+    if ptype == "action" and prop in _ALLOWED_ACTION_PROPS and not isinstance(value, str):
+        return f"literal for action property '{prop}' must be JSON string"
+    if ptype == "count" and (isinstance(value, bool) or not isinstance(value, int | float)):
+        return "literal for count predicate must be JSON number"
+    return ""
 
 
 class GuardAdmissionResult(BaseModel):
@@ -162,9 +202,17 @@ def _lower_predicate(
         key, entry, reason = _resolve_element(pred.element, registry)
         if key is None:
             return _Lowered(None, reason)
+        if ptype == "count" and expected is not None and expected.kind == "literal":
+            type_error = _literal_type_error(ptype, "", expected.value)
+            if type_error:
+                return _Lowered(None, type_error)
         if ptype == "read":
             if not pred.property or pred.property not in _READABLE_PROPS:
                 return _Lowered(None, f"property '{pred.property}' not runtime-readable")
+            if expected is not None and expected.kind == "literal":
+                type_error = _literal_type_error(ptype, pred.property, expected.value)
+                if type_error:
+                    return _Lowered(None, type_error)
             # Offline literal proof-of-false on registry-known string properties.
             if (
                 entry is not None
@@ -186,6 +234,10 @@ def _lower_predicate(
             prop = "action_type"
         if prop not in _ALLOWED_ACTION_PROPS:
             return _Lowered(None, f"action property '{pred.property}' not runtime-resolvable")
+        if expected is not None and expected.kind == "literal":
+            type_error = _literal_type_error(ptype, prop, expected.value)
+            if type_error:
+                return _Lowered(None, type_error)
         lowered = pred.model_copy(update={"property": prop})
 
     compiled = compile_predicate_spec(lowered)

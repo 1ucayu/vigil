@@ -93,6 +93,28 @@ def test_element_alias_lowered_to_resource_id():
     assert result.guard == f"read({PKG}:id/send, is_enabled) == true"
 
 
+def test_boolean_literal_must_be_json_boolean():
+    reg = _registry(_entry("send", resource_id=f"{PKG}:id/send"))
+    contract = _contract(
+        kind=GuardKind.TOGGLE_BINDING,
+        required=True,
+        risk_level=RiskLevel.MEDIUM,
+        predicates=[
+            PredicateSpec(
+                predicate_type="read",
+                element="send",
+                property="is_enabled",
+                operator="==",
+                expected=ValueRef(kind="literal", value="true"),
+            )
+        ],
+    )
+    result = admit_guard_contract(contract, _evidence(reg))
+    assert result.admitted is False
+    assert result.status is GuardAdmissionStatus.REJECTED
+    assert "boolean property" in result.reason
+
+
 def test_element_without_resource_id_rejected():
     reg = _registry(_entry("noid", resource_id=""))
     contract = _contract(
