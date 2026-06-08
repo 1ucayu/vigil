@@ -40,7 +40,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.neuro.guard_registry import WidgetRegistry
 
 
-DEFAULT_GUARD_PROMPT = "guard_generation.spec"
+DEFAULT_GUARD_PROMPT = "transition_guard_generation.spec"
 
 # RHS value kinds the LLM path is allowed to put inside a predicate. ``$bind.*`` and other
 # UI/action-side references must live in ``binding_requirements``, not predicates.

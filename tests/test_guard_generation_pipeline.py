@@ -455,7 +455,7 @@ def test_try_llm_contract_rejects_incomplete_semantic_required():
         }
     )
     contract, reason, result = _try_llm_contract(
-        _binding_evidence(), _FakeLlm(enabled_only), "guard_generation.spec"
+        _binding_evidence(), _FakeLlm(enabled_only), "transition_guard_generation.spec"
     )
     assert contract is None
     assert result is None
@@ -482,7 +482,7 @@ def test_try_llm_contract_accepts_enabled_only_when_only_risk_metadata():
         }
     )
     contract, reason, result = _try_llm_contract(
-        _binding_evidence(), _FakeLlm(enabled_only), "guard_generation.spec"
+        _binding_evidence(), _FakeLlm(enabled_only), "transition_guard_generation.spec"
     )
     assert contract is not None
     assert reason == ""
@@ -511,7 +511,7 @@ def test_try_llm_contract_accepts_complete_binding():
         }
     )
     contract, reason, result = _try_llm_contract(
-        _binding_evidence(), _FakeLlm(complete), "guard_generation.spec"
+        _binding_evidence(), _FakeLlm(complete), "transition_guard_generation.spec"
     )
     assert contract is not None
     assert reason == ""

@@ -8,7 +8,7 @@ from vigil.system_prompt import PROMPT_DIR, load_system_prompt
 
 
 def test_loads_guard_generation_prompt():
-    text = load_system_prompt("guard_generation.spec")
+    text = load_system_prompt("transition_guard_generation.spec")
     assert isinstance(text, str)
     assert text.strip()
     # Encodes the spec-style, Hoare-framed guard-generation design.
@@ -27,7 +27,7 @@ def test_loads_guard_generation_prompt():
 
 def test_prompt_dir_points_at_package():
     assert PROMPT_DIR.name == "system_prompt"
-    assert (PROMPT_DIR / "guard_generation.spec").is_file()
+    assert (PROMPT_DIR / "transition_guard_generation.spec").is_file()
 
 
 def test_missing_prompt_raises_file_not_found():

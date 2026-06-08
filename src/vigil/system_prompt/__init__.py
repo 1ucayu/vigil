@@ -4,7 +4,7 @@ Prompts for offline LLM stages live here as spec files so they can be edited and
 debugged without touching Python. Load one by file name:
 
     from vigil.system_prompt import load_system_prompt
-    text = load_system_prompt("guard_generation.spec")
+    text = load_system_prompt("transition_guard_generation.spec")
 
 Paths are resolved relative to this package directory, so the same call works in an
 editable ``uv`` checkout and in a built wheel (the prompt/spec files ship inside the
@@ -23,7 +23,7 @@ PROMPT_DIR = Path(__file__).resolve().parent
 def load_system_prompt(name: str) -> str:
     """Return the text of the prompt file ``name`` under ``src/vigil/system_prompt/``.
 
-    ``name`` is a bare file name (e.g. ``"guard_generation.spec"``); path
+    ``name`` is a bare file name (e.g. ``"transition_guard_generation.spec"``); path
     separators are rejected so callers cannot escape the prompt directory. Raises
     :class:`FileNotFoundError` with a clear message when the prompt is missing.
     """
