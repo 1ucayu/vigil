@@ -60,6 +60,7 @@ class TransitionRow:
     target: str
     action: Any
     low_trust: bool = False
+    action_key: Hashable | None = None
 
 
 @dataclass
@@ -179,7 +180,7 @@ def quotient_states(
         own_block = state_to_block[sid]
         out: dict[Hashable, str] = {}
         for row in outgoing_by_state.get(sid, []):
-            qak = action_key_fn(row.action)
+            qak = row.action_key if row.action_key is not None else action_key_fn(row.action)
             tgt_block = (
                 _SELF_TARGET
                 if state_to_block[row.target] == own_block

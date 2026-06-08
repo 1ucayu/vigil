@@ -375,3 +375,160 @@ class TestSchemaOnlyLabelsMergeThread:
             "thread_bob",
             "thread_carol",
         }
+
+
+class TestContextualActionQuotient:
+    """Source-local quotient action keys for named list rows."""
+
+    def test_named_rows_collapse_with_target_block_context(self) -> None:
+        from vigil.neuro.behavioral_action_quotient import infer_contextual_action_quotient
+        from vigil.neuro.behavioral_signature import quotient_action_key
+
+        rows = [
+            TransitionRow(
+                source="catalog",
+                target="detail_espresso",
+                action={
+                    "type": "click",
+                    "resource_id": "catalog.product_row.espresso.open",
+                    "target_resource_id": "catalog.product_row.espresso.open",
+                    "target_text": "Espresso",
+                    "target_class": "android.view.View",
+                },
+            ),
+            TransitionRow(
+                source="catalog",
+                target="detail_latte",
+                action={
+                    "type": "click",
+                    "resource_id": "catalog.product_row.latte.open",
+                    "target_resource_id": "catalog.product_row.latte.open",
+                    "target_text": "Latte",
+                    "target_class": "android.view.View",
+                },
+            ),
+            TransitionRow(
+                source="catalog",
+                target="detail_mocha",
+                action={
+                    "type": "click",
+                    "resource_id": "catalog.product_row.mocha.open",
+                    "target_resource_id": "catalog.product_row.mocha.open",
+                    "target_text": "Mocha",
+                    "target_class": "android.view.View",
+                },
+            ),
+        ]
+
+        assert len({quotient_action_key(row.action) for row in rows}) == 3
+
+        contextual = infer_contextual_action_quotient(
+            rows,
+            target_partition_key=lambda _target: "detail_block",
+        )
+        assert len(contextual.candidates) == 1
+        assert contextual.candidates[0].contextual_rid == "catalog.product.row.<row>.open"
+        assert len(set(contextual.action_keys_by_index.values())) == 1
+
+    def test_named_rows_do_not_collapse_across_distinct_target_blocks(self) -> None:
+        from vigil.neuro.behavioral_action_quotient import infer_contextual_action_quotient
+
+        rows = [
+            TransitionRow(
+                source="catalog",
+                target="detail_espresso",
+                action={
+                    "type": "click",
+                    "resource_id": "catalog.product_row.espresso.open",
+                    "target_resource_id": "catalog.product_row.espresso.open",
+                    "target_text": "Espresso",
+                    "target_class": "android.view.View",
+                },
+            ),
+            TransitionRow(
+                source="catalog",
+                target="detail_latte",
+                action={
+                    "type": "click",
+                    "resource_id": "catalog.product_row.latte.open",
+                    "target_resource_id": "catalog.product_row.latte.open",
+                    "target_text": "Latte",
+                    "target_class": "android.view.View",
+                },
+            ),
+            TransitionRow(
+                source="catalog",
+                target="detail_mocha",
+                action={
+                    "type": "click",
+                    "resource_id": "catalog.product_row.mocha.open",
+                    "target_resource_id": "catalog.product_row.mocha.open",
+                    "target_text": "Mocha",
+                    "target_class": "android.view.View",
+                },
+            ),
+        ]
+
+        contextual = infer_contextual_action_quotient(rows)
+        assert contextual.candidates == ()
+        assert len(set(contextual.action_keys_by_index.values())) == 3
+
+    def test_input_text_fields_do_not_collapse(self) -> None:
+        from vigil.neuro.behavioral_action_quotient import infer_contextual_action_quotient
+
+        rows = [
+            TransitionRow(
+                source="payment",
+                target="payment",
+                action={
+                    "type": "input_text",
+                    "resource_id": "payment.cc_number.input",
+                    "target_resource_id": "payment.cc_number.input",
+                    "text": "4111111111111111",
+                },
+            ),
+            TransitionRow(
+                source="payment",
+                target="payment",
+                action={
+                    "type": "input_text",
+                    "resource_id": "payment.cv_code.input",
+                    "target_resource_id": "payment.cv_code.input",
+                    "text": "123",
+                },
+            ),
+        ]
+
+        contextual = infer_contextual_action_quotient(rows)
+        assert contextual.candidates == ()
+        assert contextual.action_keys_by_index[0] != contextual.action_keys_by_index[1]
+
+    def test_two_functional_controls_do_not_collapse_without_row_evidence(self) -> None:
+        from vigil.neuro.behavioral_action_quotient import infer_contextual_action_quotient
+
+        rows = [
+            TransitionRow(
+                source="timer_setup",
+                target="timer_setup",
+                action={
+                    "type": "click",
+                    "resource_id": "timer.hour.increment",
+                    "target_resource_id": "timer.hour.increment",
+                    "target_class": "android.widget.Button",
+                },
+            ),
+            TransitionRow(
+                source="timer_setup",
+                target="timer_setup",
+                action={
+                    "type": "click",
+                    "resource_id": "timer.minute.increment",
+                    "target_resource_id": "timer.minute.increment",
+                    "target_class": "android.widget.Button",
+                },
+            ),
+        ]
+
+        contextual = infer_contextual_action_quotient(rows)
+        assert contextual.candidates == ()
+        assert contextual.action_keys_by_index[0] != contextual.action_keys_by_index[1]
