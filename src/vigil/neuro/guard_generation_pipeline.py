@@ -15,7 +15,9 @@ Guard sources:
 - ``llm``: an LLM-produced typed :class:`GuardContract` (never free-form DSL).
 - ``hybrid``: try the LLM first; fall back to deterministic synthesis when the LLM
   candidate is invalid/rejected, rejected by admission, or admitted yet
-  ``semantic_binding_incomplete`` for a required/high-risk transition.
+  ``semantic_binding_incomplete`` for a semantic-required transition.
+- ``audit``: replay previously persisted LLM audit candidates, then rerun deterministic
+  admission/fallback without calling the model.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from vigil.models.guard import GuardContract, RiskLevel
+from vigil.models.guard import GuardContract, LlmGuardContractCandidate
 from vigil.neuro.guard_admission import GuardAdmissionResult, admit_guard_contract
 from vigil.neuro.guard_contract_llm import (
     DEFAULT_GUARD_PROMPT,
@@ -42,7 +44,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.neuro.app_prior import AppPrior
     from vigil.neuro.guard_evidence import GuardEvidence
 
-GuardSource = Literal["deterministic", "llm", "hybrid"]
+GuardSource = Literal["deterministic", "llm", "hybrid", "audit"]
 
 
 @dataclass(frozen=True)
@@ -117,13 +119,33 @@ def guard_action_schema_key(action: dict[str, Any]) -> tuple[tuple[str, str], ..
     )
 
 
-def _binding_required(contract: GuardContract) -> bool:
-    """Whether this contract's action class requires a semantic (intent) binding."""
-    return (
-        contract.required
-        or contract.risk_level == RiskLevel.HIGH
-        or contract.semantic_binding_required
-    )
+def _semantic_binding_required(contract: GuardContract) -> bool:
+    """Whether this contract explicitly requires a semantic ``$intent.*`` binding."""
+    return contract.semantic_binding_required or contract.semantic_binding_incomplete
+
+
+def _candidate_from_audit(path: Path) -> LlmGuardContractCandidate:
+    """Load a persisted LLM guard attempt without re-querying the model."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        contract_payload = payload.get("contract", {})
+        contract = GuardContract.model_validate(contract_payload)
+        raw_responses = payload.get("raw_responses") or []
+        parse_errors = payload.get("parse_errors") or []
+        return LlmGuardContractCandidate(
+            contract=contract,
+            semantic_binding_incomplete=contract.semantic_binding_incomplete,
+            rejection_reason=str(payload.get("rejection_reason") or ""),
+            raw_responses=[str(item) for item in raw_responses],
+            parse_errors=[str(item) for item in parse_errors],
+            repair_attempted=bool(payload.get("repair_attempted", False)),
+        )
+    except Exception as exc:  # noqa: BLE001 - replay should degrade like LLM failure
+        return LlmGuardContractCandidate(
+            contract=GuardContract(),
+            rejection_reason=f"failed to load llm audit {path}: {exc}",
+            parse_errors=[f"failed to load llm audit {path}: {exc}"],
+        )
 
 
 def _prompt_hash(evidence: GuardEvidence, guard_prompt: str) -> str:
@@ -180,7 +202,7 @@ def _try_llm_contract(
     Returns ``(contract, fallback_reason, admission_result)``. ``contract`` is ``None``
     (with a ``fallback_reason``) when the LLM candidate should be rejected in favor of the
     deterministic fallback: invalid/unparseable, rejected by admission, or admitted yet
-    semantically incomplete for a required/high-risk action.
+    semantically incomplete for a semantic-required action.
     """
     candidate = generate_llm_guard_candidate(
         evidence,
@@ -195,11 +217,11 @@ def _try_llm_contract(
     result = admit_guard_contract(contract, evidence)
     if not result.admitted:
         return None, f"llm contract rejected by admission: {result.reason}", None
-    if result.semantic_binding_incomplete and _binding_required(contract):
+    if result.semantic_binding_incomplete and _semantic_binding_required(contract):
         return (
             None,
             "llm contract admitted but semantic binding incomplete for a "
-            "required/high-risk action",
+            "semantic-required action",
             None,
         )
     return contract, "", result
@@ -261,13 +283,13 @@ def _resolve_contract(
             fallback_reason=f"llm contract rejected by admission: {result.reason}",
             llm_audit_path=audit_path,
         )
-    if result.semantic_binding_incomplete and _binding_required(contract):
+    if result.semantic_binding_incomplete and _semantic_binding_required(contract):
         return _ResolvedContract(
             contract=synthesize_guard_contract(evidence),
             guard_origin="fallback",
             fallback_reason=(
                 "llm contract admitted but semantic binding incomplete for a "
-                "required/high-risk action"
+                "semantic-required action"
             ),
             llm_audit_path=audit_path,
         )
@@ -303,7 +325,7 @@ def _resolve_contract_from_llm_candidate(
             llm_audit_path=audit_path,
         )
 
-    # hybrid
+    # hybrid / audit replay
     if candidate.rejection_reason:
         return _ResolvedContract(
             contract=synthesize_guard_contract(evidence),
@@ -320,13 +342,13 @@ def _resolve_contract_from_llm_candidate(
             fallback_reason=f"llm contract rejected by admission: {result.reason}",
             llm_audit_path=audit_path,
         )
-    if result.semantic_binding_incomplete and _binding_required(contract):
+    if result.semantic_binding_incomplete and _semantic_binding_required(contract):
         return _ResolvedContract(
             contract=synthesize_guard_contract(evidence),
             guard_origin="fallback",
             fallback_reason=(
                 "llm contract admitted but semantic binding incomplete for a "
-                "required/high-risk action"
+                "semantic-required action"
             ),
             llm_audit_path=audit_path,
         )
@@ -349,20 +371,30 @@ def generate_contract_guards(
     guard_prompt: str = DEFAULT_GUARD_PROMPT,
     guard_use_images: bool = True,
     llm_audit_dir: Path | None = None,
+    llm_audit_report: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Synthesize, admit, and attach contract guards across ``fsm``'s transitions.
 
     Returns a per-transition report. The FSM graph is left structurally unchanged; only
     guard / admission metadata is written onto the transitions. ``guard_source`` selects
-    the deterministic, LLM, or hybrid contract source; ``llm`` is required for the latter
-    two. ``guard_prompt`` names the system-prompt file used by the LLM path.
+    the deterministic, LLM, hybrid, or audit-replay contract source; ``llm`` is required
+    only for live LLM modes. ``guard_prompt`` names the system-prompt file used by the
+    live LLM path.
     """
     if guard_source in ("llm", "hybrid") and llm is None:
         raise ValueError(f"guard_source={guard_source!r} requires an LLM client")
+    if guard_source == "audit" and llm_audit_report is None:
+        raise ValueError("guard_source='audit' requires llm_audit_report")
 
     evidence_items = build_all_guard_evidence(fsm, raw_screens, app_prior)
     report: list[dict[str, Any]] = []
     llm_candidates_by_action: dict[tuple[tuple[str, str], ...], _CachedLlmCandidate] = {}
+    audit_rows_by_transition = {
+        int(row.get("transition_index", -1)): row
+        for row in (llm_audit_report or [])
+        if isinstance(row, dict)
+    }
+    audit_candidates_by_path: dict[str, LlmGuardContractCandidate] = {}
 
     for index, transition in enumerate(fsm.transitions):
         evidence = evidence_items[index]
@@ -389,9 +421,37 @@ def generate_contract_guards(
                     audit_path=audit_path,
                     action_schema_index=len(llm_candidates_by_action),
                 )
-                llm_candidates_by_action[action_schema_key] = cached
+            llm_candidates_by_action[action_schema_key] = cached
             action_schema_index = cached.action_schema_index
             resolved = _resolve_contract_from_llm_candidate(evidence, guard_source, cached)
+        elif guard_source == "audit":
+            audit_row = audit_rows_by_transition.get(index, {})
+            action_schema_index = audit_row.get("action_schema_index")
+            audit_path = str(audit_row.get("llm_audit_path") or "")
+            if audit_path:
+                candidate = audit_candidates_by_path.get(audit_path)
+                if candidate is None:
+                    candidate = _candidate_from_audit(Path(audit_path))
+                    audit_candidates_by_path[audit_path] = candidate
+                resolved = _resolve_contract_from_llm_candidate(
+                    evidence,
+                    "hybrid",
+                    _CachedLlmCandidate(
+                        candidate=candidate,
+                        audit_path=audit_path,
+                        action_schema_index=(
+                            action_schema_index
+                            if isinstance(action_schema_index, int)
+                            else len(audit_candidates_by_path) - 1
+                        ),
+                    ),
+                )
+            else:
+                resolved = _ResolvedContract(
+                    contract=synthesize_guard_contract(evidence),
+                    guard_origin="fallback",
+                    fallback_reason="missing llm audit path for transition",
+                )
         else:
             resolved = _resolve_contract(
                 evidence,
@@ -407,15 +467,13 @@ def generate_contract_guards(
         precomputed = resolved.precomputed_result
         result = precomputed or admit_guard_contract(contract, evidence)
 
-        # Sync the admission outcome onto the contract so it survives serialize/
-        # deserialize alongside the transition-level metadata. Keep the contract's
-        # semantic-binding-incomplete flag consistent with admission so the enriched FSM
-        # never looks complete when the report says incomplete.
+        # Sync the deterministic admission outcome onto the contract so it survives
+        # serialize/deserialize alongside the transition-level metadata. Admission is the
+        # authority for semantic completeness; stale LLM self-assessments are audit input,
+        # not final metadata.
         contract.admission_status = result.status
         contract.admission_reason = result.reason
-        contract.semantic_binding_incomplete = (
-            contract.semantic_binding_incomplete or result.semantic_binding_incomplete
-        )
+        contract.semantic_binding_incomplete = result.semantic_binding_incomplete
 
         # Attach metadata (no graph mutation).
         transition.guard_contract = contract

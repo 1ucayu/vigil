@@ -127,7 +127,7 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
     resource_strings?: map<string, string>
     string_arrays?: map<string, list<string>>
     layout_widget_declarations?: list<string>
-    role: semantic role/domain/risk hints only; not runtime proof
+    role: semantic role/domain/audit-risk hints only; not runtime proof
 
   [Verifier Basis]:
     predicate_vocabulary: PredicateBasis
@@ -136,7 +136,9 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
     output_schema: GuardContract
 
   [Action Impact Taxonomy]:
-    role: classify why a guard is needed without hardcoding app-specific labels
+    role: classify why a guard is needed without hardcoding app-specific labels.
+          risk_level is audit/report metadata only; guard obligations come from
+          required and semantic_binding_required.
     dimensions:
       state_topology:
         meaning: screen navigation, modal open/close, back/cancel, tab change
@@ -279,21 +281,23 @@ ReadableActionProperty:
       `action(target_text) == $intent.<slot>`, or
       `action(target_resource_id) == $intent.<slot>` only when action evidence itself
       carries the user/task-side value.
-    * Set `semantic_binding_required` according to action risk.
+    * Set `semantic_binding_required` according to the transition's guard obligation,
+      not according to `risk_level` alone.
     * Set `semantic_binding_incomplete = false`.
 
 **Case 2 (Partial executable guard)**:
   If only structural/safety evidence is executable:
     * Emit only executable source/action predicates.
-    * For high-risk or semantic-required transitions, set
+    * For semantic-required transitions, set
       `semantic_binding_incomplete = true`.
     * Explain the missing semantic binding in `notes` or `rejection_reason`.
 
 **Case 3 (No sound executable guard)**:
   If no sound source/action predicate can be produced:
     * Emit `predicates = []`.
-    * Set `risk_level` and `required` conservatively.
-    * For high-risk or semantic-required transitions, set
+    * Set `required` and `semantic_binding_required` conservatively; set
+      `risk_level` only as audit/report metadata.
+    * For semantic-required transitions, set
       `semantic_binding_incomplete = true`.
     * Set `rejection_reason` to an evidence-based reason.
 
@@ -318,12 +322,12 @@ ReadableActionProperty:
     matches the registry value.
   * Static APK priors never prove runtime presence, current runtime values, transition
     existence, safety, or post-state checks.
-  * Enabledness/clickability alone never completes a high-risk or semantic-required guard.
+  * Enabledness/clickability alone never completes a semantic-required guard.
   * The top-level `semantic_binding_incomplete` mirrors
     `contract.semantic_binding_incomplete`; keep them consistent.
 
 **System Algorithm**:
-  1. Classify action kind and risk using the Action Impact Taxonomy from
+  1. Classify action kind and guard obligation using the Action Impact Taxonomy from
      source/action evidence, target effect, siblings, and static priors as hints.
   2. Identify the user-intent dimensions that must be verified before `known_action`.
   3. Match each intent dimension to a runtime-present source guard registry entry.
@@ -339,8 +343,8 @@ ReadableActionProperty:
 
 **Post-Condition**:
   * The generated object is only `Gamma`.
-  * Target evidence may affect only classification, risk, notes, binding requirements,
-    or rejection reasons.
+  * Target evidence may affect only classification, audit-risk metadata, notes,
+    binding requirements, or rejection reasons.
 
 [SPECIFICATION of Guard Predicate Conjunction]
 **Pre-Condition**:
@@ -373,7 +377,7 @@ ReadableActionProperty:
     permission scope, dialog text, status, or error text.
 
 **Post-Condition**:
-  * For medium/high semantic-required transitions, prefer executable predicates that
+  * For semantic-required transitions, prefer executable predicates that
     bind these source facts to declared `$intent.*` slots.
   * Use exact `read(element, text) == $intent.<slot>` or `value(element) == $intent.<slot>`
     forms when the entry exposes `text` or `value`.
@@ -400,7 +404,7 @@ ReadableActionProperty:
   * Set `semantic_binding_incomplete = true` if no executable `$intent.*` predicate
     captures the required semantic binding.
 
-[SPECIFICATION of Taxonomy-Driven Risk Policy]
+[SPECIFICATION of Taxonomy-Driven Guard Obligation Policy]
 **Pre-Condition**:
   * A transition must be assigned `kind`, `risk_level`, `required`, and
     `semantic_binding_required`.
@@ -408,19 +412,22 @@ ReadableActionProperty:
 **Post-Condition**:
   * Use the Action Impact Taxonomy, not a closed keyword list, to classify the
     transition. Text labels and resource ids are evidence hints, not the policy.
-  * Set `risk_level = "low"` and `required = false` when the transition is only
-    state_topology/navigation and no user-specific semantic binding is needed.
-  * Set `risk_level = "medium"`, `required = true`, and
-    `semantic_binding_required = true` when the transition selects or edits a
+    `risk_level` is descriptive metadata; it must not be the source of a guard
+    obligation.
+  * Set `required = false` and `semantic_binding_required = false` when the
+    transition is only state_topology/navigation and no user-specific semantic
+    binding is needed.
+  * Set `required = true` and `semantic_binding_required = true` when the transition
+    selects or edits a
     user-intended item/value/content but the effect is local or reversible before
     the final commit.
-  * Set `risk_level = "high"`, `required = true`, and
-    `semantic_binding_required = true` when the transition has an
-    irreversible_or_costly_state or external_side_effect impact, or when Q/siblings
-    show that the action commits previously chosen values to a safety-sensitive,
-    privacy-sensitive, externally visible, destructive, financial, or
+  * Set `required = true` and `semantic_binding_required = true` when Q/siblings show
+    that the action commits previously chosen values to a side-effectful,
+    externally visible, destructive, financial, privacy-sensitive, or
     authority-granting effect.
-  * For medium/high semantic-required actions, generate predicates that bind the
+  * Set `risk_level` consistently with the taxonomy for report/audit analysis, but
+    do not rely on it to decide whether semantic binding is required.
+  * For semantic-required actions, generate predicates that bind the
     relevant user intent dimension whenever source/action evidence supports it:
     item identity, recipient/account/address identity, amount/value, content, target
     file/resource, permission/scope, or confirmation choice.
@@ -435,8 +442,8 @@ ReadableActionProperty:
   * Static APK prior fields are provided.
 
 **Post-Condition**:
-  * Use them only to enrich semantic roles, value domains, closed option sets, or risk
-    hints for widgets that are also runtime-present in source P.
+  * Use them only to enrich semantic roles, value domains, closed option sets, or
+    audit-risk hints for widgets that are also runtime-present in source P.
   * Static priors may identify that a runtime-present widget is an amount field,
     recipient field, address field, product field, destructive action, payment action,
     permission scope, or closed-set option.

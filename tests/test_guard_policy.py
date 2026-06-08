@@ -53,7 +53,7 @@ def _verify(transition: Transition, **kwargs: object):
     return DecisionEngine(_make_fsm(transition)).verify_by_state("s1", dict(_ACTION), **kwargs)
 
 
-def test_high_risk_without_executable_guard_is_uncertain() -> None:
+def test_risk_metadata_without_executable_guard_still_allows_when_optional() -> None:
     transition = _make_transition(
         guard=None,
         risk_level=RiskLevel.HIGH,
@@ -63,8 +63,8 @@ def test_high_risk_without_executable_guard_is_uncertain() -> None:
 
     out = _verify(transition)
 
-    assert out.result is VerifyResult.UNCERTAIN
-    assert out.reason is VerifyReason.GUARD_POLICY_UNSATISFIED
+    assert out.result is VerifyResult.ALLOW
+    assert out.reason is VerifyReason.TRANSITION_VALID
 
 
 def test_rejected_guard_admission_is_uncertain_even_with_guard() -> None:
@@ -108,7 +108,7 @@ def test_low_risk_without_guard_still_allows() -> None:
     assert out.reason is VerifyReason.TRANSITION_VALID
 
 
-def test_high_risk_admitted_guard_true_allows() -> None:
+def test_risk_metadata_admitted_guard_true_allows() -> None:
     transition = _make_transition(
         guard='action(target_text) == "Pay"',
         risk_level=RiskLevel.HIGH,
@@ -121,9 +121,10 @@ def test_high_risk_admitted_guard_true_allows() -> None:
     assert out.reason is VerifyReason.TRANSITION_VALID
 
 
-def test_high_risk_admitted_guard_requires_evaluator() -> None:
+def test_required_guard_requires_evaluator() -> None:
     transition = _make_transition(
         guard='action(target_text) == "Pay"',
+        requires_guard=True,
         risk_level=RiskLevel.HIGH,
         guard_admission_status=GuardAdmissionStatus.ADMITTED,
     )
@@ -136,9 +137,25 @@ def test_high_risk_admitted_guard_requires_evaluator() -> None:
     assert out.reason is VerifyReason.GUARD_POLICY_UNSATISFIED
 
 
+def test_risk_metadata_optional_guard_does_not_require_evaluator() -> None:
+    transition = _make_transition(
+        guard='action(target_text) == "Pay"',
+        risk_level=RiskLevel.HIGH,
+        guard_admission_status=GuardAdmissionStatus.ADMITTED,
+    )
+    fsm = _make_fsm(transition)
+    engine = DecisionEngine(fsm, grammar_path="/nonexistent/grammar.lark")
+
+    out = engine.verify_by_state("s1", dict(_ACTION), action_ctx={"target_text": "Pay"})
+
+    assert out.result is VerifyResult.ALLOW
+    assert out.reason is VerifyReason.TRANSITION_VALID
+
+
 def test_guard_policy_uncertain_bypasses_llm_fallback() -> None:
     transition = _make_transition(
         guard=None,
+        requires_guard=True,
         risk_level=RiskLevel.HIGH,
         guard_admission_status=GuardAdmissionStatus.ADMITTED,
     )
@@ -154,9 +171,9 @@ def test_guard_policy_uncertain_bypasses_llm_fallback() -> None:
     llm.generate.assert_not_called()
 
 
-def test_high_risk_executable_enabled_only_guard_evaluates_normally() -> None:
-    # An executable, evidence-backed enabled-only guard on a high-risk transition must be
-    # evaluated normally (not auto-UNCERTAIN by guard policy).
+def test_risk_metadata_executable_enabled_only_guard_evaluates_normally() -> None:
+    # An executable, evidence-backed enabled-only guard on a transition with risk metadata
+    # is evaluated normally when the DSL evaluator is available.
     transition = _make_transition(
         guard="read(com.test:id/pay, is_enabled) == true",
         risk_level=RiskLevel.HIGH,

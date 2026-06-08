@@ -91,3 +91,31 @@ def test_hybrid_skip_visual_builds_llm(monkeypatch, tmp_path) -> None:
     assert captured["guard_source"] == "hybrid"
     assert captured["llm"] is sentinel
     assert captured["guard_prompt"] == script.DEFAULT_GUARD_PROMPT
+
+
+def test_audit_skip_visual_builds_no_llm(monkeypatch, tmp_path) -> None:
+    def _boom(*_a, **_k):
+        raise AssertionError("LLM client must not be constructed in audit mode")
+
+    monkeypatch.setattr(script, "LlmClient", _boom)
+    monkeypatch.setattr(
+        script,
+        "discover_default_model",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("model discovery called")),
+    )
+
+    audit_root = tmp_path / "prior_reports"
+    captured = _run_main(
+        monkeypatch,
+        tmp_path,
+        [
+            "--skip-visual",
+            "--guard-source",
+            "audit",
+            "--guard-audit-root",
+            str(audit_root),
+        ],
+    )
+    assert captured["guard_source"] == "audit"
+    assert captured["guard_audit_root"] == audit_root
+    assert captured["llm"] is None

@@ -46,9 +46,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # Deterministic vocabularies
 # ---------------------------------------------------------------------------
 
-# High-risk / irreversible action words. cancel/dismiss/close are deliberately NOT here:
-# they are low-risk control words, kept separate so risk words always route to high-risk
-# contracts rather than low-risk navigation.
+# Side-effect / irreversible action words. cancel/dismiss/close are deliberately NOT here:
+# they are control words, kept separate so side-effect words route to semantic guard
+# obligations rather than navigation-only contracts.
 _RISK_WORDS: tuple[str, ...] = (
     "send",
     "pay",
@@ -64,7 +64,7 @@ _RISK_WORDS: tuple[str, ...] = (
 # commit. Used to pick SAFETY_CHECK vs CONFIRM_COMMIT.
 _SAFETY_WORDS: frozenset[str] = frozenset({"delete", "remove", "allow", "grant"})
 
-# Semantic-required *commit* actions that are not in the high-risk/irreversible set but
+# Semantic-required *commit* actions that are not in the side-effect/irreversible set but
 # still need a semantic (intent) binding, not an enabled-only guard. Matched on whole-word
 # tokens (not substrings) to avoid false positives. Generic UI verbs only — no package,
 # product, contact, or timer-label strings.
@@ -289,7 +289,7 @@ def infer_input_slot_name(evidence: GuardEvidence) -> str:
 
 
 def infer_commit_slots(evidence: GuardEvidence) -> list[IntentSlot]:
-    """Deterministic intent slots for a high-risk commit, by generic domain.
+    """Deterministic intent slots for a side-effectful commit, by generic domain.
 
     These are intent slots only (frozen ``$intent.*`` variables); they never name
     element aliases.
@@ -451,7 +451,7 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
 
     # 3. Text entry. Classified before risk/commit so an amount/recipient field whose
     #    widget carries an incidental risk hint still binds the typed value to an intent
-    #    slot (executable, semantic-complete) instead of an enabled-only high-risk guard.
+    #    slot (executable, semantic-complete) instead of an enabled-only commit guard.
     if atype == "input_text":
         slot = infer_input_slot_name(evidence)
         predicate = PredicateSpec(
@@ -484,7 +484,7 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
             provenance=["cancel_action"],
         )
 
-    # 5. High-risk commit / safety action. The deterministic synthesizer can pin the
+    # 5. Side-effectful commit / safety action. The deterministic synthesizer can pin the
     #    commit control's enabledness but cannot bind it to a frozen intent slot, so the
     #    semantic binding is always incomplete here (a stronger semantic guard must come
     #    from the LLM path or richer evidence).
@@ -519,7 +519,7 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
         )
 
     # 6. Semantic-required commit (checkout / submit / attach / buy / add-to-cart / timer
-    #    start / alarm save / stopwatch lap). Not in the irreversible high-risk set, but it
+    #    start / alarm save / stopwatch lap). Not in the irreversible side-effect set, but it
     #    still needs a semantic binding — never an enabled-only "complete" guard.
     commit_word, commit_high = _commit_hit(evidence)
     if atype in _CLICK_TYPES and commit_word is not None:

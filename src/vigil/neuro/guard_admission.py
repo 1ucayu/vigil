@@ -12,8 +12,10 @@ guarantees the resulting DSL is **runtime-executable by the current**
   (``action_type``/``target_text``/``target_resource_id``/``target_content_desc``), with
   ``type`` normalized to ``action_type``. ``action(text)``/``action(value)`` are rejected.
 - ``$intent.*`` slots must be declared in ``contract.required_slots``.
-- High-risk contracts must carry at least one semantic *binding* predicate; an
-  enabled/clickable-only safety predicate is insufficient.
+- Contracts that explicitly declare ``semantic_binding_required`` must carry at
+  least one executable semantic *binding* predicate to be marked semantically
+  complete; an enabled/clickable-only predicate is admitted only as incomplete
+  metadata.
 
 Anything that cannot be guaranteed executable is ``REJECTED`` or ``LOW_TRUST`` — never
 attached. No LLM, no grammar expansion, no DecisionEngine/DSLEvaluator changes.
@@ -30,7 +32,7 @@ from lark.exceptions import LarkError
 from pydantic import BaseModel, Field
 
 from vigil.core.paths import resolve_dsl_grammar_path
-from vigil.models.guard import GuardAdmissionStatus, GuardContract, PredicateSpec, RiskLevel
+from vigil.models.guard import GuardAdmissionStatus, GuardContract, PredicateSpec, ValueRef
 from vigil.neuro.guard_dsl_compiler import compile_predicate_spec
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -123,6 +125,18 @@ def _literal_type_error(ptype: str, prop: str, value: object) -> str:
     return ""
 
 
+def _normalize_literal_value(ptype: str, prop: str, expected: ValueRef | None) -> ValueRef | None:
+    """Normalize narrow LLM JSON literal slips that preserve the typed meaning."""
+    if expected is None or expected.kind != "literal":
+        return expected
+    value = expected.value
+    if ptype == "read" and prop in _READABLE_BOOL_PROPS and isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "false"}:
+            return expected.model_copy(update={"value": normalized == "true"})
+    return expected
+
+
 class GuardAdmissionResult(BaseModel):
     """Outcome of admitting a guard contract."""
 
@@ -209,6 +223,9 @@ def _lower_predicate(
         if ptype == "read":
             if not pred.property or pred.property not in _READABLE_PROPS:
                 return _Lowered(None, f"property '{pred.property}' not runtime-readable")
+            expected = _normalize_literal_value(ptype, pred.property, expected)
+            if expected is not pred.expected:
+                pred = pred.model_copy(update={"expected": expected})
             if expected is not None and expected.kind == "literal":
                 type_error = _literal_type_error(ptype, pred.property, expected.value)
                 if type_error:
@@ -254,10 +271,10 @@ def admit_guard_contract(
     """Admit (or reject) a guard contract as a runtime-executable guard."""
     registry = evidence.source_registry
     declared = {slot.name for slot in contract.required_slots}
-    # A semantic (intent-binding) guard is required for high-risk actions and for any
-    # contract that explicitly declares it (e.g. the LLM path marking a semantic-required
-    # action). ``$bind.*`` binding_requirements are metadata only and never satisfy this.
-    binding_required = contract.risk_level == RiskLevel.HIGH or contract.semantic_binding_required
+    # Semantic completeness is controlled by the explicit guard-obligation bit, not by
+    # risk metadata. ``$bind.*`` binding_requirements are metadata only and never satisfy
+    # this executable ``$intent.*`` requirement.
+    binding_required = contract.semantic_binding_required
 
     surviving: list[str] = []
     rejected: list[str] = []
@@ -312,10 +329,10 @@ def admit_guard_contract(
 
     # Executable guard admitted. Semantic completeness is strict: a guard is
     # semantic-complete only when at least one *surviving executable* ``$intent.*`` binding
-    # predicate exists (``has_binding``). A high-risk / semantic-required guard with only
-    # structural / enabledness predicates — or whose only binding is a non-executable
-    # ``$bind.*`` requirement — is still evidence-backed and executable, so we attach it but
-    # record that its semantic binding is incomplete (metadata, not a blocker).
+    # predicate exists (``has_binding``). A semantic-required guard with only structural /
+    # enabledness predicates — or whose only binding is a non-executable ``$bind.*``
+    # requirement — is still evidence-backed and executable, so we attach it but record
+    # that its semantic binding is incomplete (metadata, not a blocker).
     semantic_binding_incomplete = (not has_binding) and (
         binding_required or contract.semantic_binding_incomplete
     )

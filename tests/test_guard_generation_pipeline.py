@@ -143,7 +143,7 @@ def _build_fsm() -> tuple[AppFSM, dict[str, dict[str, Any]]]:
             confidence=0.9,
         )
     )
-    # T4: high-risk Delete with no resolvable resource_id; carries a pre-existing guard.
+    # T4: delete action with no resolvable resource_id; carries a pre-existing guard.
     fsm.add_transition(
         Transition(
             source="s2",
@@ -168,14 +168,15 @@ def test_list_item_transition_gets_guard_attached():
     assert t0.guard_admission_status == GuardAdmissionStatus.ADMITTED.value
 
 
-def test_high_risk_transition_attaches_executable_partial_guard():
+def test_semantic_required_transition_attaches_executable_partial_guard():
     fsm, raw_screens = _build_fsm()
     report = generate_contract_guards(fsm, raw_screens)
 
     t2 = fsm.transitions[2]
     assert t2.requires_guard is True
     assert t2.risk_level is RiskLevel.HIGH
-    # Enabled-only high-risk is executable + evidence-backed -> attached, flagged partial.
+    # Enabled-only semantic-required guard is executable + evidence-backed -> attached,
+    # flagged partial.
     assert t2.guard == f"read({PKG}:id/send, is_enabled) == true"
     assert t2.guard_admission_status == GuardAdmissionStatus.ADMITTED.value
     assert "semantic binding incomplete" in t2.guard_admission_reason
@@ -354,6 +355,60 @@ def test_hybrid_writes_llm_audit_for_invalid_candidate(tmp_path):
     assert "guard_class_key" not in report[0]
 
 
+def test_audit_source_replays_existing_candidate_without_llm(tmp_path):
+    fsm, raw_screens = _build_fsm()
+    audit_path = tmp_path / "transition_0000_audit.json"
+    audit_path.write_text(
+        json.dumps(
+            {
+                "transition_index": 0,
+                "rejection_reason": "",
+                "parse_errors": [],
+                "repair_attempted": False,
+                "contract": {
+                    "kind": "item_binding",
+                    "required": True,
+                    "risk_level": "medium",
+                    "semantic_binding_required": True,
+                    "semantic_binding_incomplete": True,
+                    "required_slots": [{"name": "contact_name", "slot_type": "string"}],
+                    "predicates": [
+                        {
+                            "predicate_type": "action",
+                            "property": "target_text",
+                            "operator": "==",
+                            "expected": {"kind": "intent", "slot": "contact_name"},
+                        }
+                    ],
+                },
+                "raw_responses": [_VALID_ITEM_CONTRACT],
+            }
+        ),
+        encoding="utf-8",
+    )
+    audit_report = [
+        {
+            "transition_index": index,
+            "action_schema_index": index,
+            "llm_audit_path": str(audit_path),
+        }
+        for index in range(len(fsm.transitions))
+    ]
+
+    report = generate_contract_guards(
+        fsm,
+        raw_screens,
+        guard_source="audit",
+        llm_audit_report=audit_report,
+    )
+
+    assert report[0]["guard_origin"] == "llm"
+    assert report[0]["llm_audit_path"] == str(audit_path)
+    assert report[0]["guard"] == "action(target_text) == $intent.contact_name"
+    assert report[0]["semantic_binding_incomplete"] is False
+    assert fsm.transitions[0].guard == "action(target_text) == $intent.contact_name"
+
+
 def test_hybrid_graph_is_unchanged_on_fallback():
     fsm, raw_screens = _build_fsm()
     before_states = set(fsm.states)
@@ -377,9 +432,37 @@ def _binding_evidence() -> GuardEvidence:
     )
 
 
-def test_try_llm_contract_rejects_incomplete_high_risk():
-    # High-risk, required, enabled-only (no intent binding) on a resolvable element:
+def test_try_llm_contract_rejects_incomplete_semantic_required():
+    # Semantic-required, enabled-only (no intent binding) on a resolvable element:
     # admitted-but-incomplete -> hybrid must reject in favor of deterministic fallback.
+    enabled_only = json.dumps(
+        {
+            "contract": {
+                "kind": "confirm_commit",
+                "required": True,
+                "risk_level": "high",
+                "semantic_binding_required": True,
+                "predicates": [
+                    {
+                        "predicate_type": "read",
+                        "element": "pay",
+                        "property": "is_enabled",
+                        "operator": "==",
+                        "expected": {"kind": "literal", "value": True},
+                    }
+                ],
+            }
+        }
+    )
+    contract, reason, result = _try_llm_contract(
+        _binding_evidence(), _FakeLlm(enabled_only), "guard_generation.spec"
+    )
+    assert contract is None
+    assert result is None
+    assert "incomplete" in reason
+
+
+def test_try_llm_contract_accepts_enabled_only_when_only_risk_metadata():
     enabled_only = json.dumps(
         {
             "contract": {
@@ -401,9 +484,10 @@ def test_try_llm_contract_rejects_incomplete_high_risk():
     contract, reason, result = _try_llm_contract(
         _binding_evidence(), _FakeLlm(enabled_only), "guard_generation.spec"
     )
-    assert contract is None
-    assert result is None
-    assert "incomplete" in reason
+    assert contract is not None
+    assert reason == ""
+    assert result is not None and result.admitted is True
+    assert result.semantic_binding_incomplete is False
 
 
 def test_try_llm_contract_accepts_complete_binding():

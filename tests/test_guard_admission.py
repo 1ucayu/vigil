@@ -93,7 +93,30 @@ def test_element_alias_lowered_to_resource_id():
     assert result.guard == f"read({PKG}:id/send, is_enabled) == true"
 
 
-def test_boolean_literal_must_be_json_boolean():
+def test_boolean_string_literal_normalized_for_readable_bool_property():
+    reg = _registry(_entry("send", resource_id=f"{PKG}:id/send"))
+    for raw, rendered in (("true", "true"), ("false", "false")):
+        contract = _contract(
+            kind=GuardKind.TOGGLE_BINDING,
+            required=True,
+            risk_level=RiskLevel.MEDIUM,
+            predicates=[
+                PredicateSpec(
+                    predicate_type="read",
+                    element="send",
+                    property="is_enabled",
+                    operator="==",
+                    expected=ValueRef(kind="literal", value=raw),
+                )
+            ],
+        )
+        result = admit_guard_contract(contract, _evidence(reg))
+        assert result.admitted is True
+        assert result.status is GuardAdmissionStatus.ADMITTED
+        assert result.guard == f"read({PKG}:id/send, is_enabled) == {rendered}"
+
+
+def test_non_boolean_string_literal_still_rejected_for_readable_bool_property():
     reg = _registry(_entry("send", resource_id=f"{PKG}:id/send"))
     contract = _contract(
         kind=GuardKind.TOGGLE_BINDING,
@@ -105,7 +128,7 @@ def test_boolean_literal_must_be_json_boolean():
                 element="send",
                 property="is_enabled",
                 operator="==",
-                expected=ValueRef(kind="literal", value="true"),
+                expected=ValueRef(kind="literal", value="yes"),
             )
         ],
     )
@@ -258,9 +281,9 @@ def test_action_type_normalized_to_action_type():
     assert result.guard == 'action(action_type) == "click"'
 
 
-def test_high_risk_enabled_only_admitted_partial():
-    # High-risk enabled-only guard is executable + evidence-backed -> admitted, but
-    # flagged as semantically incomplete (metadata, not a blocker).
+def test_risk_level_high_alone_does_not_require_semantic_binding():
+    # Risk is report metadata only; semantic completeness is controlled by the
+    # explicit semantic_binding_required obligation.
     reg = _registry(_entry("pay", resource_id=f"{PKG}:id/pay"))
     contract = _contract(
         kind=GuardKind.CONFIRM_COMMIT,
@@ -281,11 +304,11 @@ def test_high_risk_enabled_only_admitted_partial():
     assert result.admitted is True
     assert result.status is GuardAdmissionStatus.ADMITTED
     assert result.guard == f"read({PKG}:id/pay, is_enabled) == true"
-    assert result.semantic_binding_incomplete is True
-    assert "semantic binding incomplete" in result.reason
+    assert result.semantic_binding_incomplete is False
+    assert result.reason == "admitted: 1 executable predicate(s)"
 
 
-def test_high_risk_with_binding_predicate_admitted():
+def test_risk_metadata_with_binding_predicate_admitted():
     reg = _registry(_entry("recipient", resource_id=f"{PKG}:id/recipient"))
     contract = _contract(
         kind=GuardKind.CONFIRM_COMMIT,
@@ -309,7 +332,7 @@ def test_high_risk_with_binding_predicate_admitted():
 
 
 def test_semantic_binding_required_medium_enabled_only_incomplete():
-    # A non-high-risk contract that declares semantic_binding_required is held to the same
+    # A contract that declares semantic_binding_required is held to the semantic
     # completeness bar: enabled-only -> admitted but semantically incomplete.
     reg = _registry(_entry("checkout", resource_id=f"{PKG}:id/checkout"))
     contract = _contract(
@@ -332,7 +355,7 @@ def test_semantic_binding_required_medium_enabled_only_incomplete():
     assert result.semantic_binding_incomplete is True
 
 
-def test_required_high_risk_without_predicate_rejected():
+def test_required_guard_without_predicate_rejected():
     contract = _contract(
         kind=GuardKind.CONFIRM_COMMIT,
         required=True,

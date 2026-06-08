@@ -117,11 +117,21 @@ def main() -> None:
     )
     parser.add_argument(
         "--guard-source",
-        choices=["deterministic", "llm", "hybrid"],
+        choices=["deterministic", "llm", "hybrid", "audit"],
         default="deterministic",
         help=(
-            "Guard contract source: deterministic rules, LLM contract, or hybrid "
-            "(LLM first, deterministic fallback)."
+            "Guard contract source: deterministic rules, LLM contract, hybrid "
+            "(LLM first, deterministic fallback), or audit replay (reuse prior LLM "
+            "audit artifacts with no model calls)."
+        ),
+    )
+    parser.add_argument(
+        "--guard-audit-root",
+        type=Path,
+        default=None,
+        help=(
+            "Report root containing prior per-app guard_generation.json files for "
+            "--guard-source audit. Defaults to --report-root."
         ),
     )
     parser.add_argument(
@@ -183,6 +193,7 @@ def main() -> None:
                 guard_source=args.guard_source,
                 guard_prompt=args.guard_prompt,
                 guard_use_images=not args.guard_no_images,
+                guard_audit_root=args.guard_audit_root,
             )
         )
 
@@ -241,6 +252,7 @@ def run_one_app(
     guard_source: str = "deterministic",
     guard_prompt: str = DEFAULT_GUARD_PROMPT,
     guard_use_images: bool = True,
+    guard_audit_root: Path | None = None,
 ) -> dict[str, Any]:
     app_data_dir = data_root / spec.package
     bundle_dir = bundle_root / spec.package
@@ -281,6 +293,16 @@ def run_one_app(
             f"{action_schema_count} guard action schemas over "
             f"{len(fsm.transitions)} edge transitions"
         )
+        llm_audit_report = None
+        if guard_source == "audit":
+            audit_report_root = guard_audit_root or report_root
+            audit_report_path = audit_report_root / spec.name / "guard_generation.json"
+            if not audit_report_path.exists():
+                raise SystemExit(f"Guard audit report missing for {spec.name}: {audit_report_path}")
+            loaded = json.loads(audit_report_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, list):
+                raise SystemExit(f"Guard audit report is not a list: {audit_report_path}")
+            llm_audit_report = loaded
         guard_report = generate_contract_guards(
             fsm,
             raw_screens,
@@ -292,6 +314,7 @@ def run_one_app(
             llm_audit_dir=(
                 app_report_dir / "llm_guard_attempts" if guard_source in ("llm", "hybrid") else None
             ),
+            llm_audit_report=llm_audit_report,
         )
         write_guard_generation_report(guard_report, app_report_dir / "guard_generation.json")
 

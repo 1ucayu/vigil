@@ -28,7 +28,12 @@ from pydantic import BaseModel, Field
 
 
 class RiskLevel(StrEnum):
-    """Coarse risk classification for an action / guard."""
+    """Coarse audit/report metadata for an action / guard.
+
+    Runtime guard obligations are represented by ``required`` and
+    ``semantic_binding_required``; admission must not infer obligations from this
+    metadata alone.
+    """
 
     LOW = "low"
     MEDIUM = "medium"
@@ -144,9 +149,10 @@ class GuardContract(BaseModel):
     """Typed, pre-compilation description of a transition's intended guard.
 
     A ``GuardContract`` is synthesis IR / metadata attached to a ``Transition``. It
-    captures the guard's kind, risk, required intent slots, and typed predicates,
-    plus admission bookkeeping. It does not by itself determine a runtime verdict —
-    the executable guard remains the compiled ``Transition.guard`` DSL string.
+    captures the guard's kind, optional risk/report metadata, required intent slots,
+    and typed predicates, plus admission bookkeeping. It does not by itself determine
+    a runtime verdict — the executable guard remains the compiled ``Transition.guard``
+    DSL string.
     """
 
     kind: GuardKind = GuardKind.UNKNOWN
@@ -160,7 +166,7 @@ class GuardContract(BaseModel):
     confidence: float = 0.0
     provenance: list[str] = Field(default_factory=list)
     notes: str = ""
-    # Whether the action's risk class requires a semantic (intent-binding) guard.
+    # Whether the app/spec/task policy requires a semantic (intent-binding) guard.
     semantic_binding_required: bool = False
     # Whether the admitted guard lacks a complete semantic binding (e.g. only
     # enabledness / structural predicates survived, or the only binding is a

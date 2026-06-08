@@ -6,9 +6,9 @@ which performs only structural (Tier 1) verification: state localization, transi
 validity, goal reachability, and replay confidence.
 
 Policy enforcement lives at the :class:`~vigil.symbolic.decision_engine.DecisionEngine`
-layer, which calls these helpers after structural verification. High-risk or
-``requires_guard`` transitions without an admitted, executable guard route to
-``UNCERTAIN`` (``GUARD_POLICY_UNSATISFIED``); the LLM fallback must not override that.
+layer, which calls these helpers after structural verification. ``requires_guard``
+transitions without an admitted, executable guard route to ``UNCERTAIN``
+(``GUARD_POLICY_UNSATISFIED``); the LLM fallback must not override that.
 
 Per project rules, static APK priors alone never create a high-trust guard or a runtime
 ``ALLOW`` — admission status plus an executable guard string gate trust here.
@@ -20,9 +20,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.models.fsm import Transition
-
-# Risk levels that, on their own, require an admitted guard before ALLOW.
-_GUARD_REQUIRED_RISK_LEVELS = frozenset({"high", "critical"})
 
 
 def _policy_token(value: Any) -> str:
@@ -36,10 +33,7 @@ def transition_requires_guard_policy(transition: Transition | None) -> bool:
     """Return whether policy requires this transition to have an admitted guard."""
     if transition is None:
         return False
-    return (
-        bool(transition.requires_guard)
-        or _policy_token(transition.risk_level) in _GUARD_REQUIRED_RISK_LEVELS
-    )
+    return bool(transition.requires_guard)
 
 
 # Admission statuses whose non-empty guard string is considered runtime-executable.
@@ -82,8 +76,4 @@ def guard_policy_violation_details(transition: Transition | None) -> str | None:
     if not (transition.guard or "").strip():
         missing.append("executable guard")
 
-    risk_level = _policy_token(transition.risk_level) or "unknown"
-    required_reason = (
-        "requires_guard=True" if transition.requires_guard else f"risk_level={risk_level}"
-    )
-    return f"Guard policy requires {required_reason}; missing {', '.join(missing)}"
+    return f"Guard policy requires requires_guard=True; missing {', '.join(missing)}"

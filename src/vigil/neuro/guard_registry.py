@@ -91,7 +91,7 @@ class WidgetRegistry(BaseModel):
 # Deterministic vocabularies
 # ---------------------------------------------------------------------------
 
-# Risk keywords for high-risk / irreversible actions. Order is fixed so risk_hints
+# Risk/audit keywords for side-effectful / irreversible actions. Order is fixed so risk_hints
 # is deterministic.
 _RISK_KEYWORDS: tuple[str, ...] = (
     "send",
