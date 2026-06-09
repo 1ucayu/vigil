@@ -766,74 +766,6 @@ class TestQuotientLabelRegressions:
         )
 
 
-class TestQuotientActionKey:
-    """``quotient_action_key`` must strip per-instance rid segments so
-    parametrized actions collapse to one quotient action class, while
-    leaving genuinely different action kinds distinct."""
-
-    def test_instance_rids_collapse(self) -> None:
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        a = {
-            "type": "click",
-            "resource_id": "list.row.it_001",
-            "target_resource_id": "list.row.it_001",
-            "target_text": "Item #1",
-            "target_class": "View",
-        }
-        b = {
-            "type": "click",
-            "resource_id": "list.row.it_042",
-            "target_resource_id": "list.row.it_042",
-            "target_text": "Item #42",
-            "target_class": "View",
-        }
-        assert quotient_action_key(a) == quotient_action_key(b)
-
-    def test_distinct_action_kinds_stay_distinct(self) -> None:
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        a = {"type": "click", "resource_id": "screen.send"}
-        b = {"type": "long_press", "resource_id": "screen.send"}
-        assert quotient_action_key(a) != quotient_action_key(b)
-
-    def test_semantic_field_ids_stay_distinct(self) -> None:
-        """Semantic underscore fields are not row instances. The quotient
-        must keep fields such as credit-card number and CVV/code distinct."""
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        card_number = {
-            "type": "input_text",
-            "resource_id": "payment.cc_number.input",
-            "target_resource_id": "payment.cc_number.input",
-            "text": "4111111111111111",
-        }
-        security_code = {
-            "type": "input_text",
-            "resource_id": "payment.cv_code.input",
-            "target_resource_id": "payment.cv_code.input",
-            "text": "123",
-        }
-        assert quotient_action_key(card_number) != quotient_action_key(security_code)
-
-    def test_raw_canonical_key_unaffected(self) -> None:
-        """The quotient does not modify the raw canonical_action_key —
-        replay/dedup pipeline still distinguishes concrete selectors."""
-        from vigil.models.fsm import canonical_action_key
-
-        a = {
-            "type": "click",
-            "resource_id": "list.row.it_001",
-            "target_resource_id": "list.row.it_001",
-        }
-        b = {
-            "type": "click",
-            "resource_id": "list.row.it_042",
-            "target_resource_id": "list.row.it_042",
-        }
-        assert canonical_action_key(a) != canonical_action_key(b)
-
-
 class TestQuotientLabelStatusVocabulary:
     """Schema-only quotient label keeps a closed-vocabulary status class
     (``{error, warning, success, pending, status_present}``) for
@@ -1027,113 +959,6 @@ class TestQuotientLabelStatusVocabulary:
         assert signature_hash(compute_quotient_label(a)) == signature_hash(
             compute_quotient_label(b)
         )
-
-
-class TestQuotientActionKeyWhitelist:
-    """The whitelisted ``_quotient_selector`` keeps only verifier-relevant
-    selector fields; capture-local fields (bounds, depth, element_id,
-    parent_id, ancestor_chain, raw text) must not affect the key."""
-
-    def test_capture_local_selector_fields_dropped(self) -> None:
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        base_a = {
-            "type": "click",
-            "resource_id": "screen.submit",
-            "target_selector": {
-                "resource_id": "screen.submit",
-                "class_name": "android.widget.Button",
-                "bounds": [0, 0, 100, 50],
-                "text": "Submit",
-                "depth": 4,
-                "element_id": "e_5",
-                "parent_id": "e_4",
-                "ancestor_chain": ["root", "form", "footer"],
-            },
-        }
-        base_b = {
-            "type": "click",
-            "resource_id": "screen.submit",
-            "target_selector": {
-                "resource_id": "screen.submit",
-                "class_name": "android.widget.Button",
-                "bounds": [200, 800, 500, 870],
-                "text": "Send",
-                "depth": 9,
-                "element_id": "e_99",
-                "parent_id": "e_77",
-                "ancestor_chain": ["root", "drawer", "panel", "footer"],
-            },
-        }
-        assert quotient_action_key(base_a) == quotient_action_key(base_b)
-
-    def test_distinct_canonical_roots_still_split(self) -> None:
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        a = {
-            "type": "click",
-            "resource_id": "screen.submit",
-            "target_selector": {"resource_id": "screen.submit"},
-        }
-        b = {
-            "type": "click",
-            "resource_id": "screen.cancel",
-            "target_selector": {"resource_id": "screen.cancel"},
-        }
-        assert quotient_action_key(a) != quotient_action_key(b)
-
-    def test_volatile_content_description_dropped(self) -> None:
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        a = {
-            "type": "click",
-            "resource_id": "inbox.thread",
-            "target_selector": {"resource_id": "inbox.thread", "content_description": "3 of 10"},
-        }
-        b = {
-            "type": "click",
-            "resource_id": "inbox.thread",
-            "target_selector": {"resource_id": "inbox.thread", "content_description": "5 of 12"},
-        }
-        assert quotient_action_key(a) == quotient_action_key(b)
-
-
-class TestQuotientActionKeyValueClass:
-    """``quotient_action_key`` normalizes user-entered ``text`` / ``value``
-    payloads via a coarse closed-vocab class so literals do not split
-    actions."""
-
-    def test_distinct_nonempty_literals_collapse(self) -> None:
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        a = {"type": "input_text", "resource_id": "form.memo", "text": "hello"}
-        b = {"type": "input_text", "resource_id": "form.memo", "text": "goodbye"}
-        assert quotient_action_key(a) == quotient_action_key(b)
-
-    def test_empty_vs_nonempty_split(self) -> None:
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        empty = {"type": "input_text", "resource_id": "form.memo", "text": ""}
-        nonempty = {"type": "input_text", "resource_id": "form.memo", "text": "hello"}
-        assert quotient_action_key(empty) != quotient_action_key(nonempty)
-
-    def test_numeric_literals_collapse(self) -> None:
-        """Two distinct numeric inputs collapse to the same coarse
-        class (``numeric``), even if the specific values differ."""
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        a = {"type": "input_text", "resource_id": "form.amount", "text": "100.00"}
-        b = {"type": "input_text", "resource_id": "form.amount", "text": "42"}
-        assert quotient_action_key(a) == quotient_action_key(b)
-
-    def test_canonical_action_key_keeps_literal(self) -> None:
-        """Sanity guard: canonical_action_key still distinguishes the
-        literal values (replay/provenance unaffected)."""
-        from vigil.models.fsm import canonical_action_key
-
-        a = {"type": "input_text", "resource_id": "form.memo", "text": "hello"}
-        b = {"type": "input_text", "resource_id": "form.memo", "text": "goodbye"}
-        assert canonical_action_key(a) != canonical_action_key(b)
 
 
 class TestSiblingAwareActionSurface:
@@ -1393,31 +1218,9 @@ class TestSiblingAwareActionSurface:
         for r in rids:
             assert "*" not in r
 
-    def test_quotient_action_key_does_not_collapse_named_instances_without_context(
-        self,
-    ) -> None:
-        """``quotient_action_key`` operates on a single action dict with
-        no sibling context, so it deliberately does NOT wildcard
-        named-instance row segments. That collapse is handled upstream
-        in ``_action_surface``."""
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        a = {
-            "type": "click",
-            "resource_id": "item.alice.options",
-            "target_resource_id": "item.alice.options",
-        }
-        b = {
-            "type": "click",
-            "resource_id": "item.bob.options",
-            "target_resource_id": "item.bob.options",
-        }
-        assert quotient_action_key(a) != quotient_action_key(b)
-
     def test_canonical_action_key_unchanged_for_row_actions(self) -> None:
         """``canonical_action_key`` still preserves the full per-row rid
-        for replay / dedup / provenance, even when the quotient layer
-        would wildcard it."""
+        for replay / dedup / provenance."""
         from vigil.models.fsm import canonical_action_key
 
         a = {

@@ -19,7 +19,7 @@ def _hash(label: dict[str, Any]) -> str:
     return repr(sorted(label.items()))
 
 
-def _qak(action: dict[str, Any]) -> str:
+def _action_key(action: dict[str, Any]) -> str:
     return str(action.get("type", "")) + ":" + str(action.get("rid", ""))
 
 
@@ -31,7 +31,7 @@ class TestQuotientLabelGrouping:
             transitions=[],
             label_fn=lambda sid: labels[sid],
             label_hash_fn=_hash,
-            action_key_fn=_qak,
+            action_key_fn=_action_key,
         )
         # Two blocks: {s1, s2} and {s3}.
         assert len(result.block_to_members) == 2
@@ -51,11 +51,11 @@ class TestQuotientCompatibility:
             transitions=rows,
             label_fn=lambda sid: labels[sid],
             label_hash_fn=_hash,
-            action_key_fn=_qak,
+            action_key_fn=_action_key,
         )
         # Even though s1 has an outgoing edge and s2 does not, the
         # quotient must NOT split them: s2's empty observation is
-        # consistent with s1's (no contradicting qak).
+        # consistent with s1's (no contradicting action key).
         assert len(result.block_to_members) == 1
 
 
@@ -73,7 +73,7 @@ class TestQuotientConflict:
             transitions=rows,
             label_fn=lambda sid: labels[sid],
             label_hash_fn=_hash,
-            action_key_fn=_qak,
+            action_key_fn=_action_key,
         )
         # s1 and s2 had label A but their click(x) lands in different
         # target blocks (B vs C) -> they must split.
@@ -84,7 +84,7 @@ class TestQuotientConflict:
 
 class TestQuotientSelfGrowthChain:
     """States in a "growth chain" where each member transitions to the
-    next under the same action class must coalesce, because the targets
+    next under the same action key must coalesce, because the targets
     themselves coalesce into the same block."""
 
     def test_chain_collapses(self) -> None:
@@ -99,7 +99,7 @@ class TestQuotientSelfGrowthChain:
             transitions=rows,
             label_fn=lambda sid: labels[sid],
             label_hash_fn=_hash,
-            action_key_fn=_qak,
+            action_key_fn=_action_key,
         )
         # All states land in one block; the click(next) becomes a SELF
         # transition at the block level.
@@ -114,7 +114,7 @@ class TestRepresentativeChoice:
             transitions=[],
             label_fn=lambda sid: labels[sid],
             label_hash_fn=_hash,
-            action_key_fn=_qak,
+            action_key_fn=_action_key,
             initial_state="s2",
         )
         # Block containing the initial state picks it as representative
@@ -133,7 +133,7 @@ class TestEvolutionLog:
             transitions=[],
             label_fn=lambda sid: labels[sid],
             label_hash_fn=_hash,
-            action_key_fn=_qak,
+            action_key_fn=_action_key,
         )
         # Only the {s1, s2} block contributes; the singleton {s3} does not.
         entries = result.evolution_log_entries
@@ -152,7 +152,7 @@ class TestRedirectMap:
             transitions=[],
             label_fn=lambda sid: labels[sid],
             label_hash_fn=_hash,
-            action_key_fn=_qak,
+            action_key_fn=_action_key,
         )
         redirect = result.redirect_map()
         assert redirect == {"s1": "s1", "s2": "s2"}
@@ -165,7 +165,7 @@ class TestEmptyInput:
             transitions=[],
             label_fn=lambda sid: {},
             label_hash_fn=_hash,
-            action_key_fn=_qak,
+            action_key_fn=_action_key,
         )
         assert result.state_to_block == {}
         assert result.block_to_members == {}
@@ -173,21 +173,21 @@ class TestEmptyInput:
 
 
 class TestSchemaOnlyLabelsMergeThread:
-    """End-to-end check that schema-only labels + whitelisted quotient
-    action keys collapse a chat-list-then-thread mini-FSM to two blocks,
+    """End-to-end check that schema-only labels + canonical action
+    refinement collapse a chat-list-then-thread mini-FSM to two blocks,
     even when per-contact thread screens differ in literal title text."""
 
     def test_per_contact_thread_screens_collapse(self) -> None:
+        from vigil.models.fsm import canonical_action_key
         from vigil.neuro.behavioral_signature import (
             compute_quotient_label,
-            quotient_action_key,
             signature_hash,
         )
 
         # Mini-FSM: one list screen plus three thread screens (Alice,
-        # Bob, Carol). The list's row-click action carries a per-contact
-        # instance rid (``inbox.row.it_alice`` etc.) that the quotient
-        # collapses to ``inbox.row``.
+        # Bob, Carol). The row-click actions remain canonical/concrete;
+        # the target thread states still merge because their state labels
+        # match and they have no contradicting outgoing behavior.
         def _row(eid: str, *, parent: str, rid: str) -> dict[str, Any]:
             return {
                 "element_id": eid,
@@ -358,7 +358,7 @@ class TestSchemaOnlyLabelsMergeThread:
             transitions=rows,
             label_fn=lambda sid: labels[sid],
             label_hash_fn=signature_hash,
-            action_key_fn=quotient_action_key,
+            action_key_fn=canonical_action_key,
             initial_state="list",
         )
 
@@ -375,160 +375,3 @@ class TestSchemaOnlyLabelsMergeThread:
             "thread_bob",
             "thread_carol",
         }
-
-
-class TestContextualActionQuotient:
-    """Source-local quotient action keys for named list rows."""
-
-    def test_named_rows_collapse_with_target_block_context(self) -> None:
-        from vigil.neuro.behavioral_action_quotient import infer_contextual_action_quotient
-        from vigil.neuro.behavioral_signature import quotient_action_key
-
-        rows = [
-            TransitionRow(
-                source="catalog",
-                target="detail_espresso",
-                action={
-                    "type": "click",
-                    "resource_id": "catalog.product_row.espresso.open",
-                    "target_resource_id": "catalog.product_row.espresso.open",
-                    "target_text": "Espresso",
-                    "target_class": "android.view.View",
-                },
-            ),
-            TransitionRow(
-                source="catalog",
-                target="detail_latte",
-                action={
-                    "type": "click",
-                    "resource_id": "catalog.product_row.latte.open",
-                    "target_resource_id": "catalog.product_row.latte.open",
-                    "target_text": "Latte",
-                    "target_class": "android.view.View",
-                },
-            ),
-            TransitionRow(
-                source="catalog",
-                target="detail_mocha",
-                action={
-                    "type": "click",
-                    "resource_id": "catalog.product_row.mocha.open",
-                    "target_resource_id": "catalog.product_row.mocha.open",
-                    "target_text": "Mocha",
-                    "target_class": "android.view.View",
-                },
-            ),
-        ]
-
-        assert len({quotient_action_key(row.action) for row in rows}) == 3
-
-        contextual = infer_contextual_action_quotient(
-            rows,
-            target_partition_key=lambda _target: "detail_block",
-        )
-        assert len(contextual.candidates) == 1
-        assert contextual.candidates[0].contextual_rid == "catalog.product.row.<row>.open"
-        assert len(set(contextual.action_keys_by_index.values())) == 1
-
-    def test_named_rows_do_not_collapse_across_distinct_target_blocks(self) -> None:
-        from vigil.neuro.behavioral_action_quotient import infer_contextual_action_quotient
-
-        rows = [
-            TransitionRow(
-                source="catalog",
-                target="detail_espresso",
-                action={
-                    "type": "click",
-                    "resource_id": "catalog.product_row.espresso.open",
-                    "target_resource_id": "catalog.product_row.espresso.open",
-                    "target_text": "Espresso",
-                    "target_class": "android.view.View",
-                },
-            ),
-            TransitionRow(
-                source="catalog",
-                target="detail_latte",
-                action={
-                    "type": "click",
-                    "resource_id": "catalog.product_row.latte.open",
-                    "target_resource_id": "catalog.product_row.latte.open",
-                    "target_text": "Latte",
-                    "target_class": "android.view.View",
-                },
-            ),
-            TransitionRow(
-                source="catalog",
-                target="detail_mocha",
-                action={
-                    "type": "click",
-                    "resource_id": "catalog.product_row.mocha.open",
-                    "target_resource_id": "catalog.product_row.mocha.open",
-                    "target_text": "Mocha",
-                    "target_class": "android.view.View",
-                },
-            ),
-        ]
-
-        contextual = infer_contextual_action_quotient(rows)
-        assert contextual.candidates == ()
-        assert len(set(contextual.action_keys_by_index.values())) == 3
-
-    def test_input_text_fields_do_not_collapse(self) -> None:
-        from vigil.neuro.behavioral_action_quotient import infer_contextual_action_quotient
-
-        rows = [
-            TransitionRow(
-                source="payment",
-                target="payment",
-                action={
-                    "type": "input_text",
-                    "resource_id": "payment.cc_number.input",
-                    "target_resource_id": "payment.cc_number.input",
-                    "text": "4111111111111111",
-                },
-            ),
-            TransitionRow(
-                source="payment",
-                target="payment",
-                action={
-                    "type": "input_text",
-                    "resource_id": "payment.cv_code.input",
-                    "target_resource_id": "payment.cv_code.input",
-                    "text": "123",
-                },
-            ),
-        ]
-
-        contextual = infer_contextual_action_quotient(rows)
-        assert contextual.candidates == ()
-        assert contextual.action_keys_by_index[0] != contextual.action_keys_by_index[1]
-
-    def test_two_functional_controls_do_not_collapse_without_row_evidence(self) -> None:
-        from vigil.neuro.behavioral_action_quotient import infer_contextual_action_quotient
-
-        rows = [
-            TransitionRow(
-                source="timer_setup",
-                target="timer_setup",
-                action={
-                    "type": "click",
-                    "resource_id": "timer.hour.increment",
-                    "target_resource_id": "timer.hour.increment",
-                    "target_class": "android.widget.Button",
-                },
-            ),
-            TransitionRow(
-                source="timer_setup",
-                target="timer_setup",
-                action={
-                    "type": "click",
-                    "resource_id": "timer.minute.increment",
-                    "target_resource_id": "timer.minute.increment",
-                    "target_class": "android.widget.Button",
-                },
-            ),
-        ]
-
-        contextual = infer_contextual_action_quotient(rows)
-        assert contextual.candidates == ()
-        assert contextual.action_keys_by_index[0] != contextual.action_keys_by_index[1]

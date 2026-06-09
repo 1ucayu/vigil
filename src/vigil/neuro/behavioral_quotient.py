@@ -1,13 +1,13 @@
 """Trace-observation-compatible behavioral quotient.
 
 Given an observed FSM as a set of states, transitions, a screen-local
-label function, and a quotient action-class function, this module
+label function, and an action-key function, this module
 computes a partition ``P`` of states such that:
 
 * States in the same block share the screen-local label (initial
   partition).
-* For every quotient action class ``q`` and every state ``s`` in a
-  block ``B``, the *observed* ``(q -> block_id(target))`` map agrees
+* For every action key ``a`` and every state ``s`` in a
+  block ``B``, the *observed* ``(a -> block_id(target))`` map agrees
   with every other state in ``B`` on **shared** keys (compatibility).
   Disjoint observations do not force a split, so under-observed leaves
   coalesce with peers whose observations do not contradict them.
@@ -22,9 +22,9 @@ acceptance rule:
     ALLOW iff (s, a, s') in delta AND Reach(s', goal) AND ...
 
 and the lifted ``delta`` is determinized post-hoc by the builder's
-quotient-aware guard (see
+action-key guard (see
 ``vigil.neuro.fsm_builder.FsmBuilder._coarsen_behavioral_duplicates``),
-which splits any source block that still maps one quotient action class
+which splits any source block that still maps one action key
 to multiple target blocks among high-trust edges.
 
 The implementation is a deliberate **deterministic fixed-point
@@ -48,7 +48,7 @@ from typing import Any
 
 # Sentinel target for intra-block self-loops in the refinement signature.
 # Distinguishes a state that loops back to its own block from one that
-# leaves the block under the same quotient action class.
+# leaves the block under the same action key.
 _SELF_TARGET = "__SELF__"
 
 
@@ -60,7 +60,6 @@ class TransitionRow:
     target: str
     action: Any
     low_trust: bool = False
-    action_key: Hashable | None = None
 
 
 @dataclass
@@ -95,7 +94,7 @@ def quotient_states(
     """Compute the trace-observation-compatible behavioral quotient.
 
     The result is a partition of ``states`` such that, within each
-    block, all members agree on every observed ``(quotient_action_key
+    block, all members agree on every observed ``(action_key
     -> block(target))`` pair. Members may differ on actions one has
     observed and another has not — that's the trace-observation
     relaxation; the caller's determinism guard is responsible for
@@ -111,8 +110,7 @@ def quotient_states(
             representative raw screen).
         label_hash_fn: Hash function over labels (typically
             :func:`vigil.neuro.behavioral_signature.signature_hash`).
-        action_key_fn: Action dict -> hashable quotient action class
-            (typically :func:`quotient_action_key`).
+        action_key_fn: Action dict -> hashable action key.
         initial_state: When supplied, the block containing this state
             picks ``initial_state`` as its representative so the FSM's
             entry never breaks across the rewire.
@@ -169,9 +167,9 @@ def quotient_states(
         outgoing_by_state[row.source].append(row)
 
     # ---- 3. Fixed-point refinement (compatibility-based) ----
-    # For each state we collect its observed (quotient_action_key ->
+    # For each state we collect its observed (action_key ->
     # block(target)) map. Within a block, two states are *compatible*
-    # iff they agree on every quotient action key both have observed;
+    # iff they agree on every action key both have observed;
     # disjoint observations do not force a split, so an under-observed
     # leaf state coalesces with peers whose observations don't
     # contradict it. This matches the verifier-preserving semantics
@@ -180,7 +178,7 @@ def quotient_states(
         own_block = state_to_block[sid]
         out: dict[Hashable, str] = {}
         for row in outgoing_by_state.get(sid, []):
-            qak = row.action_key if row.action_key is not None else action_key_fn(row.action)
+            action_key = action_key_fn(row.action)
             tgt_block = (
                 _SELF_TARGET
                 if state_to_block[row.target] == own_block
@@ -190,7 +188,7 @@ def quotient_states(
             # are pre-existing FSM nondeterminism unrelated to the
             # partition refinement and are handled by the builder's APE
             # refinement step before the quotient runs.
-            out.setdefault(qak, tgt_block)
+            out.setdefault(action_key, tgt_block)
         return out
 
     def _compatible(a: dict[Hashable, str], b: dict[Hashable, str]) -> bool:

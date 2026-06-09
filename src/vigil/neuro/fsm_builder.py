@@ -211,7 +211,7 @@ class FsmBuilder:
         # quotient label (activity, window, dialog flag, action surface
         # with per-instance rids stripped, form coarse status, anchored
         # landmark/label *schema* — no literal title/contact text), then
-        # refined while their observed (quotient_action_key ->
+        # refined while their observed (canonical_action_key ->
         # target_block) maps agree on shared keys. A post-quotient
         # determinism guard splits any block that would still violate
         # the verifier invariant after lifting.
@@ -481,23 +481,18 @@ class FsmBuilder:
              state's representative raw screen (volatile text, per-row
              content, EditText literals, and bounds excluded).
           2. Refinement: split a block whenever its members disagree on
-             ``{ (quotient action key(a), block_id(target)) for outgoing
-             high-trust edges }``. Iterate until fixed point. The action
-             key starts from ``quotient_action_key`` and is optionally
-             refined by a source-local contextual row template inference
-             pass for named list rows.
+             ``{ (canonical_action_key(a), block_id(target)) for outgoing
+             high-trust edges }``. Iterate until fixed point.
           3. Lifting: pick a representative per block (the initial state
              when present, otherwise lowest deterministic id), absorb
              every absorbed state's ``evidence.raw_screen_ids``, and
              rewrite every transition through the redirect map.
           4. Concrete-selector preservation: distinct
-             ``canonical_action_key`` variants under the same quotient
-             action class and same target block are kept as
-             separate ``Transition`` rows (parameterized members of the
-             quotient action class) so replay can locate the concrete
+             ``canonical_action_key`` variants are kept as separate
+             ``Transition`` rows so replay can locate the concrete
              selector.
-          5. Quotient-aware determinism guard: after lifting, any
-             ``(source, quotient action class)`` still mapping to multiple
+          5. Canonical-action determinism guard: after lifting, any
+             ``(source, canonical_action_key)`` still mapping to multiple
              distinct target blocks among high-trust transitions triggers
              a defensive re-split of the offending source block.
 
@@ -510,9 +505,6 @@ class FsmBuilder:
             Number of states absorbed away (i.e., ``initial_states -
             len(blocks)``).
         """
-        from vigil.neuro.behavioral_action_quotient import (
-            infer_contextual_action_quotient,
-        )
         from vigil.neuro.behavioral_quotient import (
             QuotientResult,
             TransitionRow,
@@ -520,7 +512,6 @@ class FsmBuilder:
         )
         from vigil.neuro.behavioral_signature import (
             compute_quotient_label,
-            quotient_action_key,
         )
 
         if not fsm.states:
@@ -563,7 +554,7 @@ class FsmBuilder:
         def _label_fn(state_id: str) -> dict[str, Any]:
             return label_cache.get(state_id, {"state_id": state_id})
 
-        base_rows = [
+        rows = [
             TransitionRow(
                 source=t.source,
                 target=t.target,
@@ -573,113 +564,21 @@ class FsmBuilder:
             for t in fsm.transitions
         ]
 
-        # First run the existing action-local quotient to obtain a stable
-        # target-block context. Named list rows are only generalized when
-        # their targets already agree at this preliminary abstraction
-        # level, preventing a contextual action class from hiding a real
-        # behavioral split.
-        preliminary_result: QuotientResult = quotient_states(
+        result: QuotientResult = quotient_states(
             states=list(fsm.states.keys()),
-            transitions=base_rows,
+            transitions=rows,
             label_fn=_label_fn,
             label_hash_fn=signature_hash,
-            action_key_fn=quotient_action_key,
+            action_key_fn=canonical_action_key,
             initial_state=fsm.initial_state,
         )
-        contextual_actions = infer_contextual_action_quotient(
-            base_rows,
-            target_partition_key=lambda target: preliminary_result.state_to_block.get(
-                target,
-                target,
-            ),
-        )
-        base_qak_by_index = [quotient_action_key(row.action) for row in base_rows]
-        contextual_qak_by_index = {
-            idx: key
-            for idx, key in contextual_actions.action_keys_by_index.items()
-            if key != base_qak_by_index[idx]
-        }
+        transition_action_key_by_index = [canonical_action_key(row.action) for row in rows]
 
-        def _make_rows(
-            active_contextual_keys: dict[int, Hashable],
-        ) -> list[TransitionRow]:
-            return [
-                TransitionRow(
-                    source=row.source,
-                    target=row.target,
-                    action=row.action,
-                    low_trust=row.low_trust,
-                    action_key=active_contextual_keys.get(idx, base_qak_by_index[idx]),
-                )
-                for idx, row in enumerate(base_rows)
-            ]
-
-        def _solve_with_keys(
-            active_contextual_keys: dict[int, Hashable],
-        ) -> tuple[QuotientResult, list[TransitionRow], list[Hashable]]:
-            candidate_rows = _make_rows(active_contextual_keys)
-            candidate_result = quotient_states(
-                states=list(fsm.states.keys()),
-                transitions=candidate_rows,
-                label_fn=_label_fn,
-                label_hash_fn=signature_hash,
-                action_key_fn=quotient_action_key,
-                initial_state=fsm.initial_state,
-            )
-            candidate_qaks = [
-                row.action_key if row.action_key is not None else base_qak_by_index[idx]
-                for idx, row in enumerate(candidate_rows)
-            ]
-            return candidate_result, candidate_rows, candidate_qaks
-
-        def _conflicting_contextual_indices(
-            candidate_result: QuotientResult,
-            candidate_qaks: list[Hashable],
-            active_contextual_keys: dict[int, Hashable],
-        ) -> set[int]:
-            qak_targets: dict[tuple[str, Hashable], set[str]] = defaultdict(set)
-            qak_indices: dict[tuple[str, Hashable], list[int]] = defaultdict(list)
-            for idx, t in enumerate(fsm.transitions):
-                if t.low_trust:
-                    continue
-                src_block = candidate_result.state_to_block.get(t.source, t.source)
-                tgt_block = candidate_result.state_to_block.get(t.target, t.target)
-                if src_block == tgt_block and not self._action_kept_self_loop(t.action):
-                    continue
-                qak = candidate_qaks[idx]
-                group_key = (src_block, qak)
-                qak_targets[group_key].add(tgt_block)
-                qak_indices[group_key].append(idx)
-
-            to_disable: set[int] = set()
-            for group_key, targets in qak_targets.items():
-                if len(targets) <= 1:
-                    continue
-                for idx in qak_indices[group_key]:
-                    if idx in active_contextual_keys:
-                        to_disable.add(idx)
-            return to_disable
-
-        active_contextual_qaks = dict(contextual_qak_by_index)
-        for _contextual_safety_pass in range(8):
-            result, _rows, transition_qak_by_index = _solve_with_keys(active_contextual_qaks)
-            to_disable = _conflicting_contextual_indices(
-                result,
-                transition_qak_by_index,
-                active_contextual_qaks,
-            )
-            if not to_disable:
-                break
-            for idx in to_disable:
-                active_contextual_qaks.pop(idx, None)
-        else:
-            result, _rows, transition_qak_by_index = _solve_with_keys(active_contextual_qaks)
-
-        # ---- 2. Quotient-aware determinism guard. The refinement step
+        # ---- 2. Canonical-action determinism guard. The refinement step
         # already partitions by block-level successors, but low-trust
         # edges were excluded from refinement and the lifted result must
         # still satisfy the high-trust verifier invariant
-        # "(source_block, quotient_action_key) -> at most one target
+        # "(source_block, canonical_action_key) -> at most one target
         # block among high-trust edges". Where a conflict is found we
         # split the offending source block, recompute representatives,
         # and rebuild the redirect map **before** applying it to the
@@ -688,7 +587,7 @@ class FsmBuilder:
         guarded_passes = 0
         while guarded_passes < 16:
             guarded_passes += 1
-            qak_targets: dict[tuple[str, Hashable], set[str]] = defaultdict(set)
+            action_key_targets: dict[tuple[str, Hashable], set[str]] = defaultdict(set)
             for idx, t in enumerate(fsm.transitions):
                 if t.low_trust:
                     continue
@@ -696,23 +595,23 @@ class FsmBuilder:
                 tgt_p = redirect.get(t.target, t.target)
                 if src_p == tgt_p and not self._action_kept_self_loop(t.action):
                     continue
-                qak = transition_qak_by_index[idx]
+                action_key = transition_action_key_by_index[idx]
                 src_block = result.state_to_block.get(t.source) or src_p
                 tgt_block = result.state_to_block.get(t.target) or tgt_p
-                qak_targets[(src_block, qak)].add(tgt_block)
+                action_key_targets[(src_block, action_key)].add(tgt_block)
             conflicts = [
-                (src_block, qak, tgts)
-                for (src_block, qak), tgts in qak_targets.items()
+                (src_block, action_key, tgts)
+                for (src_block, action_key), tgts in action_key_targets.items()
                 if len(tgts) > 1
             ]
             if not conflicts:
                 break
-            # Resplit each offending source block by (qak, target_block).
-            for src_block, _qak, _tgts in conflicts:
+            # Resplit each offending source block by (action_key, target_block).
+            for src_block, _action_key, _tgts in conflicts:
                 members = result.block_to_members.get(src_block)
                 if not members or len(members) <= 1:
                     continue
-                # Group members by the discriminating (qak -> tgt_block)
+                # Group members by the discriminating (action_key -> tgt_block)
                 # pattern across all of their outgoing high-trust edges.
                 pattern_to_states: dict[tuple[tuple[Hashable, str], ...], list[str]] = defaultdict(
                     list
@@ -723,7 +622,7 @@ class FsmBuilder:
                         if t.low_trust or t.source != sid:
                             continue
                         pattern.setdefault(
-                            transition_qak_by_index[idx],
+                            transition_action_key_by_index[idx],
                             result.state_to_block.get(t.target, t.target),
                         )
                     pattern_to_states[
@@ -757,22 +656,23 @@ class FsmBuilder:
             redirect = result.redirect_map()
 
         # ---- 2b. Final safety net. The in-loop guard groups members by
-        # their *full* outgoing ``(qak -> tgt_block)`` pattern with
+        # their *full* outgoing ``(action_key -> tgt_block)`` pattern with
         # ``setdefault`` (first observation wins). That grouping can
-        # silently mask a single-qak conflict when a state's first
-        # observation of qak happens to match another state's only
+        # silently mask a single-action conflict when a state's first
+        # observation of an action key happens to match another state's only
         # observation. The safety net rescans the post-loop redirect
-        # map and, for every ``(source_block, qak)`` that still maps to
+        # map and, for every ``(source_block, canonical_action_key)`` that still maps to
         # multiple target blocks among high-trust edges, splits the
-        # offending source block by ``tgt_block`` for that specific qak
-        # (members that didn't observe qak stay in the largest piece).
+        # offending source block by ``tgt_block`` for that specific
+        # action key (members that didn't observe it stay in the largest
+        # piece).
         # The redirect is rebuilt before being applied to the live FSM,
         # so the verifier invariant is never violated by a behavioral
         # merge. A ``builder_diagnostic`` evolution-log entry records
         # what was split for downstream comparators.
         for _safety_pass in range(8):
-            qak_targets_final: dict[tuple[str, Hashable], set[str]] = defaultdict(set)
-            qak_state_to_tgt: dict[tuple[str, Hashable], dict[str, str]] = defaultdict(dict)
+            action_key_targets_final: dict[tuple[str, Hashable], set[str]] = defaultdict(set)
+            action_key_state_to_tgt: dict[tuple[str, Hashable], dict[str, str]] = defaultdict(dict)
             for idx, t in enumerate(fsm.transitions):
                 if t.low_trust:
                     continue
@@ -780,23 +680,23 @@ class FsmBuilder:
                 tgt_p = redirect.get(t.target, t.target)
                 if src_p == tgt_p and not self._action_kept_self_loop(t.action):
                     continue
-                qak = transition_qak_by_index[idx]
+                action_key = transition_action_key_by_index[idx]
                 src_block = result.state_to_block.get(t.source) or src_p
                 tgt_block = result.state_to_block.get(t.target) or tgt_p
-                qak_targets_final[(src_block, qak)].add(tgt_block)
-                qak_state_to_tgt[(src_block, qak)].setdefault(t.source, tgt_block)
+                action_key_targets_final[(src_block, action_key)].add(tgt_block)
+                action_key_state_to_tgt[(src_block, action_key)].setdefault(t.source, tgt_block)
             residual_conflicts = [
-                (src_block, qak, tgts)
-                for (src_block, qak), tgts in qak_targets_final.items()
+                (src_block, action_key, tgts)
+                for (src_block, action_key), tgts in action_key_targets_final.items()
                 if len(tgts) > 1
             ]
             if not residual_conflicts:
                 break
-            for src_block, qak, tgts in residual_conflicts:
+            for src_block, action_key, tgts in residual_conflicts:
                 members = set(result.block_to_members.get(src_block, set()))
                 if len(members) <= 1:
                     continue
-                state_to_tgt = qak_state_to_tgt.get((src_block, qak), {})
+                state_to_tgt = action_key_state_to_tgt.get((src_block, action_key), {})
                 groups: dict[str, list[str]] = defaultdict(list)
                 no_obs: list[str] = []
                 for sid in members:
@@ -835,7 +735,9 @@ class FsmBuilder:
                         "action": "builder_diagnostic",
                         "kind": "quotient_residual_conflict",
                         "source_block": src_block,
-                        "quotient_action_key": (list(qak) if isinstance(qak, tuple) else qak),
+                        "canonical_action_key": (
+                            list(action_key) if isinstance(action_key, tuple) else action_key
+                        ),
                         "distinct_target_blocks": sorted(tgts),
                         "split_groups": {tb: sorted(states) for tb, states in ordered},
                     }
@@ -843,8 +745,7 @@ class FsmBuilder:
             redirect = result.redirect_map()
 
         # ---- 3. Apply the redirect map to the live FSM. Concrete-selector
-        # variants under one quotient class survive because dedup is keyed
-        # on the *raw* canonical_action_key, not the quotient class.
+        # variants survive because dedup is keyed on canonical_action_key.
         absorbed_total = self._apply_redirect_map(
             fsm,
             redirect,

@@ -57,9 +57,9 @@ Current verified snapshot after the AbstractState schema migration and behaviora
 - Reader-side compatibility still accepts schema versions 2/3/4.
 - Settings validation baseline: `total=385`, `ok=369`, `action_signature_mismatch=14`, `template_binding_missing=1`, `transition_not_in_fsm=1`.
 - Fidelity replay baseline: `107/107 OK`.
-- Behavioral quotient focused baseline: `195 passed`, `4 skipped` for `tests/test_behavioral_signature.py tests/test_behavioral_quotient.py tests/test_fsm_builder.py tests/test_replay_verifier.py tests/test_semantic_grounder.py`.
+- Behavioral quotient focused baseline: `183 passed`, `4 skipped` for `tests/test_behavioral_signature.py tests/test_behavioral_quotient.py tests/test_fsm_builder.py tests/test_replay_verifier.py tests/test_semantic_grounder.py`.
 - Full suite baseline: `726 passed`, `4 skipped`, `1 failed`; the remaining known failure is `tests/test_llm_client.py::TestProxyProvider::test_proxy_images_fallback`, unrelated to FSM construction.
-- Fidelity generated-vs-gold snapshot after quotienting: market `14/13`, bank `11/8`, chat `19/7`, clock `14/10`; all four generated FSMs have `0` high-trust `(state, quotient_action_key) -> multiple targets` conflicts.
+- Fidelity generated-vs-gold snapshot after canonical-action state quotienting: market `14/13`, bank `11/8`, chat `13/7`, clock `14/10`; all four generated FSMs have `0` high-trust `(state, canonical_action_key) -> multiple targets` conflicts.
 - Known residual fidelity gaps: market `payment_dialog` / `remove_dialog` are marker/instrumentation mapping gaps; bank residual splits are form-status variants; chat `thread` is still split by form-status and optional repeated-row action presence; clock residual split is `timer_setup`; `system.back` and natural `$tick_elapsed_eq_duration` remain out-of-scope coverage/environment gaps.
 
 ---
@@ -140,10 +140,10 @@ Current FSM action-scope boundary:
 Current FSM abstraction/refinement baseline:
 
 - State construction uses a post-build, verifier-preserving behavioral quotient, implemented mainly in `src/vigil/neuro/behavioral_signature.py`, `src/vigil/neuro/behavioral_quotient.py`, and `src/vigil/neuro/fsm_builder.py`.
-- The quotient is a deterministic, trace-observation-compatible partition refinement, not exact textbook bisimulation/DFA minimization. States may merge when their observed `quotient_action_key -> target_block` maps are compatible; a final determinism guard preserves the verifier invariant.
+- The quotient is a deterministic, trace-observation-compatible partition refinement, not exact textbook bisimulation/DFA minimization. States may merge when their observed `canonical_action_key -> target_block` maps are compatible; a final determinism guard preserves the verifier invariant.
 - `compute_quotient_label()` is schema-oriented: it keeps activity/window/dialog boundaries, action-surface affordances and enabledness/checked/selected facts, coarse form status, coarse error/status facts, and repeated-row action slots. It excludes volatile text, literal title/contact/message values, raw EditText contents, bounds, capture-local element ids, and repeated-list row content.
 - `_action_surface()` performs sibling-aware repeated-row canonicalization for same-parent/same-skeleton row actions, wildcarding varying row-instance segments only under conservative repeated-row eligibility. This is what collapses named row actions such as per-contact message options without merging functional controls like pause/lap/reset.
-- `quotient_action_key()` is for quotient refinement only. It uses whitelisted selector fields and coarse value classes, while `canonical_action_key()` remains concrete for replay, transition deduplication, and provenance. Do not replace or weaken `canonical_action_key()` with quotient keys.
+- `canonical_action_key()` is the only action identity used for behavioral refinement, transition deduplication, provenance, replay, and runtime verification. The quotient is on states only; do not introduce a separate quotient action alphabet or weaken canonical action identity.
 - Do not hardcode fidelity app package names, resource ids, contacts, product names, timer labels, or other benchmark-specific strings in the abstraction. If a residual split remains, report whether it is caused by label fields, transition refinement, missing exploration coverage, or an environment transition before proposing a fix.
 
 ---

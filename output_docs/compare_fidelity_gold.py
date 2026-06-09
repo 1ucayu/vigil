@@ -156,7 +156,7 @@ def _residual_split_reasons(
       the cluster. The first divergent field is named.
     * ``transition_refinement_conflict``: all label hashes match but
       states stayed separate (the post-quotient determinism guard
-      isolated them because their high-trust ``(quotient_action_key ->
+      isolated them because their high-trust ``(canonical_action_key ->
       target_block)`` maps disagreed).
 
     Returns a dict ``{marker -> [ {state_id, reason, detail} ]}``. No
