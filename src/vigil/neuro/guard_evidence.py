@@ -323,7 +323,7 @@ def _static_prior_hints(
 
     for decl in app_prior.widget_declarations:
         hints.append(
-            "layout_widget:" f"{decl.layout_file} id={decl.widget_id!r} class={decl.widget_class!r}"
+            f"layout_widget:{decl.layout_file} id={decl.widget_id!r} class={decl.widget_class!r}"
         )
 
     return hints
@@ -332,6 +332,19 @@ def _static_prior_hints(
 # ---------------------------------------------------------------------------
 # Public builders
 # ---------------------------------------------------------------------------
+
+
+def static_prior_hints(
+    source: AbstractState | None,
+    app_prior: AppPrior | None,
+) -> list[str]:
+    """Public, deterministic static-prior hint list (priors only, never proof).
+
+    Thin wrapper over :func:`_static_prior_hints` so the per-state invariant evidence
+    builder can reuse the exact same APK-prior hint formatting as guard evidence without
+    duplicating it. Returns an empty list when no prior is supplied.
+    """
+    return _static_prior_hints(source, app_prior)
 
 
 def build_guard_evidence_for_transition(

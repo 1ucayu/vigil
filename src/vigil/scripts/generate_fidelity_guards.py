@@ -22,6 +22,11 @@ from vigil.neuro.guard_generation_pipeline import (
     guard_action_schema_key,
     write_guard_generation_report,
 )
+from vigil.neuro.invariant_generation_pipeline import (
+    generate_contract_invariants,
+    write_invariant_generation_report,
+)
+from vigil.neuro.invariant_guard_llm import DEFAULT_INVARIANT_PROMPT
 from vigil.neuro.visual_grounder import (
     ground_fsm_visual_annotations,
     write_visual_grounding_report,
@@ -145,6 +150,46 @@ def main() -> None:
         help="Disable source/target screenshot attachments for LLM guard generation.",
     )
     parser.add_argument(
+        "--skip-invariants",
+        action="store_true",
+        help="Skip contract-first state-invariant generation.",
+    )
+    parser.add_argument(
+        "--invariant-source",
+        choices=["deterministic", "llm", "hybrid", "audit"],
+        default="deterministic",
+        help=(
+            "State-invariant candidate source: deterministic rules, LLM packet, hybrid "
+            "(LLM first, deterministic fallback), or audit replay (reuse prior packet "
+            "audits with no model calls)."
+        ),
+    )
+    parser.add_argument(
+        "--invariant-prompt",
+        default=DEFAULT_INVARIANT_PROMPT,
+        help="System-prompt file name (under src/vigil/system_prompt/) for the LLM invariant path.",
+    )
+    parser.add_argument(
+        "--invariant-no-images",
+        action="store_true",
+        help="Disable observation screenshot attachments for LLM invariant generation.",
+    )
+    parser.add_argument(
+        "--invariant-audit-root",
+        type=Path,
+        default=None,
+        help=(
+            "Report root containing prior per-app invariant_generation.json files for "
+            "--invariant-source audit. Defaults to --report-root."
+        ),
+    )
+    parser.add_argument(
+        "--min-invariant-observations",
+        type=int,
+        default=2,
+        help="Minimum replay observations required before attaching a runtime state invariant.",
+    )
+    parser.add_argument(
         "--force-visual",
         action="store_true",
         help="Regenerate visual annotations even when state annotations already exist.",
@@ -158,10 +203,14 @@ def main() -> None:
     args = parser.parse_args()
 
     selected = [spec for spec in FIDELITY_APPS if spec.name in set(args.apps)]
-    # The LLM client is needed for visual grounding and for the LLM/hybrid guard sources.
-    # Deterministic guard generation must never query or construct the model.
+    # The LLM client is needed for visual grounding and for the LLM/hybrid guard/invariant
+    # sources. Deterministic and audit generation must never query or construct the model.
     need_llm_for_guards = (not args.skip_guards) and args.guard_source in ("llm", "hybrid")
-    need_llm = (not args.skip_visual) or need_llm_for_guards
+    need_llm_for_invariants = (not args.skip_invariants) and args.invariant_source in (
+        "llm",
+        "hybrid",
+    )
+    need_llm = (not args.skip_visual) or need_llm_for_guards or need_llm_for_invariants
     llm = None
     if need_llm:
         model = args.model or discover_default_model(args.models_url)
@@ -194,6 +243,12 @@ def main() -> None:
                 guard_prompt=args.guard_prompt,
                 guard_use_images=not args.guard_no_images,
                 guard_audit_root=args.guard_audit_root,
+                skip_invariants=args.skip_invariants,
+                invariant_source=args.invariant_source,
+                invariant_prompt=args.invariant_prompt,
+                invariant_use_images=not args.invariant_no_images,
+                invariant_audit_root=args.invariant_audit_root,
+                min_invariant_observations=args.min_invariant_observations,
             )
         )
 
@@ -253,6 +308,12 @@ def run_one_app(
     guard_prompt: str = DEFAULT_GUARD_PROMPT,
     guard_use_images: bool = True,
     guard_audit_root: Path | None = None,
+    skip_invariants: bool = False,
+    invariant_source: str = "deterministic",
+    invariant_prompt: str = DEFAULT_INVARIANT_PROMPT,
+    invariant_use_images: bool = True,
+    invariant_audit_root: Path | None = None,
+    min_invariant_observations: int = 2,
 ) -> dict[str, Any]:
     app_data_dir = data_root / spec.package
     bundle_dir = bundle_root / spec.package
@@ -318,6 +379,44 @@ def run_one_app(
         )
         write_guard_generation_report(guard_report, app_report_dir / "guard_generation.json")
 
+    invariant_report: list[dict[str, Any]] = []
+    if not skip_invariants:
+        logger.info(
+            f"[{spec.name}] contract invariant generation ({invariant_source}) "
+            f"over {len(fsm.states)} states"
+        )
+        invariant_audit_replay = None
+        if invariant_source == "audit":
+            audit_report_root = invariant_audit_root or report_root
+            audit_report_path = audit_report_root / spec.name / "invariant_generation.json"
+            if not audit_report_path.exists():
+                raise SystemExit(
+                    f"Invariant audit report missing for {spec.name}: {audit_report_path}"
+                )
+            loaded = json.loads(audit_report_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, list):
+                raise SystemExit(f"Invariant audit report is not a list: {audit_report_path}")
+            invariant_audit_replay = loaded
+        invariant_report = generate_contract_invariants(
+            fsm,
+            raw_screens,
+            prior,
+            invariant_source=invariant_source,  # type: ignore[arg-type]
+            llm=llm if invariant_source in ("llm", "hybrid") else None,
+            invariant_prompt=invariant_prompt,
+            use_images=invariant_use_images,
+            llm_audit_dir=(
+                app_report_dir / "llm_invariant_attempts"
+                if invariant_source in ("llm", "hybrid")
+                else None
+            ),
+            llm_audit_report=invariant_audit_replay,
+            min_runtime_observations=min_invariant_observations,
+        )
+        write_invariant_generation_report(
+            invariant_report, app_report_dir / "invariant_generation.json"
+        )
+
     output_path = _output_fsm_path(spec.package, fsm_path, output_root)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fsm.serialize(output_path)
@@ -342,6 +441,15 @@ def run_one_app(
         ),
         "guard_origin_counts": _count_field(guard_report, "guard_origin"),
         "guard_status_counts": _guard_status_counts(fsm),
+        "invariant_source": invariant_source,
+        "invariants_attached": sum(len(s.invariant_specs) for s in fsm.states.values()),
+        "invariant_states": sum(1 for s in fsm.states.values() if s.invariant_specs),
+        "invariants_admitted_run": sum(
+            len(row.get("invariants_admitted", [])) for row in invariant_report
+        ),
+        "invariant_hints": sum(len(row.get("effect_hints", [])) for row in invariant_report),
+        "invariants_rejected": sum(len(row.get("rejected", [])) for row in invariant_report),
+        "min_invariant_observations": min_invariant_observations,
     }
     (app_report_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False),

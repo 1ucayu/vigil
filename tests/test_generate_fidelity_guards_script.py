@@ -119,3 +119,79 @@ def test_audit_skip_visual_builds_no_llm(monkeypatch, tmp_path) -> None:
     assert captured["guard_source"] == "audit"
     assert captured["guard_audit_root"] == audit_root
     assert captured["llm"] is None
+
+
+def test_invariant_deterministic_skip_all_builds_no_llm(monkeypatch, tmp_path) -> None:
+    # Deterministic invariants with visual+guards skipped must not construct a model.
+    def _boom(*_a, **_k):
+        raise AssertionError("LLM client must not be constructed for deterministic invariants")
+
+    monkeypatch.setattr(script, "LlmClient", _boom)
+    monkeypatch.setattr(
+        script,
+        "discover_default_model",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("model discovery called")),
+    )
+
+    captured = _run_main(
+        monkeypatch,
+        tmp_path,
+        ["--skip-visual", "--skip-guards", "--invariant-source", "deterministic"],
+    )
+    assert captured["invariant_source"] == "deterministic"
+    assert captured["skip_invariants"] is False
+    assert captured["min_invariant_observations"] == 2
+    assert captured["llm"] is None
+
+
+def test_invariant_source_llm_builds_llm(monkeypatch, tmp_path) -> None:
+    # The LLM invariant source needs a client even when visual + guards are skipped.
+    sentinel = object()
+    monkeypatch.setattr(script, "discover_default_model", lambda *_a, **_k: "fake-model")
+    monkeypatch.setattr(script, "LlmClient", lambda *_a, **_k: sentinel)
+
+    captured = _run_main(
+        monkeypatch,
+        tmp_path,
+        ["--skip-visual", "--skip-guards", "--invariant-source", "llm"],
+    )
+    assert captured["invariant_source"] == "llm"
+    assert captured["invariant_prompt"] == script.DEFAULT_INVARIANT_PROMPT
+    assert captured["min_invariant_observations"] == 2
+    assert captured["llm"] is sentinel
+
+
+def test_min_invariant_observations_passthrough(monkeypatch, tmp_path) -> None:
+    captured = _run_main(
+        monkeypatch,
+        tmp_path,
+        [
+            "--skip-visual",
+            "--skip-guards",
+            "--invariant-source",
+            "deterministic",
+            "--min-invariant-observations",
+            "3",
+        ],
+    )
+    assert captured["min_invariant_observations"] == 3
+
+
+def test_skip_invariants_passthrough(monkeypatch, tmp_path) -> None:
+    def _boom(*_a, **_k):
+        raise AssertionError("LLM client must not be constructed")
+
+    monkeypatch.setattr(script, "LlmClient", _boom)
+    monkeypatch.setattr(
+        script,
+        "discover_default_model",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("model discovery called")),
+    )
+
+    captured = _run_main(
+        monkeypatch,
+        tmp_path,
+        ["--skip-visual", "--skip-guards", "--skip-invariants"],
+    )
+    assert captured["skip_invariants"] is True
+    assert captured["llm"] is None
