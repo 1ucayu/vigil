@@ -1,19 +1,24 @@
 """LLM-backed, contract-first guard generation (Stage 4).
 
-This module asks an LLM to produce a typed :class:`~vigil.models.guard.GuardContract`
-(the Hoare precondition ``Gamma``) for a *single, already-known* transition, then parses
-and validates that JSON into a :class:`~vigil.models.guard.LlmGuardContractCandidate`.
+This module asks an LLM to produce a typed precondition
+:class:`~vigil.models.guard.GuardContract` (the Hoare precondition ``Gamma``) for a
+*single, already-known* transition, then parses and validates that JSON into a
+:class:`~vigil.models.guard.LlmGuardContractCandidate`. The system prompt may also ask
+the model to propose a target-side postcondition ``Psi`` for audit/future admission;
+the current parser consumes the compatibility ``contract`` / precondition field.
 
 Design constraints (CLAUDE.md → "DSL Guard Generation Direction"; plan):
 
 - The LLM never emits free-form DSL as its primary artifact — it emits typed contract
   JSON. Compilation/admission to executable DSL is a later deterministic step.
 - The LLM may not create/modify FSM states, actions, transitions, replay confidence, or
-  runtime verdicts. Target-state evidence is effect-only.
-- ``$bind.*`` is metadata only: it appears in ``contract.binding_requirements``, never as a
-  predicate / :class:`~vigil.models.guard.ValueRef`. A predicate's ``expected.kind`` may
-  only be ``literal`` or ``intent`` on this path; anything else makes the candidate a
-  rejection (the compiler/admission would drop it anyway).
+  runtime verdicts. Target-state evidence is the read scope for postcondition ``Psi``
+  and effect-only evidence for precondition ``Gamma``.
+- ``$bind.*`` is metadata only: it appears in ``contract.binding_requirements`` /
+  ``precondition.binding_requirements``, never as a predicate /
+  :class:`~vigil.models.guard.ValueRef`. A predicate's ``expected.kind`` may only be
+  ``literal`` or ``intent`` on this path; anything else makes the candidate a rejection
+  (the compiler/admission would drop it anyway).
 - Parsing is defensive: any failure returns a rejected candidate (with a reason) rather
   than raising into the pipeline.
 """
@@ -31,6 +36,7 @@ from vigil.models.guard import (
     GuardContract,
     LlmGuardContractCandidate,
     RiskLevel,
+    TransitionPostcondition,
 )
 from vigil.system_prompt import load_system_prompt
 
@@ -154,11 +160,12 @@ def _screen_section(title: str, screen: ScreenEvidence, *, source_readable: bool
         image_status = "attached as image if the file exists"
 
     purpose = (
-        "This is P/source: the ONLY UI state that guard predicates may read."
+        "This is P/source: the ONLY UI state that precondition Gamma may read."
         if source_readable
         else (
-            "This is Q/target: EFFECT-ONLY evidence for understanding the known action. "
-            "Do NOT reference target-only elements in guard predicates."
+            "This is Q/target: postcondition Psi read scope and EFFECT-ONLY evidence "
+            "for precondition Gamma. Do NOT reference target-only elements in "
+            "precondition predicates."
         )
     )
 
@@ -203,7 +210,7 @@ def guard_image_paths(evidence: GuardEvidence) -> tuple[list[Path], list[str]]:
         (
             "TARGET",
             evidence.target_screen,
-            "TARGET screenshot: post-state Q/effect-only. Do not predicate on target-only UI.",
+            "TARGET screenshot: post-state Q. Use for Psi; effect-only for Gamma.",
         ),
     ):
         path = _existing_image_path(screen.screenshot_path)
@@ -219,7 +226,7 @@ def guard_image_paths(evidence: GuardEvidence) -> tuple[list[Path], list[str]]:
 
 
 def build_guard_user_prompt(evidence: GuardEvidence) -> str:
-    """Build the Hoare-style user prompt for one transition's guard contract."""
+    """Build the Hoare-style user prompt for one transition's pre/post contract."""
     reg_lines = _registry_lines(evidence.source_registry)
     sib_lines = _sibling_lines(evidence.sibling_actions)
     hints = evidence.static_prior_hints
@@ -227,10 +234,13 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
     sections: list[str] = []
     sections.append(
         "/* Hoare-style Transition Evidence */\n"
-        "Generate only the pre-action GuardContract Gamma for this transition:\n"
+        "Generate a transition pre/post contract for this transition:\n"
         "{ Gamma(source screen P, known_action properties, frozen $intent.*) } "
-        "known_action { target_state / effect-only evidence Q }.\n"
-        "$bind.* needs are metadata in binding_requirements, not executable Gamma predicates."
+        "known_action { I(target state Q) AND "
+        "Psi(source, known_action, target, frozen $intent.*) }.\n"
+        "The top-level `contract` field must be an exact compatibility alias of "
+        "`precondition` for the current parser.\n"
+        "$bind.* needs are metadata in binding_requirements, not executable Gamma/Psi predicates."
     )
 
     sections.append(
@@ -269,7 +279,7 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
 
     sections.append(
         _screen_section(
-            "Post-state Evidence: Q / target (effect-only)",
+            "Post-state Evidence: Q / target (Psi read scope; effect-only for Gamma)",
             evidence.target_screen,
             source_readable=False,
         )
@@ -277,7 +287,8 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
 
     sections.append(
         "[Source-to-target semantic/evidence diff]\n"
-        "Purpose: Effect-only semantic disambiguation; do not predicate on target-only UI.\n"
+        "Purpose: Postcondition/effect disambiguation; do not predicate on target-only UI "
+        "in precondition Gamma.\n"
         f"- target_state_name: {evidence.target_state_name!r}\n"
         f"- target_page_function: {evidence.target_page_function!r}\n"
         f"- target_screen_ids: {evidence.target_screen_ids}\n"
@@ -292,24 +303,31 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
 
     sections.append(
         "[Global Information / Static APK Priors]\n"
-        "Purpose: Hints only; never transition proof, runtime proof, or post-state checks.\n"
-        + ("\n".join(f"- {h}" for h in hints) if hints else "- (none)")
+        "Purpose: Hints only; never transition proof, runtime proof, or proof of "
+        "postcondition effects.\n" + ("\n".join(f"- {h}" for h in hints) if hints else "- (none)")
     )
 
     sections.append(
         "[Verifier Basis]\n"
-        "- Output typed GuardContract JSON.\n"
+        "- Output typed TransitionPrePostContract JSON with precondition, postcondition, "
+        "and compatibility contract.\n"
+        "- `contract` must be an exact alias of `precondition`; current admission consumes "
+        "that precondition path.\n"
         "- Predicates compile to conjunctions over: read, value, action, contains, count, "
         "in_state, time_in.\n"
-        "- Predicates may reference only source widget aliases, proposed action properties, "
-        "literal values, and declared frozen $intent.* slots.\n"
+        "- Precondition predicates may reference only source widget aliases, proposed action "
+        "properties, literal values, and declared frozen $intent.* slots.\n"
+        "- Postcondition predicates may reference only target/effect facts, literal values, "
+        "and declared frozen $intent.* slots supported by Q/diff evidence.\n"
         "- Put UI/action-side $bind.* needs in binding_requirements metadata only; never "
         "inside executable predicates."
     )
 
     sections.append(
         "[Output]\n"
-        "Return JSON only, using the GuardContract object described in the system prompt.\n"
+        "Return JSON only, using the TransitionPrePostContract object described in the "
+        "system prompt.\n"
+        "Repeat precondition exactly in the compatibility contract field.\n"
         "Put any $bind.* UI-side binding in binding_requirements, never in predicates."
     )
 
@@ -329,15 +347,36 @@ def _coerce_candidate(parsed: Any) -> tuple[LlmGuardContractCandidate | None, st
     if not isinstance(parsed, dict):
         return None, "LLM output is not a JSON object"
 
-    # Accept either a wrapper {contract: {...}, ...} or a bare contract object.
-    contract_payload = parsed.get("contract") if "contract" in parsed else parsed
-    if not isinstance(contract_payload, dict):
+    # Accept the legacy wrapper {contract: {...}}, the new transition wrapper
+    # {precondition: {...}, postcondition: {...}}, or a bare contract object.
+    if isinstance(parsed.get("contract"), dict):
+        contract_payload = parsed["contract"]
+    elif isinstance(parsed.get("precondition"), dict):
+        contract_payload = parsed["precondition"]
+    elif "contract" in parsed:
         return None, "missing 'contract' object"
+    elif "precondition" in parsed:
+        return None, "missing 'precondition' object"
+    else:
+        contract_payload = parsed
+    if not isinstance(contract_payload, dict):
+        return None, "missing 'contract' or 'precondition' object"
 
     try:
         contract = GuardContract.model_validate(contract_payload)
     except ValidationError as exc:
         return None, f"contract schema validation failed: {exc.error_count()} error(s)"
+
+    postcondition = None
+    parse_warnings: list[str] = []
+    postcondition_payload = parsed.get("postcondition")
+    if isinstance(postcondition_payload, dict):
+        try:
+            postcondition = TransitionPostcondition.model_validate(postcondition_payload)
+        except ValidationError as exc:
+            parse_warnings.append(
+                f"postcondition schema validation failed: {exc.error_count()} error(s)"
+            )
 
     # Boundary enforcement: predicates may only compare against literal / intent values.
     # Anything else (action/read RHS, or a smuggled $bind reference) is not allowed on the
@@ -349,17 +388,39 @@ def _coerce_candidate(parsed: Any) -> tuple[LlmGuardContractCandidate | None, st
                 f"predicate expected.kind={kind!r} not allowed on the LLM path "
                 "($bind.* / action / read RHS must be metadata, not a predicate)"
             )
+    if postcondition is not None:
+        for pred in postcondition.predicates:
+            kind = pred.expected.kind if pred.expected is not None else None
+            if kind is not None and kind not in _ALLOWED_EXPECTED_KINDS:
+                return None, (
+                    f"postcondition predicate expected.kind={kind!r} not allowed on "
+                    "the LLM path ($bind.* / action / read RHS must be metadata, "
+                    "not a predicate)"
+                )
 
     incomplete = bool(
         parsed.get("semantic_binding_incomplete", contract.semantic_binding_incomplete)
     )
     contract.semantic_binding_incomplete = contract.semantic_binding_incomplete or incomplete
+    postcondition_incomplete = bool(
+        parsed.get(
+            "postcondition_incomplete",
+            postcondition.intent_effect_incomplete if postcondition is not None else False,
+        )
+    )
+    if postcondition is not None:
+        postcondition.intent_effect_incomplete = (
+            postcondition.intent_effect_incomplete or postcondition_incomplete
+        )
     rejection_reason = str(parsed.get("rejection_reason") or "")
     return (
         LlmGuardContractCandidate(
             contract=contract,
+            postcondition=postcondition,
             semantic_binding_incomplete=contract.semantic_binding_incomplete,
+            postcondition_incomplete=postcondition_incomplete,
             rejection_reason=rejection_reason,
+            parse_errors=parse_warnings,
         ),
         "",
     )
@@ -413,12 +474,12 @@ def _merge_candidates(
 
 
 def _repair_prompt(user_prompt: str, candidate: LlmGuardContractCandidate) -> str:
-    """Ask the model to repair only its JSON contract output."""
+    """Ask the model to repair only its JSON pre/post contract output."""
     raw = candidate.raw_response or ""
-    reason = candidate.rejection_reason or "invalid GuardContract JSON"
+    reason = candidate.rejection_reason or "invalid transition pre/post contract JSON"
     return (
         "Your previous guard-contract response could not be admitted because it was not "
-        f"valid GuardContract JSON: {reason}.\n\n"
+        f"valid transition pre/post contract JSON: {reason}.\n\n"
         "Return JSON only. Do not use markdown, prose, comments, or multiple JSON objects.\n\n"
         "[Original transition evidence]\n"
         f"{user_prompt}\n\n"

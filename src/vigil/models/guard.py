@@ -145,6 +145,23 @@ class BindingRequirement(BaseModel):
     source: str = "generated"
 
 
+class EffectRequirement(BaseModel):
+    """A typed, audit-side postcondition/effect requirement.
+
+    These records describe what should be checked after a transition arrives at its
+    target state, such as content appearing, an item disappearing, or a value
+    changing. They are metadata until a dedicated postcondition admission/evaluator
+    is implemented.
+    """
+
+    name: str
+    effect_kind: str = ""
+    description: str = ""
+    evidence: str = ""
+    source: str = "generated"
+    unsupported_reason: str = ""
+
+
 class GuardContract(BaseModel):
     """Typed, pre-compilation description of a transition's intended guard.
 
@@ -174,17 +191,44 @@ class GuardContract(BaseModel):
     semantic_binding_incomplete: bool = False
 
 
+class TransitionPostcondition(BaseModel):
+    """Typed, pre-admission description of a transition's intended postcondition.
+
+    ``TransitionPostcondition`` is the target/effect-side sibling of
+    :class:`GuardContract`: it records candidate ``Psi`` predicates and effect
+    obligations proposed by the LLM. Executable predicates are admitted separately into
+    ``Transition.postcondition``; effect requirements remain audit-only metadata unless
+    a future evaluator can express them.
+    """
+
+    kind: str = "unknown"
+    required: bool = False
+    risk_level: RiskLevel = RiskLevel.UNKNOWN
+    required_slots: list[IntentSlot] = Field(default_factory=list)
+    predicates: list[PredicateSpec] = Field(default_factory=list)
+    effect_requirements: list[EffectRequirement] = Field(default_factory=list)
+    intent_effect_required: bool = False
+    intent_effect_incomplete: bool = False
+    confidence: float = 0.0
+    provenance: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
 class LlmGuardContractCandidate(BaseModel):
     """An LLM-produced guard-contract candidate, before admission.
 
-    The LLM emits a typed :class:`GuardContract` (never free-form DSL). This thin
-    wrapper carries the parsed contract plus the model's self-reported completeness /
-    rejection signal. ``raw_response`` is audit-only and is attached by the pipeline,
-    never requested from the model; it is **not** serialized into the FSM.
+    The LLM emits a typed precondition :class:`GuardContract` (never free-form DSL)
+    and may also emit a target/effect-side :class:`TransitionPostcondition`. This
+    thin wrapper carries the parsed contract plus the model's self-reported
+    completeness / rejection signal. ``raw_response`` is audit-only and is attached
+    by the pipeline, never requested from the model; it is **not** serialized into
+    the FSM.
     """
 
     contract: GuardContract = Field(default_factory=GuardContract)
+    postcondition: TransitionPostcondition | None = None
     semantic_binding_incomplete: bool = False
+    postcondition_incomplete: bool = False
     rejection_reason: str = ""
     raw_response: str = ""
     raw_responses: list[str] = Field(default_factory=list)

@@ -70,7 +70,7 @@ Current verified snapshot after the AbstractState schema migration and behaviora
 - Run Python commands through `uv run`.
 - Static APK files are priors, not proof of transitions.
 - Trace/replay evidence is required before adding an edge to `delta`.
-- The LLM may add semantic labels, risk annotations, DSL guard candidates, and provenance, but must not decide state equality, create static-only edges, assign replay confidence, or make runtime verdicts.
+- The LLM may add semantic labels, side-effect/semantic-binding obligations, DSL guard candidates, and provenance, but must not decide state equality, create static-only edges, assign replay confidence, or make runtime verdicts.
 - XML/runtime traces remain the deterministic source of truth for fingerprinting, replay, selectors, and transition evidence.
 - The compressed LLM view is only for prompting; never use it as the source of truth for localization or replay.
 - Low-confidence or incomplete evidence should route to `UNCERTAIN`, not high-trust `ALLOW`.
@@ -139,11 +139,13 @@ Current FSM action-scope boundary:
 
 Current FSM abstraction/refinement baseline:
 
-- State construction uses a post-build, verifier-preserving behavioral quotient, implemented mainly in `src/vigil/neuro/behavioral_signature.py`, `src/vigil/neuro/behavioral_quotient.py`, and `src/vigil/neuro/fsm_builder.py`.
+- State construction uses a post-build, verifier-preserving, state-only behavioral quotient, implemented mainly in `src/vigil/neuro/behavioral_signature.py`, `src/vigil/neuro/behavioral_quotient.py`, and `src/vigil/neuro/fsm_builder.py`.
 - The quotient is a deterministic, trace-observation-compatible partition refinement, not exact textbook bisimulation/DFA minimization. States may merge when their observed `canonical_action_key -> target_block` maps are compatible; a final determinism guard preserves the verifier invariant.
+- In paper notation, `\mathcal{P}` denotes the current state partition during refinement, and `\mathcal{P}^\star` denotes the final fixed-point partition. Use `\mathrm{Succ}_{\mathcal{P}}(\mathcal{B},u)` for the successor blocks of state block `\mathcal{B}` under canonical action `u \in \Sigma` during refinement, and `\mathrm{Succ}_{\mathcal{P}^\star}(\mathcal{B},u)` for the final quotient-state successor relation. The final determinism condition is `|\mathrm{Succ}_{\mathcal{P}^\star}(\mathcal{B},u)| <= 1`.
+- Do not introduce any coarser action projection, second action alphabet, or quotient-specific successor notation in writing or implementation notes. Compactness comes from quotienting states, not weakening action labels.
 - `compute_quotient_label()` is schema-oriented: it keeps activity/window/dialog boundaries, action-surface affordances and enabledness/checked/selected facts, coarse form status, coarse error/status facts, and repeated-row action slots. It excludes volatile text, literal title/contact/message values, raw EditText contents, bounds, capture-local element ids, and repeated-list row content.
-- `_action_surface()` performs sibling-aware repeated-row canonicalization for same-parent/same-skeleton row actions, wildcarding varying row-instance segments only under conservative repeated-row eligibility. This is what collapses named row actions such as per-contact message options without merging functional controls like pause/lap/reset.
-- `canonical_action_key()` is the only action identity used for behavioral refinement, transition deduplication, provenance, replay, and runtime verification. The quotient is on states only; do not introduce a separate quotient action alphabet or weaken canonical action identity.
+- `_action_surface()` performs sibling-aware repeated-row canonicalization only inside the state-label action surface used by `compute_quotient_label()`, wildcarding varying row-instance segments under conservative repeated-row eligibility. This collapses named row-action surfaces such as per-contact message options without merging functional controls like pause/lap/reset, and it never changes `canonical_action_key()`.
+- `canonical_action_key()` is the only action identity used for behavioral refinement, transition deduplication, provenance, replay, and runtime verification. The quotient is on states only; do not introduce a separate action alphabet or weaken canonical action identity.
 - Do not hardcode fidelity app package names, resource ids, contacts, product names, timer labels, or other benchmark-specific strings in the abstraction. If a residual split remains, report whether it is caused by label fields, transition refinement, missing exploration coverage, or an environment transition before proposing a fix.
 
 ---
@@ -167,27 +169,27 @@ Do not rebuild or reshape the FSM graph just to add guards. Existing `S`, `Sigma
 Recommended model direction:
 
 - Keep `Transition.guard` as the executable DSL string used by `DSLEvaluator`.
-- Add non-breaking metadata such as typed guard contracts, required intent slots, risk level, admission status/reason, and provenance when implementing this pass.
+- Add non-breaking metadata such as typed guard contracts, required intent slots, side-effect/semantic-binding obligations, admission status/reason, and provenance when implementing this pass.
 - Build a stable widget registry from source observations before asking for guard candidates. Prefer aliases backed by `resource_id`, `content_description`, stable text role, synthesized class alias, or template alias; never admit guards that depend on capture-local `e_XXXX` handles unless they are only temporary evidence.
 - Generate `GuardContract` objects first, then compile them to the current DSL grammar. The DSL grammar should not be expanded unless the typed contract cannot be expressed with existing predicates.
 - Admission must parse the DSL, resolve element aliases against the source-state registry, verify `$intent.*` variables against the contract slot schema, evaluate literal source predicates when possible, and record rejection reasons.
-- High-risk actions (`send`, `pay`, `transfer`, `delete`, permission grants, irreversible confirms) require an admitted semantic/safety guard. If no guard can be admitted, runtime should return `UNCERTAIN`, not silently `ALLOW`.
-- `cancel`, `back`, ordinary navigation, and low-risk scroll/open actions may have no guard when topology and confidence are sufficient.
+- Side-effecting or irreversible actions (`send`, `pay`, `transfer`, `delete`, permission grants, irreversible confirms) require an admitted semantic/safety guard. If no guard can be admitted, runtime should return `UNCERTAIN`, not silently `ALLOW`.
+- `cancel`, `back`, ordinary navigation, and passive scroll/open actions may have no guard when topology and confidence are sufficient.
 - State invariants remain post-arrival checks in `AbstractState.invariant_specs`; transition guards are pre-action checks over the source screen, proposed action, and frozen intent.
 
 APK static artifacts are useful guard-generation priors but never transition or verdict proof:
 
-- Use manifest/activity labels, permissions, resource strings, string arrays, layout XML, menu/navigation resources, widget declarations, `inputType`, hints, and resource ids to enrich widget aliases, roles, value domains, and risk hints.
-- Static prior can suggest that `com.app:id/amount_input` is an amount field, a resource array is a closed-set option domain, or a `Transfer`/`Delete`/`Allow` label is high risk.
+- Use manifest/activity labels, permissions, resource strings, string arrays, layout XML, menu/navigation resources, widget declarations, `inputType`, hints, and resource ids to enrich widget aliases, roles, value domains, and side-effect semantics.
+- Static prior can suggest that `com.app:id/amount_input` is an amount field, a resource array is a closed-set option domain, or a `Transfer`/`Delete`/`Allow` label implies a side-effecting or authority-changing action.
 - Runtime trace/XML evidence must still confirm element presence, source-state membership, action binding, and transition existence before a guard is admitted.
 - Do not create edges, mark guards high-trust, or return runtime `ALLOW` from APK static evidence alone. Replay confidence still gates trust.
 
 When an LLM is used for guard generation, prompt it to produce typed guard-contract candidates, not free-form DSL as the primary artifact. The prompt should include:
 
 - strict task boundary: no new transitions, no state/action/confidence edits, no runtime verdicts;
-- output JSON schema for required slots, predicates, risk level, confidence, evidence, and rejection/admission notes;
+- output JSON schema for required slots, predicates, side-effect/semantic-binding obligations, confidence, evidence, and rejection/admission notes;
 - supported predicate vocabulary (`read`, `value`, `action`, `contains`, `count`, `in_state`, `time_in`) and readable UI properties;
-- source state summary, target state summary, proposed canonical action, source widget registry, sibling outgoing transitions, source-to-target diff, static app prior/resource hints, and risk policy;
+- source state summary, target state summary, proposed canonical action, source widget registry, sibling outgoing transitions, source-to-target diff, static app prior/resource hints, and guard-obligation policy;
 - explicit instruction that pre-action guards may reference only the source screen, proposed action, and frozen `$intent.*` variables, not target-only elements;
 - explicit fallback behavior: if evidence is insufficient, return a rejected/low-trust candidate with a reason instead of inventing selectors, slots, or literals.
 

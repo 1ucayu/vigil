@@ -1,0 +1,45 @@
+// Vigil DSL Guard Grammar
+// Formal grammar for semantic guard expressions on FSM transitions.
+// Parsed by lark-parser at runtime (Tier 2) and during generation (Stage 4).
+//
+// Predicates:
+//   read(element, property) op value   - read UI element property
+//   value(element) op value            - shorthand for read(element, value)
+//   time_in(HH:MM, HH:MM)              - current time in range
+//   in_state(name)                     - current FSM state matches
+//   contains(element, value)           - element contains value (list or text)
+//   count(element) op value            - child count of element
+//   action(property) op value          - proposed action property check
+
+start: guard
+
+guard: predicate
+     | predicate "&&" guard
+     | predicate "||" guard
+     | "!" predicate
+     | "(" guard ")"
+
+predicate: read_pred | time_pred | state_pred | value_pred
+         | contains_pred | count_pred | action_pred
+
+read_pred: "read(" ELEMENT "," PROPERTY ")" OP VALUE
+time_pred: "time_in(" TIME "," TIME ")"
+state_pred: "in_state(" STATE_NAME ")"
+value_pred: "value(" ELEMENT ")" OP VALUE
+contains_pred: "contains(" ELEMENT "," VALUE ")"
+count_pred: "count(" ELEMENT ")" OP VALUE
+action_pred: "action(" PROPERTY ")" OP VALUE
+
+OP: "==" | "!=" | ">" | "<" | ">=" | "<="
+
+ELEMENT: /[a-zA-Z_][a-zA-Z0-9_.:\/]*/
+PROPERTY: /[a-zA-Z_][a-zA-Z0-9_]*/
+STATE_NAME: /[a-zA-Z_][a-zA-Z0-9_]*/
+VALUE: ESCAPED_STRING | NUMBER | "true" | "false" | "null" | INTENT_VAR
+INTENT_VAR: /\$intent\.[a-zA-Z_][a-zA-Z0-9_]*/
+TIME: /\d{2}:\d{2}/
+
+%import common.ESCAPED_STRING
+%import common.NUMBER
+%import common.WS
+%ignore WS

@@ -1,9 +1,8 @@
 """Tier 2: DSL Semantic Verification (< 15 ms).
 
 Evaluates DSL guard expressions against the current screen state using the Lark
-parser (`output_docs/dsl_grammar.lark`, falling back to the historical `docs/`
-path). Guard templates are cached offline; parameters are bound at runtime from
-user intent.
+parser shipped with the symbolic verifier. Guard templates are cached offline;
+parameters are bound at runtime from user intent.
 
 Evaluation is three-valued (TRUE / FALSE / UNKNOWN) to match the paper model:
 proven-false predicates are distinguishable from those the verifier cannot
@@ -353,16 +352,181 @@ class _GuardEvaluator(Transformer):
             return _Unknown("type mismatch in comparison")
 
 
+def _predicate_clause(
+    predicate_type: str,
+    text: str,
+    **fields: Any,
+) -> dict[str, Any]:
+    return {
+        "node_type": "predicate",
+        "predicate_type": predicate_type,
+        "text": text,
+        **fields,
+    }
+
+
+def _logic_text(node: Any) -> str:
+    if isinstance(node, dict):
+        return str(node.get("text") or "")
+    return str(node)
+
+
+def _collect_predicate_clauses(node: Any) -> list[dict[str, Any]]:
+    if not isinstance(node, dict):
+        return []
+    if node.get("node_type") == "predicate":
+        return [node]
+    clauses: list[dict[str, Any]] = []
+    for child in node.get("children", []):
+        clauses.extend(_collect_predicate_clauses(child))
+    return clauses
+
+
+class _LogicClauseTransformer(Transformer):
+    """Convert a parsed DSL tree into display-oriented logic clauses.
+
+    This transformer intentionally does not evaluate predicates. It exposes the
+    post-parser symbolic structure used by the runtime verifier so reports and
+    visualizations can show clauses instead of raw JSON metadata.
+    """
+
+    def start(self, args: list[Any]) -> Any:
+        return args[0]
+
+    def guard(self, args: list[Any]) -> Any:
+        token_strs = [str(a) for a in args if isinstance(a, Token)]
+        filtered = _filter_named(args)
+
+        if "!" in token_strs:
+            child = filtered[0] if filtered else {}
+            return {
+                "node_type": "logic",
+                "operator": "not",
+                "children": [child],
+                "text": f"NOT ({_logic_text(child)})",
+            }
+
+        if "&&" in token_strs:
+            left = filtered[0] if filtered else {}
+            right = filtered[1] if len(filtered) > 1 else {}
+            return {
+                "node_type": "logic",
+                "operator": "and",
+                "children": [left, right],
+                "text": f"({_logic_text(left)}) AND ({_logic_text(right)})",
+            }
+
+        if "||" in token_strs:
+            left = filtered[0] if filtered else {}
+            right = filtered[1] if len(filtered) > 1 else {}
+            return {
+                "node_type": "logic",
+                "operator": "or",
+                "children": [left, right],
+                "text": f"({_logic_text(left)}) OR ({_logic_text(right)})",
+            }
+
+        return filtered[0] if filtered else {}
+
+    def predicate(self, args: list[Any]) -> Any:
+        return _filter_named(args)[0]
+
+    def read_pred(self, args: list[Any]) -> dict[str, Any]:
+        named = _filter_named(args)
+        element = str(named[0])
+        prop = str(named[1])
+        op = str(named[2])
+        value = str(named[3])
+        return _predicate_clause(
+            "read",
+            f"read({element}, {prop}) {op} {value}",
+            element=element,
+            property=prop,
+            operator=op,
+            value=value,
+        )
+
+    def value_pred(self, args: list[Any]) -> dict[str, Any]:
+        named = _filter_named(args)
+        element = str(named[0])
+        op = str(named[1])
+        value = str(named[2])
+        return _predicate_clause(
+            "value",
+            f"value({element}) {op} {value}",
+            element=element,
+            operator=op,
+            value=value,
+        )
+
+    def time_pred(self, args: list[Any]) -> dict[str, Any]:
+        named = _filter_named(args)
+        start_time = str(named[0])
+        end_time = str(named[1])
+        return _predicate_clause(
+            "time_in",
+            f"time_in({start_time}, {end_time})",
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    def state_pred(self, args: list[Any]) -> dict[str, Any]:
+        named = _filter_named(args)
+        state_name = str(named[0])
+        return _predicate_clause(
+            "in_state",
+            f"in_state({state_name})",
+            state_name=state_name,
+        )
+
+    def contains_pred(self, args: list[Any]) -> dict[str, Any]:
+        named = _filter_named(args)
+        element = str(named[0])
+        value = str(named[1])
+        return _predicate_clause(
+            "contains",
+            f"contains({element}, {value})",
+            element=element,
+            value=value,
+        )
+
+    def count_pred(self, args: list[Any]) -> dict[str, Any]:
+        named = _filter_named(args)
+        element = str(named[0])
+        op = str(named[1])
+        value = str(named[2])
+        return _predicate_clause(
+            "count",
+            f"count({element}) {op} {value}",
+            element=element,
+            operator=op,
+            value=value,
+        )
+
+    def action_pred(self, args: list[Any]) -> dict[str, Any]:
+        named = _filter_named(args)
+        prop = str(named[0])
+        op = str(named[1])
+        value = str(named[2])
+        return _predicate_clause(
+            "action",
+            f"action({prop}) {op} {value}",
+            property=prop,
+            operator=op,
+            value=value,
+        )
+
+
 class DSLEvaluator:
     """Evaluates DSL guard expressions against runtime context.
 
-    Uses the Lark grammar at output_docs/dsl_grammar.lark for parsing.
+    Uses the packaged Lark grammar for parsing.
     Guard templates contain $intent.* placeholders resolved at runtime via
     INTENT_VAR tokens in the grammar.
 
     Args:
-        grammar_path: Path to the .lark grammar file. Defaults to output_docs/dsl_grammar.lark,
-            with fallback to the historical docs/dsl_grammar.lark location.
+        grammar_path: Path to the .lark grammar file. Defaults to the packaged
+            symbolic grammar, with fallback support for older project layouts.
     """
 
     def __init__(self, grammar_path: str | Path | None = None) -> None:
@@ -431,6 +595,44 @@ class DSLEvaluator:
             bound_expression=bound_expr,
             failure_reason="Guard condition not satisfied",
         )
+
+    def parse_logic_clauses(self, guard_expr: str) -> dict[str, Any]:
+        """Parse a DSL expression into display-ready symbolic logic clauses.
+
+        Unlike :meth:`evaluate`, this method does not require screen, intent, or
+        action context. It exposes the parser-confirmed logical structure for
+        reports and visualization sidebars.
+        """
+        try:
+            tree = self._parser.parse(guard_expr)
+        except Exception as e:
+            logger.debug(f"Guard parse error: {e}")
+            return {
+                "status": "parse_error",
+                "expression": guard_expr,
+                "error": str(e),
+                "root": None,
+                "clauses": [],
+            }
+
+        try:
+            root = _LogicClauseTransformer().transform(tree)
+        except Exception as e:
+            logger.debug(f"Guard clause transform error: {e}")
+            return {
+                "status": "parse_error",
+                "expression": guard_expr,
+                "error": str(e),
+                "root": None,
+                "clauses": [],
+            }
+
+        return {
+            "status": "parsed",
+            "expression": guard_expr,
+            "root": root,
+            "clauses": _collect_predicate_clauses(root),
+        }
 
     @staticmethod
     def bind_intent(guard_expr: str, intent_ctx: IntentContext) -> str:

@@ -215,6 +215,13 @@ def test_report_includes_status_and_reason():
         assert "status" in row and "reason" in row
         assert "kind" in row and "risk" in row and "required" in row
         assert "semantic_binding_incomplete" in row
+        assert "precondition" in row
+        assert "postcondition" in row
+        assert "postcondition_incomplete" in row
+        assert "postcondition_dsl" in row
+        assert "postcondition_status" in row
+        assert "postcondition_reason" in row
+        assert "postcondition_unsupported_effects" in row
     assert report[0]["guard"] == "action(target_text) == $intent.contact_name"
 
 
@@ -282,7 +289,62 @@ _VALID_ITEM_CONTRACT = json.dumps(
                     "expected": {"kind": "intent", "slot": "contact_name"},
                 }
             ],
-        }
+        },
+        "postcondition": {
+            "kind": "content_effect",
+            "required": True,
+            "risk_level": "low",
+            "required_slots": [{"name": "contact_name", "slot_type": "string"}],
+            "predicates": [
+                {
+                    "predicate_type": "contains",
+                    "element": f"{PKG}:id/message_input",
+                    "expected": {"kind": "intent", "slot": "contact_name"},
+                }
+            ],
+            "effect_requirements": [
+                {
+                    "name": "thread_visible",
+                    "effect_kind": "appears",
+                    "description": "Thread screen should be visible.",
+                    "evidence": "target state is s2",
+                }
+            ],
+            "intent_effect_required": False,
+            "intent_effect_incomplete": False,
+        },
+    }
+)
+
+_ARRIVAL_ONLY_POSTCONDITION = json.dumps(
+    {
+        "contract": {
+            "kind": "navigation",
+            "required": False,
+            "risk_level": "low",
+            "predicates": [
+                {
+                    "predicate_type": "action",
+                    "property": "target_text",
+                    "operator": "==",
+                    "expected": {"kind": "literal", "value": "Alice"},
+                }
+            ],
+        },
+        "postcondition": {
+            "kind": "arrival_state",
+            "required": False,
+            "risk_level": "low",
+            "predicates": [
+                {
+                    "predicate_type": "in_state",
+                    "expected": {"kind": "literal", "value": "s2"},
+                    "args": {"state": "s2"},
+                }
+            ],
+            "intent_effect_required": False,
+            "intent_effect_incomplete": False,
+        },
     }
 )
 
@@ -300,7 +362,38 @@ def test_hybrid_accepts_complete_llm_contract():
     )
     assert report[0]["guard_origin"] == "llm"
     assert report[0]["guard"] == "action(target_text) == $intent.contact_name"
+    assert report[0]["precondition"]["kind"] == "item_binding"
+    assert report[0]["postcondition"]["kind"] == "content_effect"
+    assert report[0]["postcondition_incomplete"] is False
+    assert report[0]["postcondition_dsl"] == (
+        f"contains({PKG}:id/message_input, $intent.contact_name)"
+    )
+    assert report[0]["postcondition_status"] == "admitted"
+    assert report[0]["postcondition_unsupported_effects"]
     assert fsm.transitions[0].guard == "action(target_text) == $intent.contact_name"
+    assert fsm.transitions[0].postcondition == (
+        f"contains({PKG}:id/message_input, $intent.contact_name)"
+    )
+    assert fsm.transitions[0].postcondition_admission_status is GuardAdmissionStatus.ADMITTED
+    assert fsm.transitions[0].postcondition_contract is not None
+    assert fsm.transitions[0].postcondition_contract.kind == "content_effect"
+    assert fsm.transitions[0].postcondition_contract.effect_requirements[0].unsupported_reason
+
+
+def test_hybrid_routes_arrival_only_postcondition_to_invariants_layer():
+    fsm, raw_screens = _build_fsm()
+    report = generate_contract_guards(
+        fsm,
+        raw_screens,
+        guard_source="hybrid",
+        llm=_FakeLlm(_ARRIVAL_ONLY_POSTCONDITION),
+    )
+
+    assert report[0]["postcondition_status"] == "admitted"
+    assert report[0]["postcondition_dsl"] is None
+    assert "invariant layer" in report[0]["postcondition_reason"]
+    assert fsm.transitions[0].postcondition is None
+    assert fsm.transitions[0].postcondition_admission_status is GuardAdmissionStatus.ADMITTED
 
 
 def test_hybrid_falls_back_to_deterministic_on_invalid_llm():
@@ -352,6 +445,8 @@ def test_hybrid_writes_llm_audit_for_invalid_candidate(tmp_path):
     assert payload["raw_responses"]
     assert "not valid JSON" in payload["parse_errors"][0]
     assert "prompt_hash" in payload
+    assert "precondition" in payload
+    assert "postcondition" in payload
     assert "guard_class_key" not in report[0]
 
 

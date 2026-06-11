@@ -7,10 +7,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DOCS_DIR = PROJECT_ROOT / "docs"
 OUTPUT_DOCS_DIR = PROJECT_ROOT / "output_docs"
+SYMBOLIC_DIR = PROJECT_ROOT / "src" / "vigil" / "symbolic"
 
 DSL_GRAMMAR_CANDIDATES = (
-    OUTPUT_DOCS_DIR / "dsl_grammar.lark",
+    SYMBOLIC_DIR / "dsl_grammar.lark",
     DOCS_DIR / "dsl_grammar.lark",
+    OUTPUT_DOCS_DIR / "dsl_grammar.lark",
 )
 
 

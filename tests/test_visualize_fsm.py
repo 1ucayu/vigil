@@ -20,7 +20,21 @@ from vigil.models.fsm import (
     StateInvariant,
     Transition,
 )
-from vigil.scripts.visualize_fsm import _fsm_to_view_dict, default_output_path, render_fsm_html
+from vigil.models.guard import (
+    EffectRequirement,
+    GuardAdmissionStatus,
+    IntentSlot,
+    PredicateSpec,
+    SlotType,
+    TransitionPostcondition,
+    ValueRef,
+)
+from vigil.scripts.visualize_fsm import (
+    _fsm_to_view_dict,
+    default_output_path,
+    render_fsm_compare_html,
+    render_fsm_html,
+)
 
 _SAFE_STATE_FIELDS = {
     "state_id",
@@ -37,6 +51,13 @@ _GUARD = "read(secret_field, enabled) == true"
 
 def _extract_payload(html: str) -> dict[str, Any]:
     marker = "const FSM_DATA = "
+    start = html.index(marker) + len(marker)
+    end = html.index(";\n\n(function()", start)
+    return json.loads(html[start:end])
+
+
+def _extract_compare_payload(html: str) -> dict[str, Any]:
+    marker = "const COMPARE_DATA = "
     start = html.index(marker) + len(marker)
     end = html.index(";\n\n(function()", start)
     return json.loads(html[start:end])
@@ -248,6 +269,141 @@ def test_render_fsm_html_show_guards_controls_guard_output(tmp_path: Path) -> No
     )
     assert _GUARD in guarded_html
     assert guarded_payload["transitions"][0]["guard"] == _GUARD
+
+
+def test_render_fsm_compare_html_includes_gold_explored_details_and_screenshots(
+    tmp_path: Path,
+) -> None:
+    explored_fsm_path = tmp_path / "explored" / "fsm.json"
+    gold_dir = tmp_path / "gold"
+    screens_dir = tmp_path / "screens"
+    out = tmp_path / "visualization" / "compare.html"
+    explored_fsm_path.parent.mkdir()
+    gold_dir.mkdir()
+    screens_dir.mkdir()
+
+    explored = _sensitive_fsm()
+    explored.transitions[0].guard = _GUARD
+    explored.transitions[
+        0
+    ].postcondition = "in_state(s2) && contains(detail.title, $intent.selected_item)"
+    explored.transitions[0].postcondition_admission_status = GuardAdmissionStatus.ADMITTED
+    explored.transitions[0].postcondition_admission_reason = "admitted: 2 executable predicates"
+    explored.transitions[0].postcondition_contract = TransitionPostcondition(
+        kind="arrival_state",
+        required=True,
+        required_slots=[IntentSlot(name="selected_item", slot_type=SlotType.STRING)],
+        predicates=[
+            PredicateSpec(
+                predicate_type="in_state",
+                expected=ValueRef(kind="literal", value="s2"),
+                args={"state": "s2"},
+            ),
+            PredicateSpec(
+                predicate_type="contains",
+                element="detail.title",
+                expected=ValueRef(kind="intent", slot="selected_item"),
+            ),
+        ],
+        effect_requirements=[
+            EffectRequirement(
+                name="detail_visible",
+                effect_kind="appears",
+                description="Detail screen should be visible after opening the item.",
+                evidence="target state is s2",
+                unsupported_reason="audit-only effect requirement",
+            )
+        ],
+        intent_effect_required=True,
+    )
+    explored.states["s1"].invariant_specs[0].expr = 'read(screen_marker, text) == "screen:secret"'
+    explored.serialize(explored_fsm_path)
+    (screens_dir / "raw_screen_secret.png").write_bytes(b"not-a-real-png")
+
+    gold_payload = {
+        "app_id": "com.example.sensitive",
+        "model": "gold",
+        "initial_state": "home",
+        "states": [
+            {"id": "home", "screen_marker": "home_marker"},
+            {"id": "detail", "screen_marker": "detail_marker"},
+        ],
+        "actions": [
+            {"name": "open.detail", "type": "click", "query": {"text": "Detail"}},
+            {"name": "system.back", "type": "navigate_back"},
+        ],
+        "transitions": [{"from": "home", "action": "open.detail", "to": "detail", "kind": "nav"}],
+        "global_navigation": {
+            "visible_on": ["detail"],
+            "actions": [{"action": "system.back", "to": "home", "kind": "nav"}],
+        },
+    }
+    gold_fsm_path = gold_dir / "fsm.json"
+    gold_fsm_path.write_text(json.dumps(gold_payload), encoding="utf-8")
+
+    render_fsm_compare_html(
+        gold_fsm_path=gold_fsm_path,
+        explored_fsm_path=explored_fsm_path,
+        output_path=out,
+        screens_dir=screens_dir,
+    )
+
+    html = out.read_text(encoding="utf-8")
+    payload = _extract_compare_payload(html)
+
+    assert "const COMPARE_DATA =" in html
+    assert "Golden FSM" in html
+    assert "Explored FSM" in html
+    assert "#workbench.inspector-open" in html
+    assert "grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);" in html
+    assert "#explored-panel { grid-column: 1; grid-row: 2;" in html
+    assert "fitToGraph()" in html
+    assert "edge-hit" in html
+    assert "startNodeDrag" in html
+    assert "layoutLinksFor" in html
+    assert "foldLinks(rawLinks)" in html
+    assert "folded identical actions" in html
+    assert "precondition Gamma DSL/Lark parsed clauses" in html
+    assert "postcondition Psi DSL/Lark parsed clauses" in html
+    assert "audit-only unsupported effect requirements" in html
+    assert "invariant logic clauses" in html
+    assert payload["golden"]["summary"]["num_states"] == 2
+    assert payload["golden"]["summary"]["global_nav_edges"] == 1
+    assert payload["explored"]["summary"] == {"num_states": 2, "num_transitions": 1}
+    assert payload["explored"]["states"][0]["invariant_specs"][0]["expr"] == (
+        'read(screen_marker, text) == "screen:secret"'
+    )
+    assert payload["explored"]["states"][0]["invariant_specs"][0]["logic"]["status"] == "parsed"
+    assert (
+        payload["explored"]["states"][0]["invariant_specs"][0]["logic"]["clauses"][0][
+            "predicate_type"
+        ]
+        == "read"
+    )
+    assert payload["explored"]["transitions"][0]["guard"] == _GUARD
+    assert payload["explored"]["transitions"][0]["guard_logic"]["status"] == "parsed"
+    assert (
+        payload["explored"]["transitions"][0]["guard_logic"]["clauses"][0]["predicate_type"]
+        == "read"
+    )
+    assert payload["explored"]["transitions"][0]["postcondition"] == (
+        "in_state(s2) && contains(detail.title, $intent.selected_item)"
+    )
+    assert payload["explored"]["transitions"][0]["postcondition_logic"]["status"] == "parsed"
+    assert (
+        payload["explored"]["transitions"][0]["postcondition_logic"]["clauses"][0]["text"]
+        == "in_state(s2)"
+    )
+    assert (
+        payload["explored"]["transitions"][0]["postcondition_logic"]["clauses"][1]["text"]
+        == "contains(detail.title, $intent.selected_item)"
+    )
+    assert payload["explored"]["transitions"][0]["postcondition_effects"][0]["text"].startswith(
+        "detail_visible:"
+    )
+    assert payload["explored"]["states"][0]["raw_screen_images"] == [
+        {"screen_id": "raw_screen_secret", "src": "../screens/raw_screen_secret.png"}
+    ]
 
 
 def test_render_fsm_html_self_loop_transition_renders(tmp_path: Path) -> None:

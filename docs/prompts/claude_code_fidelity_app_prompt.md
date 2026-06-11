@@ -80,7 +80,7 @@ The first version should implement a small "VigilMarket" app with these screens:
    - Selecting an address proceeds to payment confirmation.
 8. `payment_confirm`
    - Shows product, quantity, selected address, total amount.
-   - Has a high-risk `Pay` action and a back/cancel action.
+   - Has a side-effecting `Pay` action and a back/cancel action.
 9. `payment_success`
    - Terminal success state after payment.
 10. `orders`

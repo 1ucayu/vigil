@@ -21,6 +21,13 @@ def test_loads_guard_generation_prompt():
     assert "[SPECIFICATION]:\n  Defines the preconditions" in text
     assert "[SPECIFICATION of ...]:" in text
     assert "GuardContract" in text
+    assert "precondition" in text
+    assert "postcondition" in text
+    assert "Psi" in text
+    assert "effect_requirements" in text
+    assert "audit-only" in text
+    assert "appears" in text
+    assert "compatibility alias" in text
     assert "$intent" in text
     assert "$bind" in text
 

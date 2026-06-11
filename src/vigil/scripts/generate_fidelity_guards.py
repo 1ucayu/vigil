@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -37,13 +38,15 @@ from vigil.neuro.visual_grounder import (
 class FidelityAppSpec:
     name: str
     package: str
+    trace_package: str
+    output_slug: str
 
 
 FIDELITY_APPS: tuple[FidelityAppSpec, ...] = (
-    FidelityAppSpec("market", "com_vigil_market_fidelity"),
-    FidelityAppSpec("bank", "com_vigil_bank_fidelity"),
-    FidelityAppSpec("chat", "com_vigil_chat_fidelity"),
-    FidelityAppSpec("clock", "com_vigil_clock_fidelity"),
+    FidelityAppSpec("market", "com_vigil_market_fidelity", "com_vigil_market", "vigilmarket"),
+    FidelityAppSpec("bank", "com_vigil_bank_fidelity", "com_vigil_bank", "vigilbank"),
+    FidelityAppSpec("chat", "com_vigil_chat_fidelity", "com_vigil_chat", "vigilchat"),
+    FidelityAppSpec("clock", "com_vigil_clock_fidelity", "com_vigil_clock", "vigilclock"),
 )
 
 _PREFERRED_MODELS = (
@@ -109,6 +112,21 @@ def main() -> None:
         type=Path,
         default=None,
         help="Optional output root. Defaults to overwriting the input bundle fsm.json.",
+    )
+    parser.add_argument(
+        "--output-docs-layout",
+        action="store_true",
+        help=(
+            "Use output_docs fidelity layout: input from "
+            "<report-root>/<app>/explored_fsm/fsm.json, traces from formal "
+            "data/apps/com_vigil_* directories, and output to "
+            "<report-root>/<app>/transition_guard/."
+        ),
+    )
+    parser.add_argument(
+        "--clean-output",
+        action="store_true",
+        help="Delete each app's guard output/report directory before regenerating it.",
     )
     parser.add_argument(
         "--skip-visual",
@@ -234,6 +252,8 @@ def main() -> None:
                 bundle_root=args.bundle_root,
                 report_root=args.report_root,
                 output_root=args.output_root,
+                output_docs_layout=args.output_docs_layout,
+                clean_output=args.clean_output,
                 llm=llm,
                 skip_visual=args.skip_visual,
                 skip_guards=args.skip_guards,
@@ -304,6 +324,8 @@ def run_one_app(
     skip_guards: bool,
     force_visual: bool,
     max_states: int | None,
+    output_docs_layout: bool = False,
+    clean_output: bool = False,
     guard_source: str = "deterministic",
     guard_prompt: str = DEFAULT_GUARD_PROMPT,
     guard_use_images: bool = True,
@@ -315,9 +337,15 @@ def run_one_app(
     invariant_audit_root: Path | None = None,
     min_invariant_observations: int = 2,
 ) -> dict[str, Any]:
-    app_data_dir = data_root / spec.package
-    bundle_dir = bundle_root / spec.package
-    fsm_path = bundle_dir / "fsm.json"
+    if output_docs_layout:
+        app_data_dir = data_root / spec.trace_package
+        fsm_path = report_root / spec.output_slug / "explored_fsm" / "fsm.json"
+        app_report_dir = report_root / spec.output_slug / "transition_guard"
+    else:
+        app_data_dir = data_root / spec.package
+        bundle_dir = bundle_root / spec.package
+        fsm_path = bundle_dir / "fsm.json"
+        app_report_dir = report_root / spec.name
     if not fsm_path.exists():
         raise SystemExit(f"FSM bundle missing for {spec.name}: {fsm_path}")
 
@@ -329,7 +357,8 @@ def run_one_app(
 
     prior = _load_prior(app_data_dir)
     fsm = AppFSM.deserialize(fsm_path)
-    app_report_dir = report_root / spec.name
+    if clean_output and app_report_dir.exists():
+        shutil.rmtree(app_report_dir)
     app_report_dir.mkdir(parents=True, exist_ok=True)
 
     visual_report: list[dict[str, Any]] = []
@@ -417,7 +446,11 @@ def run_one_app(
             invariant_report, app_report_dir / "invariant_generation.json"
         )
 
-    output_path = _output_fsm_path(spec.package, fsm_path, output_root)
+    output_path = (
+        app_report_dir / "fsm.json"
+        if output_docs_layout
+        else _output_fsm_path(spec.package, fsm_path, output_root)
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fsm.serialize(output_path)
     logger.info(f"[{spec.name}] enriched FSM written to {output_path}")
@@ -425,6 +458,7 @@ def run_one_app(
     summary = {
         "app": spec.name,
         "package": spec.package,
+        "trace_package": spec.trace_package,
         "input_fsm": str(fsm_path),
         "output_fsm": str(output_path),
         "trace": str(trace_path),
@@ -441,6 +475,11 @@ def run_one_app(
         ),
         "guard_origin_counts": _count_field(guard_report, "guard_origin"),
         "guard_status_counts": _guard_status_counts(fsm),
+        "postcondition_status_counts": _postcondition_status_counts(fsm),
+        "postconditions_attached": sum(1 for t in fsm.transitions if t.postcondition),
+        "postconditions_unsupported_effects": sum(
+            len(t.postcondition_unsupported_effects) for t in fsm.transitions
+        ),
         "invariant_source": invariant_source,
         "invariants_attached": sum(len(s.invariant_specs) for s in fsm.states.values()),
         "invariant_states": sum(1 for s in fsm.states.values() if s.invariant_specs),
@@ -482,6 +521,15 @@ def _guard_status_counts(fsm: AppFSM) -> dict[str, int]:
     counts: dict[str, int] = {}
     for transition in fsm.transitions:
         status = transition.guard_admission_status
+        key = str(getattr(status, "value", status or "none"))
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _postcondition_status_counts(fsm: AppFSM) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for transition in fsm.transitions:
+        status = transition.postcondition_admission_status
         key = str(getattr(status, "value", status or "none"))
         counts[key] = counts.get(key, 0) + 1
     return dict(sorted(counts.items()))

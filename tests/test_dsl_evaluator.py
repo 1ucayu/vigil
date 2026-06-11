@@ -194,6 +194,29 @@ class TestGuardResult:
         assert "Parse error" in r.failure_reason
 
 
+class TestLogicClauseParsing:
+    def setup_method(self) -> None:
+        self.ev = DSLEvaluator()
+
+    def test_parse_logic_clauses_for_conjunction(self) -> None:
+        parsed = self.ev.parse_logic_clauses(
+            'read(send_button, is_enabled) == true && action(target_resource_id) == "send"'
+        )
+
+        assert parsed["status"] == "parsed"
+        assert parsed["root"]["operator"] == "and"
+        assert [c["predicate_type"] for c in parsed["clauses"]] == ["read", "action"]
+        assert parsed["clauses"][0]["text"] == "read(send_button, is_enabled) == true"
+        assert parsed["clauses"][1]["property"] == "target_resource_id"
+
+    def test_parse_logic_clauses_for_parse_error(self) -> None:
+        parsed = self.ev.parse_logic_clauses("invalid !@# syntax")
+
+        assert parsed["status"] == "parse_error"
+        assert parsed["clauses"] == []
+        assert "error" in parsed
+
+
 # ============================================================
 # New predicate tests (contains, count, action)
 # ============================================================
