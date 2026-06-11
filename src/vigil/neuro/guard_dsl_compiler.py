@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from vigil.models.guard import GuardContract, PredicateSpec, ValueRef
+from vigil.models.guard import EffectRequirement, GuardContract, PredicateSpec, ValueRef
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     pass
@@ -117,6 +117,36 @@ def compile_predicate_spec(predicate: PredicateSpec) -> str | None:
             return None
         return f"time_in({start}, {end})"
 
+    if ptype == "appears":
+        if not predicate.element:
+            return None
+        return f"appears({predicate.element})"
+
+    if ptype == "disappears":
+        if not predicate.element:
+            return None
+        return f"disappears({predicate.element})"
+
+    if ptype == "changes_value":
+        if not predicate.element:
+            return None
+        prop = predicate.property or predicate.args.get("property")
+        before = predicate.args.get("before")
+        after = predicate.args.get("after")
+        if isinstance(before, dict):
+            before = ValueRef.model_validate(before)
+        if isinstance(after, dict):
+            after = ValueRef.model_validate(after)
+        if prop and isinstance(before, ValueRef) and isinstance(after, ValueRef):
+            before_value = _render_value(before)
+            after_value = _render_value(after)
+            if before_value is None or after_value is None:
+                return None
+            return f"changes_value({predicate.element}, {prop}, {before_value}, {after_value})"
+        if prop:
+            return f"changes_value({predicate.element}, {prop})"
+        return f"changes_value({predicate.element})"
+
     return None
 
 
@@ -134,3 +164,25 @@ def compile_guard_contract(contract: GuardContract) -> str | None:
     if not compiled:
         return None
     return " && ".join(compiled)
+
+
+def compile_effect_requirement(effect: EffectRequirement) -> str | None:
+    """Compile a supported post-action effect requirement into Psi DSL."""
+    kind = (effect.effect_kind or "").strip().lower()
+    if kind not in {"appears", "disappears", "changes_value"}:
+        return None
+    if not effect.element:
+        return None
+    if kind == "appears":
+        return f"appears({effect.element})"
+    if kind == "disappears":
+        return f"disappears({effect.element})"
+
+    prop = effect.property
+    before = _render_value(effect.before)
+    after = _render_value(effect.after)
+    if prop and before is not None and after is not None:
+        return f"changes_value({effect.element}, {prop}, {before}, {after})"
+    if prop:
+        return f"changes_value({effect.element}, {prop})"
+    return f"changes_value({effect.element})"

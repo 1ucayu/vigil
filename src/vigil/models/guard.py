@@ -117,7 +117,18 @@ class PredicateSpec(BaseModel):
     ``PredicateSpec`` into concrete DSL syntax during the (later) compilation pass.
     """
 
-    predicate_type: Literal["read", "value", "action", "contains", "count", "in_state", "time_in"]
+    predicate_type: Literal[
+        "read",
+        "value",
+        "action",
+        "contains",
+        "count",
+        "in_state",
+        "time_in",
+        "appears",
+        "disappears",
+        "changes_value",
+    ]
     element: str | None = None
     property: str | None = None
     operator: str | None = None
@@ -150,13 +161,17 @@ class EffectRequirement(BaseModel):
 
     These records describe what should be checked after a transition arrives at its
     target state, such as content appearing, an item disappearing, or a value
-    changing. They are metadata until a dedicated postcondition admission/evaluator
-    is implemented.
+    changing. Supported effect kinds are lowered into executable/auditable Psi DSL
+    during postcondition admission when they carry enough grounding fields.
     """
 
     name: str
     effect_kind: str = ""
     description: str = ""
+    element: str | None = None
+    property: str | None = None
+    before: ValueRef | None = None
+    after: ValueRef | None = None
     evidence: str = ""
     source: str = "generated"
     unsupported_reason: str = ""

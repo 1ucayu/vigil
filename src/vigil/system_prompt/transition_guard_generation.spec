@@ -30,13 +30,12 @@ known_action
 ```
 
 `known_action` is fixed by the FSM. Synthesize `Gamma` as the pre-action
-transition guard and `Psi` as the action-specific post-effect contract. The
-state-invariant layer `I` carries target-state consistency facts such as stable
-screen identity, stable titles, persistent affordances, and structural facts.
-`Psi` carries facts whose expected target value is induced by this transition's
-action, frozen intent, or source-to-target effect evidence. `$bind.*` is recorded
-separately in binding requirements; it is not an executable predicate in either
-`Gamma` or `Psi`.
+transition guard and `Psi` as the edge-local postcondition contract. The
+state-invariant layer `I` provides reusable consistency facts for target state Q.
+`Psi` records the post-action facts selected for this fixed edge: target arrival
+confirmation, target values induced by the action or frozen intent, and
+source-to-target effect observations. `$bind.*` is recorded separately in binding
+requirements; it is not an executable predicate in either `Gamma` or `Psi`.
 
 Return JSON only.
 
@@ -54,11 +53,11 @@ FSM_SCOPE:
   generated_object_kind: typed transition pre/post contract candidate
   executable_backend:
     Gamma: conjunction of admitted source/action DSL predicates
-    Psi: conjunction of admitted target-side transition-effect DSL predicates
+    Psi: conjunction of admitted target-side and effect DSL predicates
   target_consistency_layer:
-    I: state-level invariants over Q, checked after transition arrival
+    I: reusable state-level invariants over Q, checked after transition arrival
   transition_effect_layer:
-    Psi: action/intent/diff-conditioned target facts for this specific edge
+    Psi: edge-local postcondition facts for this specific transition
 
 TRANSITION_SCOPE:
   source_state_id: string
@@ -202,6 +201,11 @@ PredicateBasis:
   count(element) <op> value
   in_state(state_name)        // args.state in GuardContract JSON
   time_in(start, end)         // args.start and args.end in GuardContract JSON
+  appears(element)            // Psi only: absent in P and present in Q
+  disappears(element)         // Psi only: present in P and absent in Q
+  changes_value(element)      // Psi only: readable value/text changes from P to Q
+  changes_value(element, property)
+  changes_value(element, property, before, after)
 
 AllowedOperator:
   == | != | > | < | >= | <=
@@ -292,6 +296,18 @@ ReadableActionProperty:
         "name": "message_visible_after_send",
         "effect_kind": "appears|disappears|changes_value|count_changes|state_reached|unknown",
         "description": "",
+        "element": "<source or target registry alias/resource id, when applicable>",
+        "property": "<readable property for changes_value, or null>",
+        "before": {
+          "kind": "literal|intent",
+          "value": "<literal before value or null>",
+          "slot": "<intent slot name or null>"
+        },
+        "after": {
+          "kind": "literal|intent",
+          "value": "<literal after value or null>",
+          "slot": "<intent slot name or null>"
+        },
         "evidence": "",
         "unsupported_reason": ""
       }
@@ -359,10 +375,9 @@ ReadableActionProperty:
   * `[Global Information / Static APK Priors]` is prior knowledge only.
   * Local paths are provenance only; use full `xml_excerpt`, `compact_tree_text`,
     `alt_text`, source widget registry facts, and attached images as evidence.
-  * The current runtime evaluator executes only the listed `PredicateBasis`.
-  * The current postcondition admission path compiles only
-    `postcondition.predicates` using the current DSL vocabulary. It does not compile
-    `effect_requirements`.
+  * The current runtime evaluator executes the listed `PredicateBasis`.
+  * The postcondition admission path compiles `postcondition.predicates` and
+    supported `effect_requirements` into one executable/auditable Psi DSL string.
 
 **Legal Outcomes for Precondition `Gamma`**:
 
@@ -409,12 +424,18 @@ ReadableActionProperty:
       `contains(history_list, $intent.amount)`,
       `read(toggle, is_checked) == $intent.desired_state`, or
       `count(cart_items) > 0` when supported by Q/diff evidence.
-    * Use `in_state(<target_state_id>)` only as supporting context when an
-      effect predicate is also present.
-    * Use only currently expressible postcondition predicate types:
-      `in_state`, `read`, `contains`, `count`, and `value`.
-    * Put non-DSL side effects such as appears/disappears/changes_value into
-      `effect_requirements`, not into `postcondition.predicates`.
+    * Include `in_state(<target_state_id>)` when target arrival is part of the
+      edge-local postcondition evidence.
+    * Use postcondition predicates for target facts expressible as `in_state`,
+      `read`, `contains`, `count`, and `value`.
+    * Use `effect_requirements` for source-to-target effect predicates. For
+      supported effects, provide `effect_kind` plus the grounding fields needed
+      for admission:
+        - `appears`: target element alias/resource id in `element`
+        - `disappears`: source element alias/resource id in `element`
+        - `changes_value`: stable source/target element alias/resource id in
+          `element`, optional readable `property`, and optional `before`/`after`
+          value refs
     * Set `intent_effect_required` according to the transition's effect obligation.
     * Set `intent_effect_incomplete = false`.
 
@@ -436,23 +457,27 @@ ReadableActionProperty:
     created or changed.
   * `known_action` remains unchanged.
   * `Gamma` / `precondition` is represented as a conjunction of typed predicates.
-  * `Psi` / `postcondition` is represented as a conjunction of typed predicates whose
-    expected target facts are induced by the fixed transition.
-  * Target-state consistency facts are represented by `I`; use them as evidence and
-    context when deriving `Psi`.
-  * Postcondition side-effect observations that are not directly expressible in the
-    current DSL stay in `effect_requirements` as audit-only metadata.
+  * `Psi` / `postcondition` is represented as a conjunction of typed predicates and
+    supported effect requirements whose expected post-action facts are selected for
+    the fixed transition.
+  * Target-state consistency facts from `I` may be used as reusable evidence and
+    context when deriving edge-local `Psi`.
+  * Supported postcondition side-effect observations are emitted as grounded
+    `effect_requirements`; unsupported effect observations remain as audit-only
+    metadata in `effect_requirements` with an evidence-based reason.
   * The top-level `contract` is an exact compatibility alias of `precondition`.
   * Executable predicates may read only source evidence, known-action properties,
     literals supported by source/action evidence, and declared `$intent.*` slots.
   * Precondition predicates may not reference target-only UI.
-  * Postcondition predicates may not reference source-only UI unless the predicate is
-    an `action(...)`-free target/effect check supported by Q/diff evidence.
+  * Postcondition predicates may reference target UI observed in Q. Supported effect
+    requirements may reference source UI for `disappears` and stable source/target UI
+    for `changes_value`.
   * No executable predicate references an alias absent from `[Source widget registry]`.
   * For postcondition predicates, use target aliases/resource ids observed in Q or
     effect facts explicitly supported by the source-to-target diff.
-  * Do not encode `appears`, `disappears`, `changes_value`, `count_changes`, or other
-    side-effect verbs as pseudo-predicates; put them in `effect_requirements`.
+  * Encode `appears`, `disappears`, and `changes_value` as typed
+    `effect_requirements` with grounding fields. Use audit metadata for effect kinds
+    outside the supported set.
   * Element predicates are executable only when the referenced registry entry exposes
     a runtime-resolvable `resource_id`; prefer such aliases.
   * Every predicate must be independently executable. A single non-executable predicate
@@ -461,15 +486,16 @@ ReadableActionProperty:
   * No executable predicate uses an undeclared `$intent.*`.
   * No executable predicate uses a predicate outside `PredicateBasis`.
   * For `postcondition.predicates`, prefer only `in_state`, `read`, `contains`,
-    `count`, and `value`; do not use `action` or `time_in` unless a future prompt
-    explicitly enables them for Psi.
+    `count`, and `value`. Use `postcondition.effect_requirements` for
+    `appears`, `disappears`, and `changes_value`.
   * Do not assert literal equality against a source-known string property unless it
     matches the registry value.
   * Static APK priors never prove runtime presence, transition existence, or safety,
     and never prove post-state effects.
   * Enabledness/clickability alone never completes a semantic-required precondition.
-  * Generic arrival facts alone serve the target-state consistency layer and do not
-    complete an intent-effect-required postcondition.
+  * Generic arrival facts may be included in `Psi` as edge-local arrival
+    confirmation. Intent-effect-required postconditions still need a grounded
+    action/intent/effect predicate or an explicit incompleteness flag.
   * The top-level `semantic_binding_incomplete` mirrors
     `precondition.semantic_binding_incomplete`; keep them consistent.
   * The top-level `postcondition_incomplete` mirrors
@@ -518,9 +544,9 @@ ReadableActionProperty:
   * Each predicate is typed by `PredicateBasis`.
   * Do not emit natural-language pseudo-predicates such as `visible(...)`,
     `textexists(...)`, `selected(...)`, `matches(...)`, or `is_recipient(...)`.
-  * Do not emit side-effect pseudo-predicates such as `appears(...)`,
-    `disappears(...)`, or `changes_value(...)`; these belong in
-    `postcondition.effect_requirements`.
+  * Emit source-to-target effect facts as typed `postcondition.effect_requirements`.
+    `appears`, `disappears`, and `changes_value` are supported effect kinds when
+    grounded by the required fields.
 
 [SPECIFICATION of Executability Admission]
 **Pre-Condition**:
@@ -534,10 +560,9 @@ ReadableActionProperty:
   * Precondition action predicates may use only `action_type`, `target_text`,
     `target_resource_id`, `target_content_desc`, or `input_text`.
   * Precondition predicates may not read target-only UI.
-  * Postcondition element/effect predicates must use a target alias/resource id
-    observed in Q, or an effect fact explicitly supported by the source-to-target diff.
-  * Postcondition predicates may not read source-only UI unless it is represented as
-    the fixed known action or a diff-supported effect requirement.
+  * Postcondition element predicates must use a target alias/resource id observed in Q.
+  * `appears` uses an element observed in Q. `disappears` uses an element observed in
+    P. `changes_value` uses a stable element observed across P and Q.
   * `in_state` requires `args.state`; `time_in` requires `args.start` and `args.end`.
   * If any predicate violates these rules, omit it from the relevant side. If no
     sound precondition predicate remains, return Case 3 for Gamma; if no sound

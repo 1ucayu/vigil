@@ -307,6 +307,7 @@ _VALID_ITEM_CONTRACT = json.dumps(
                     "name": "thread_visible",
                     "effect_kind": "appears",
                     "description": "Thread screen should be visible.",
+                    "element": f"{PKG}:id/message_input",
                     "evidence": "target state is s2",
                 }
             ],
@@ -366,21 +367,23 @@ def test_hybrid_accepts_complete_llm_contract():
     assert report[0]["postcondition"]["kind"] == "content_effect"
     assert report[0]["postcondition_incomplete"] is False
     assert report[0]["postcondition_dsl"] == (
-        f"contains({PKG}:id/message_input, $intent.contact_name)"
+        f"contains({PKG}:id/message_input, $intent.contact_name) && "
+        f"appears({PKG}:id/message_input)"
     )
     assert report[0]["postcondition_status"] == "admitted"
-    assert report[0]["postcondition_unsupported_effects"]
+    assert report[0]["postcondition_unsupported_effects"] == []
     assert fsm.transitions[0].guard == "action(target_text) == $intent.contact_name"
     assert fsm.transitions[0].postcondition == (
-        f"contains({PKG}:id/message_input, $intent.contact_name)"
+        f"contains({PKG}:id/message_input, $intent.contact_name) && "
+        f"appears({PKG}:id/message_input)"
     )
     assert fsm.transitions[0].postcondition_admission_status is GuardAdmissionStatus.ADMITTED
     assert fsm.transitions[0].postcondition_contract is not None
     assert fsm.transitions[0].postcondition_contract.kind == "content_effect"
-    assert fsm.transitions[0].postcondition_contract.effect_requirements[0].unsupported_reason
+    assert not fsm.transitions[0].postcondition_contract.effect_requirements[0].unsupported_reason
 
 
-def test_hybrid_routes_arrival_only_postcondition_to_invariants_layer():
+def test_hybrid_keeps_arrival_only_postcondition_on_transition():
     fsm, raw_screens = _build_fsm()
     report = generate_contract_guards(
         fsm,
@@ -390,9 +393,9 @@ def test_hybrid_routes_arrival_only_postcondition_to_invariants_layer():
     )
 
     assert report[0]["postcondition_status"] == "admitted"
-    assert report[0]["postcondition_dsl"] is None
-    assert "invariant layer" in report[0]["postcondition_reason"]
-    assert fsm.transitions[0].postcondition is None
+    assert report[0]["postcondition_dsl"] == "in_state(s2)"
+    assert report[0]["postcondition_reason"] == "admitted: 1 executable postcondition predicate(s)"
+    assert fsm.transitions[0].postcondition == "in_state(s2)"
     assert fsm.transitions[0].postcondition_admission_status is GuardAdmissionStatus.ADMITTED
 
 

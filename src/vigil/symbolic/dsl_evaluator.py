@@ -51,6 +51,13 @@ class ScreenContext(BaseModel):
     current_state: str | None = None
 
 
+class PostconditionContext(BaseModel):
+    """Before/after screen pair for transition-effect Psi evaluation."""
+
+    source_screen: ScreenContext = Field(default_factory=ScreenContext)
+    target_screen: ScreenContext = Field(default_factory=ScreenContext)
+
+
 class GuardStatus(StrEnum):
     """Three-valued evaluation result for a DSL guard or invariant."""
 
@@ -116,6 +123,9 @@ _STRUCTURAL_TOKENS = frozenset(
         "contains(",
         "count(",
         "action(",
+        "appears(",
+        "disappears(",
+        "changes_value(",
         ",",
         ")",
         "(",
@@ -146,11 +156,15 @@ class _GuardEvaluator(Transformer):
         screen_ctx: ScreenContext,
         intent_ctx: IntentContext | None = None,
         action_ctx: dict[str, Any] | None = None,
+        source_ctx: ScreenContext | None = None,
+        target_ctx: ScreenContext | None = None,
     ) -> None:
         super().__init__()
         self._ctx = screen_ctx
         self._intent = intent_ctx
         self._action = action_ctx
+        self._source_ctx = source_ctx
+        self._target_ctx = target_ctx
 
     def start(self, args: list[Any]) -> Any:
         return args[0]
@@ -305,6 +319,74 @@ class _GuardEvaluator(Transformer):
             return _Unknown(f"action property '{prop_name}' missing")
         actual = self._action.get(prop_name)
         return self._compare(actual, op_str, expected)
+
+    def appears_pred(self, args: list[Any]) -> Any:
+        named = _filter_named(args)
+        if not named:
+            return _Unknown("malformed appears predicate")
+        contexts = self._post_contexts()
+        if _is_unknown(contexts):
+            return contexts
+        source, target = contexts
+        element_name = str(named[0])
+        return element_name not in source.elements and element_name in target.elements
+
+    def disappears_pred(self, args: list[Any]) -> Any:
+        named = _filter_named(args)
+        if not named:
+            return _Unknown("malformed disappears predicate")
+        contexts = self._post_contexts()
+        if _is_unknown(contexts):
+            return contexts
+        source, target = contexts
+        element_name = str(named[0])
+        return element_name in source.elements and element_name not in target.elements
+
+    def changes_value_pred(self, args: list[Any]) -> Any:
+        named = _filter_named(args)
+        if not named:
+            return _Unknown("malformed changes_value predicate")
+        contexts = self._post_contexts()
+        if _is_unknown(contexts):
+            return contexts
+        source, target = contexts
+        element_name = str(named[0])
+        prop_name = str(named[1]) if len(named) >= 2 else ""
+        source_value = self._read_post_value(source, element_name, prop_name)
+        if _is_unknown(source_value):
+            return source_value
+        target_value = self._read_post_value(target, element_name, prop_name)
+        if _is_unknown(target_value):
+            return target_value
+
+        if len(named) >= 4:
+            expected_before = self._parse_value(named[2])
+            expected_after = self._parse_value(named[3])
+            if _is_unknown(expected_before):
+                return expected_before
+            if _is_unknown(expected_after):
+                return expected_after
+            return source_value == expected_before and target_value == expected_after
+        return source_value != target_value
+
+    def _post_contexts(self) -> tuple[ScreenContext, ScreenContext] | _Unknown:
+        if self._source_ctx is None or self._target_ctx is None:
+            return _Unknown("postcondition source/target context not provided")
+        return self._source_ctx, self._target_ctx
+
+    @staticmethod
+    def _read_post_value(ctx: ScreenContext, element_name: str, prop_name: str) -> Any:
+        el = ctx.elements.get(element_name)
+        if el is None:
+            return _Unknown(f"element '{element_name}' not present in postcondition context")
+        if prop_name:
+            if prop_name not in el:
+                return _Unknown(f"property '{prop_name}' not readable on '{element_name}'")
+            return el.get(prop_name)
+        for fallback_prop in ("value", "text", "content_description"):
+            if fallback_prop in el:
+                return el.get(fallback_prop)
+        return _Unknown(f"no readable value on '{element_name}'")
 
     def _parse_value(self, token: Token | str) -> Any:
         """Parse a VALUE token into a Python value, resolving $intent.* from context.
@@ -516,6 +598,42 @@ class _LogicClauseTransformer(Transformer):
             value=value,
         )
 
+    def appears_pred(self, args: list[Any]) -> dict[str, Any]:
+        named = _filter_named(args)
+        element = str(named[0])
+        return _predicate_clause(
+            "appears",
+            f"appears({element})",
+            element=element,
+        )
+
+    def disappears_pred(self, args: list[Any]) -> dict[str, Any]:
+        named = _filter_named(args)
+        element = str(named[0])
+        return _predicate_clause(
+            "disappears",
+            f"disappears({element})",
+            element=element,
+        )
+
+    def changes_value_pred(self, args: list[Any]) -> dict[str, Any]:
+        named = _filter_named(args)
+        element = str(named[0])
+        prop = str(named[1]) if len(named) >= 2 else ""
+        before = str(named[2]) if len(named) >= 4 else ""
+        after = str(named[3]) if len(named) >= 4 else ""
+        suffix = f", {prop}" if prop else ""
+        if before or after:
+            suffix = f", {prop}, {before}, {after}"
+        return _predicate_clause(
+            "changes_value",
+            f"changes_value({element}{suffix})",
+            element=element,
+            property=prop,
+            before=before,
+            after=after,
+        )
+
 
 class DSLEvaluator:
     """Evaluates DSL guard expressions against runtime context.
@@ -544,6 +662,46 @@ class DSLEvaluator:
         """Parse guard, resolve $intent.* variables, evaluate predicates."""
         if screen_ctx is None:
             screen_ctx = ScreenContext()
+        return self._evaluate_with_context(
+            guard_expr,
+            intent_ctx=intent_ctx,
+            screen_ctx=screen_ctx,
+            action_ctx=action_ctx,
+        )
+
+    def evaluate_postcondition(
+        self,
+        postcondition_expr: str,
+        postcondition_ctx: PostconditionContext,
+        intent_ctx: IntentContext | None = None,
+        action_ctx: dict[str, Any] | None = None,
+    ) -> GuardResult:
+        """Evaluate Psi over a source/target screen pair.
+
+        Ordinary target predicates (`read`, `value`, `contains`, `count`,
+        `in_state`) read the target screen. Effect predicates compare the source
+        and target screens.
+        """
+        return self._evaluate_with_context(
+            postcondition_expr,
+            intent_ctx=intent_ctx,
+            screen_ctx=postcondition_ctx.target_screen,
+            action_ctx=action_ctx,
+            source_ctx=postcondition_ctx.source_screen,
+            target_ctx=postcondition_ctx.target_screen,
+        )
+
+    def _evaluate_with_context(
+        self,
+        guard_expr: str,
+        intent_ctx: IntentContext | None = None,
+        screen_ctx: ScreenContext | None = None,
+        action_ctx: dict[str, Any] | None = None,
+        source_ctx: ScreenContext | None = None,
+        target_ctx: ScreenContext | None = None,
+    ) -> GuardResult:
+        if screen_ctx is None:
+            screen_ctx = ScreenContext()
 
         bound_expr = self.bind_intent(guard_expr, intent_ctx) if intent_ctx else guard_expr
 
@@ -560,7 +718,13 @@ class DSLEvaluator:
             )
 
         try:
-            evaluator = _GuardEvaluator(screen_ctx, intent_ctx=intent_ctx, action_ctx=action_ctx)
+            evaluator = _GuardEvaluator(
+                screen_ctx,
+                intent_ctx=intent_ctx,
+                action_ctx=action_ctx,
+                source_ctx=source_ctx,
+                target_ctx=target_ctx,
+            )
             result = evaluator.transform(tree)
         except Exception as e:
             logger.debug(f"Guard evaluation error: {e}")

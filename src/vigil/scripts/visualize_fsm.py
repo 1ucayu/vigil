@@ -548,11 +548,12 @@ def _effect_requirements_view(contract: dict[str, Any]) -> list[dict[str, str]]:
         description = str(effect.get("description") or "").strip()
         evidence = str(effect.get("evidence") or "").strip()
         unsupported_reason = str(effect.get("unsupported_reason") or "").strip()
+        if not unsupported_reason:
+            continue
         text = f"{name}: {description}" if description else name
         if evidence:
             text = f"{text} | evidence: {evidence}"
-        if unsupported_reason:
-            text = f"{text} | unsupported: {unsupported_reason}"
+        text = f"{text} | unsupported: {unsupported_reason}"
         rows.append(
             {
                 "text": text,

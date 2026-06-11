@@ -18,7 +18,7 @@ guarantees the resulting DSL is **runtime-executable by the current**
   metadata.
 
 Anything that cannot be guaranteed executable is ``REJECTED`` or ``LOW_TRUST`` — never
-attached. No LLM, no grammar expansion, no DecisionEngine/DSLEvaluator changes.
+attached.
 """
 
 from __future__ import annotations
@@ -204,7 +204,7 @@ def _known_string_props(entry: WidgetRegistryEntry) -> dict[str, str]:
 
 
 def _resolve_element(
-    element: str, registry: WidgetRegistry
+    element: str, registry: WidgetRegistry, registry_name: str = "source"
 ) -> tuple[str | None, WidgetRegistryEntry | None, str]:
     """Lower an element reference to a runtime-resolvable key (full ``resource_id``)."""
     entry = registry.entries.get(element)
@@ -220,7 +220,7 @@ def _resolve_element(
         # Already a known resource_id — use verbatim.
         alias = registry.resource_id_to_alias[element]
         return element, registry.entries.get(alias), ""
-    return None, None, f"element '{element}' not present in source registry"
+    return None, None, f"element '{element}' not present in {registry_name} registry"
 
 
 def _lower_predicate(
