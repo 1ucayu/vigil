@@ -129,6 +129,10 @@ def test_user_prompt_includes_evidence_and_marks_target_effect_only():
     prompt = build_guard_user_prompt(_evidence())
     assert "s1" in prompt and "s2" in prompt
     assert "Send" in prompt
+    assert "transition pre/post contract" in prompt
+    assert "precondition" in prompt
+    assert "postcondition" in prompt
+    assert "compatibility contract" in prompt
     assert "EFFECT-ONLY" in prompt
     assert "messaging/thread" in prompt
     assert "[Transition]" in prompt
@@ -179,6 +183,31 @@ def test_parses_wrapper_json():
     assert candidate.raw_response == raw
 
 
+def test_parses_precondition_from_transition_contract_wrapper():
+    raw = json.dumps(
+        {
+            "precondition": _contract_json(),
+            "postcondition": {
+                "kind": "message_sent",
+                "required": True,
+                "predicates": [],
+                "intent_effect_required": True,
+                "intent_effect_incomplete": True,
+            },
+            "semantic_binding_incomplete": False,
+            "postcondition_incomplete": True,
+        }
+    )
+    candidate = parse_llm_guard_candidate(raw)
+    assert candidate.rejection_reason == ""
+    assert candidate.contract.kind is GuardKind.CONFIRM_COMMIT
+    assert candidate.contract.required is True
+    assert candidate.postcondition is not None
+    assert candidate.postcondition.kind == "message_sent"
+    assert candidate.postcondition.intent_effect_required is True
+    assert candidate.postcondition_incomplete is True
+
+
 def test_parses_bare_contract_object():
     raw = json.dumps(_contract_json())
     candidate = parse_llm_guard_candidate(raw)
@@ -224,6 +253,27 @@ def test_disallowed_predicate_expected_kind_is_rejected():
     candidate = parse_llm_guard_candidate(json.dumps({"contract": bad}))
     assert candidate.rejection_reason
     assert "not allowed" in candidate.rejection_reason
+
+
+def test_disallowed_postcondition_expected_kind_is_rejected():
+    postcondition = {
+        "kind": "arrival_state",
+        "required": True,
+        "predicates": [
+            {
+                "predicate_type": "read",
+                "element": "banner",
+                "property": "text",
+                "operator": "==",
+                "expected": {"kind": "read", "element": "other", "property": "text"},
+            }
+        ],
+    }
+    candidate = parse_llm_guard_candidate(
+        json.dumps({"contract": _contract_json(), "postcondition": postcondition})
+    )
+    assert candidate.rejection_reason
+    assert "postcondition predicate" in candidate.rejection_reason
 
 
 def test_binding_requirements_preserved_as_metadata():

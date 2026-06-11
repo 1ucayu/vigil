@@ -1,5 +1,7 @@
 [PROMPT]
-Generate one typed `GuardContract` for one existing mobile-GUI FSM transition.
+Generate one typed transition contract for one existing mobile-GUI FSM transition:
+an explicit source-side precondition `Gamma` and a target-side transition-effect
+postcondition `Psi`.
 
 Use this file as a structured specification:
 ```text
@@ -24,12 +26,17 @@ The transition is presented as Hoare-style read-only evidence:
 ```text
 { Gamma(source screen P, known_action properties, frozen $intent.*) }
 known_action
-{ target_state / effect-only evidence Q }
+{ Psi(source, known_action, target, frozen $intent.*) AND I(target state Q) }
 ```
 
-`known_action` is fixed by the FSM. Synthesize only `Gamma`, the pre-action
-transition guard. `$bind.*` is recorded separately in `binding_requirements`; it is
-not an executable `Gamma` predicate.
+`known_action` is fixed by the FSM. Synthesize `Gamma` as the pre-action
+transition guard and `Psi` as the action-specific post-effect contract. The
+state-invariant layer `I` carries target-state consistency facts such as stable
+screen identity, stable titles, persistent affordances, and structural facts.
+`Psi` carries facts whose expected target value is induced by this transition's
+action, frozen intent, or source-to-target effect evidence. `$bind.*` is recorded
+separately in binding requirements; it is not an executable predicate in either
+`Gamma` or `Psi`.
 
 Return JSON only.
 
@@ -43,9 +50,15 @@ When rules overlap, keep the stricter executable-soundness constraint.
 FSM_SCOPE:
   model: M_A = <S, s0, Sigma, delta, Gamma, I, rho>
   transition_exists_in_delta: true
-  generated_object: Gamma
-  generated_object_kind: typed GuardContract candidate
-  executable_backend: conjunction of admitted DSL predicates
+  generated_object: Gamma and Psi
+  generated_object_kind: typed transition pre/post contract candidate
+  executable_backend:
+    Gamma: conjunction of admitted source/action DSL predicates
+    Psi: conjunction of admitted target-side transition-effect DSL predicates
+  target_consistency_layer:
+    I: state-level invariants over Q, checked after transition arrival
+  transition_effect_layer:
+    Psi: action/intent/diff-conditioned target facts for this specific edge
 
 TRANSITION_SCOPE:
   source_state_id: string
@@ -91,7 +104,8 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
     meaning: only legal element aliases for executable element predicates
 
   [Post-state Evidence: Q / target]:
-    role: effect-only semantic evidence
+    role: executable postcondition read scope for transition-effect Psi;
+          effect-only evidence for Gamma
     state_id: string
     screen_id: string
     xml_excerpt: string       // full XML text when available; field name is legacy
@@ -105,7 +119,7 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
 
   [Source-to-target semantic/evidence diff]:
     diff_summary: string
-    role: effect-only semantic disambiguation
+    role: semantic disambiguation for both guard obligation and postcondition effects
 
   [Sibling outgoing actions]:
     actions: list<Action>
@@ -117,42 +131,42 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
     resource_strings?: map<string, string>
     string_arrays?: map<string, list<string>>
     layout_widget_declarations?: list<string>
-    role: role/domain/audit-risk hints only; not runtime proof
+    role: role/domain/side-effect hints only; not runtime proof
 
   [Verifier Basis]:
     predicate_vocabulary: PredicateBasis
     readable_element_properties: set<Property>
     readable_action_properties: set<Property>
-    output_schema: GuardContract
+    output_schema: TransitionPrePostContract
 
   [Action Impact Taxonomy]:
     role: classify why a guard is needed without hardcoding app-specific labels.
-          risk_level is audit/report metadata only; guard obligations come from
-          required and semantic_binding_required.
+          Guard obligations come from required and semantic_binding_required,
+          not from a severity label.
     dimensions:
       state_topology:
         meaning: screen navigation, modal open/close, back/cancel, tab change
-        usual_risk: low unless it commits state or hides a destructive step
+        usual_obligation: usually optional unless it commits state or hides a destructive step
       semantic_binding:
         meaning: choosing the intended item/person/account/address/file/row/value
-        usual_risk: medium when wrong binding changes task meaning
+        usual_obligation: required when wrong binding changes task meaning
       local_reversible_state:
         meaning: editable local app state that can be corrected before final commit
-        usual_risk: medium when it affects later commit; low when purely cosmetic
+        usual_obligation: required when it affects later commit; usually optional when purely cosmetic
       irreversible_or_costly_state:
         meaning: changes that are hard to undo, destructive, paid, externally visible,
                  security-sensitive, privacy-sensitive, or permission/authority granting
-        usual_risk: high
+        usual_obligation: required
       external_side_effect:
         meaning: communication, publication, order placement, transfer, payment,
                  account/security change, data deletion, permission grant, or device/app
                  state change outside the current screen
-        usual_risk: high unless evidence proves the effect is reversible and local
+        usual_obligation: required unless evidence proves the effect is reversible and local
     classification_factors:
       - source UI role and source widget registry facts
       - known_action properties and sibling alternatives
       - source->target semantic/evidence diff
-      - target Q as effect-only evidence
+      - target Q as postcondition/effect evidence
       - static APK priors as hints only
       - whether the user intent must bind item/value/recipient/account/address/content
 ```
@@ -205,6 +219,89 @@ ReadableActionProperty:
 [GUARANTEE]
 ```json
 {
+  "precondition": {
+    "kind": "none|navigation|item_binding|input_binding|toggle_binding|form_check|confirm_commit|safety_check|unknown",
+    "required": true,
+    "risk_level": "low|medium|high|unknown",
+    "required_slots": [
+      {
+        "name": "amount",
+        "slot_type": "string|number|boolean|enum|unknown",
+        "description": "",
+        "required": true,
+        "value_domain": []
+      }
+    ],
+    "predicates": [
+      {
+        "predicate_type": "read|value|action|contains|count|in_state|time_in",
+        "element": "<source registry alias or null>",
+        "property": "<readable property or null>",
+        "operator": "==|!=|>|<|>=|<=|null",
+        "expected": {
+          "kind": "literal|intent",
+          "value": "<literal value or null>",
+          "slot": "<intent slot name or null>"
+        },
+        "args": {}
+      }
+    ],
+    "binding_requirements": [
+      {
+        "name": "selected_payee",
+        "bind_kind": "row|selector|action|element",
+        "description": "",
+        "value_domain": []
+      }
+    ],
+    "semantic_binding_required": true,
+    "semantic_binding_incomplete": false,
+    "confidence": 0.0,
+    "provenance": ["llm"],
+    "notes": ""
+  },
+  "postcondition": {
+    "kind": "none|arrival_state|content_effect|item_added|item_removed|message_sent|payment_or_transfer|toggle_effect|form_effect|unknown",
+    "required": true,
+    "risk_level": "low|medium|high|unknown",
+    "required_slots": [
+      {
+        "name": "amount",
+        "slot_type": "string|number|boolean|enum|unknown",
+        "description": "",
+        "required": true,
+        "value_domain": []
+      }
+    ],
+    "predicates": [
+      {
+        "predicate_type": "read|value|contains|count|in_state|time_in",
+        "element": "<target registry alias, target resource id, or null>",
+        "property": "<readable target property or null>",
+        "operator": "==|!=|>|<|>=|<=|null",
+        "expected": {
+          "kind": "literal|intent",
+          "value": "<literal value or null>",
+          "slot": "<intent slot name or null>"
+        },
+        "args": {}
+      }
+    ],
+    "effect_requirements": [
+      {
+        "name": "message_visible_after_send",
+        "effect_kind": "appears|disappears|changes_value|count_changes|state_reached|unknown",
+        "description": "",
+        "evidence": "",
+        "unsupported_reason": ""
+      }
+    ],
+    "intent_effect_required": true,
+    "intent_effect_incomplete": false,
+    "confidence": 0.0,
+    "provenance": ["llm"],
+    "notes": ""
+  },
   "contract": {
     "kind": "none|navigation|item_binding|input_binding|toggle_binding|form_check|confirm_commit|safety_check|unknown",
     "required": true,
@@ -247,33 +344,39 @@ ReadableActionProperty:
     "notes": ""
   },
   "semantic_binding_incomplete": false,
+  "postcondition_incomplete": false,
   "rejection_reason": ""
 }
 ```
 
 [SPECIFICATION]
-**Pre-Condition**:
+**Pre-Condition of this generation task**:
   * `transition_exists_in_delta` is true.
-  * `[Pre-state Evidence: P / source]` is the only executable UI read scope.
-  * `[Post-state Evidence: Q / target]` is effect-only evidence.
+  * `[Pre-state Evidence: P / source]` is the only executable UI read scope for
+    `precondition` / `Gamma`.
+  * `[Post-state Evidence: Q / target]` is the executable UI read scope for
+    `postcondition` / `Psi`, and is effect-only evidence for `Gamma`.
   * `[Global Information / Static APK Priors]` is prior knowledge only.
   * Local paths are provenance only; use full `xml_excerpt`, `compact_tree_text`,
     `alt_text`, source widget registry facts, and attached images as evidence.
   * The current runtime evaluator executes only the listed `PredicateBasis`.
+  * The current postcondition admission path compiles only
+    `postcondition.predicates` using the current DSL vocabulary. It does not compile
+    `effect_requirements`.
 
-**Legal Outcomes**:
+**Legal Outcomes for Precondition `Gamma`**:
 
 **Case 1 (Executable semantic guard)**:
   If source/action evidence supports a semantic binding to frozen user intent:
     * Emit a typed `GuardContract`.
+    * Put it in both top-level `precondition` and top-level `contract`.
     * Declare every referenced `$intent.*` variable in `required_slots`.
     * Emit at least one predicate whose `expected.kind == "intent"`.
     * Prefer `action(input_text) == $intent.<slot>`,
       `action(target_text) == $intent.<slot>`, or
       `action(target_resource_id) == $intent.<slot>` for user/task-side input or
       item-selection bindings when action evidence supports it.
-    * Set `semantic_binding_required` according to the transition's guard obligation,
-      not according to `risk_level` alone.
+    * Set `semantic_binding_required` according to the transition's guard obligation.
     * Set `semantic_binding_incomplete = false`.
 
 **Case 2 (Partial executable guard)**:
@@ -286,21 +389,70 @@ ReadableActionProperty:
 **Case 3 (No sound executable guard)**:
   If no sound source/action predicate can be produced:
     * Emit `predicates = []`.
-    * Set `required` and `semantic_binding_required` conservatively; set
-      `risk_level` only as audit/report metadata.
+    * Set `required` and `semantic_binding_required` conservatively.
     * For semantic-required transitions, set
       `semantic_binding_incomplete = true`.
     * Set `rejection_reason` to an evidence-based reason.
+
+**Legal Outcomes for Postcondition `Psi`**:
+
+**Case P1 (Executable intent-conditioned effect check)**:
+  If target/diff evidence supports checking that the action produced the intended
+  effect after arrival:
+    * Emit a typed `postcondition` contract.
+    * Declare every referenced `$intent.*` variable in `postcondition.required_slots`.
+    * Emit at least one postcondition predicate whose expected target fact is
+      determined by the known action, a declared `$intent.*` slot, or the
+      source-to-target effect evidence.
+    * Prefer predicates over reflected target/effect facts such as
+      `contains(message_list, $intent.message_text)`,
+      `contains(history_list, $intent.amount)`,
+      `read(toggle, is_checked) == $intent.desired_state`, or
+      `count(cart_items) > 0` when supported by Q/diff evidence.
+    * Use `in_state(<target_state_id>)` only as supporting context when an
+      effect predicate is also present.
+    * Use only currently expressible postcondition predicate types:
+      `in_state`, `read`, `contains`, `count`, and `value`.
+    * Put non-DSL side effects such as appears/disappears/changes_value into
+      `effect_requirements`, not into `postcondition.predicates`.
+    * Set `intent_effect_required` according to the transition's effect obligation.
+    * Set `intent_effect_incomplete = false`.
+
+**Case P2 (Partial executable postcondition)**:
+  If only generic target-state/effect evidence is executable:
+    * Emit executable target/effect predicates that are grounded in Q/diff evidence.
+    * For effect-required transitions, set `intent_effect_incomplete = true`.
+    * Explain the missing intent-conditioned effect in `notes` or
+      `rejection_reason`.
+
+**Case P3 (No sound executable postcondition)**:
+  If no sound target/effect predicate can be produced:
+    * Emit `postcondition.predicates = []`.
+    * Set `postcondition.required` and `intent_effect_required` conservatively.
+    * For effect-required transitions, set `intent_effect_incomplete = true`.
 
 **Always-Enforced Rules**:
   * No FSM states, actions, transitions, replay confidence, or runtime verdicts are
     created or changed.
   * `known_action` remains unchanged.
-  * `Gamma` is represented as a conjunction of typed predicates.
+  * `Gamma` / `precondition` is represented as a conjunction of typed predicates.
+  * `Psi` / `postcondition` is represented as a conjunction of typed predicates whose
+    expected target facts are induced by the fixed transition.
+  * Target-state consistency facts are represented by `I`; use them as evidence and
+    context when deriving `Psi`.
+  * Postcondition side-effect observations that are not directly expressible in the
+    current DSL stay in `effect_requirements` as audit-only metadata.
+  * The top-level `contract` is an exact compatibility alias of `precondition`.
   * Executable predicates may read only source evidence, known-action properties,
     literals supported by source/action evidence, and declared `$intent.*` slots.
-  * No executable predicate references target-only UI.
+  * Precondition predicates may not reference target-only UI.
+  * Postcondition predicates may not reference source-only UI unless the predicate is
+    an `action(...)`-free target/effect check supported by Q/diff evidence.
   * No executable predicate references an alias absent from `[Source widget registry]`.
+  * For postcondition predicates, use target aliases/resource ids observed in Q or
+    effect facts explicitly supported by the source-to-target diff.
+  * Do not encode `appears`, `disappears`, `changes_value`, `count_changes`, or other
+    side-effect verbs as pseudo-predicates; put them in `effect_requirements`.
   * Element predicates are executable only when the referenced registry entry exposes
     a runtime-resolvable `resource_id`; prefer such aliases.
   * Every predicate must be independently executable. A single non-executable predicate
@@ -308,22 +460,32 @@ ReadableActionProperty:
   * No executable predicate uses `$bind.*`.
   * No executable predicate uses an undeclared `$intent.*`.
   * No executable predicate uses a predicate outside `PredicateBasis`.
+  * For `postcondition.predicates`, prefer only `in_state`, `read`, `contains`,
+    `count`, and `value`; do not use `action` or `time_in` unless a future prompt
+    explicitly enables them for Psi.
   * Do not assert literal equality against a source-known string property unless it
     matches the registry value.
   * Static APK priors never prove runtime presence, transition existence, or safety,
-    and are never post-state checks.
-  * Enabledness/clickability alone never completes a semantic-required guard.
+    and never prove post-state effects.
+  * Enabledness/clickability alone never completes a semantic-required precondition.
+  * Generic arrival facts alone serve the target-state consistency layer and do not
+    complete an intent-effect-required postcondition.
   * The top-level `semantic_binding_incomplete` mirrors
-    `contract.semantic_binding_incomplete`; keep them consistent.
+    `precondition.semantic_binding_incomplete`; keep them consistent.
+  * The top-level `postcondition_incomplete` mirrors
+    `postcondition.intent_effect_incomplete`; keep them consistent.
 
 **System Algorithm**:
   1. Classify action kind and guard obligation using the Action Impact Taxonomy from
      source/action evidence, target effect, siblings, and static priors as hints.
   2. Decide whether semantic binding is required.
-  3. Select only source/action predicates from `PredicateBasis`.
-  4. Declare `$intent.*` slots for user/task-side values.
-  5. Put UI/action-side binding needs into `binding_requirements`; do not compile them.
-  6. Return Case 1, Case 2, or Case 3.
+  3. Decide whether a transition-effect postcondition is required.
+  4. Select precondition predicates only from source/action evidence.
+  5. Select postcondition predicates only from target/diff/effect evidence whose
+     expected value is tied to the known action or frozen intent.
+  6. Declare `$intent.*` slots separately in precondition and postcondition when used.
+  7. Put UI/action-side binding needs into `binding_requirements`; do not compile them.
+  8. Return the appropriate precondition case and postcondition case.
 
 ## Refine Prompt
 [SPECIFICATION of Hoare Guard Scope]
@@ -331,44 +493,76 @@ ReadableActionProperty:
   * A `HOARE_TRANSITION_EVIDENCE_PACKET` is provided.
 
 **Post-Condition**:
-  * The generated object is only `Gamma`.
-  * Target evidence may affect only classification, audit-risk metadata, notes,
-    binding requirements, or rejection reasons.
+  * The generated precondition object is `Gamma`.
+  * The generated postcondition object is `Psi`, the transition-effect contract for
+    the fixed edge.
+  * The generated postcondition is interpreted together with target-state
+    invariants `I(Q)` during the post-action verifier phase.
+  * Target evidence may affect Gamma only through classification, side-effect
+    metadata, notes, binding requirements, or rejection reasons.
+  * Target evidence is the executable read scope for effect predicates in Psi.
 
 [SPECIFICATION of Guard Predicate Conjunction]
 **Pre-Condition**:
-  * `contract.predicates` is non-empty.
+  * A `precondition`, `postcondition`, or compatibility `contract` predicate list
+    is emitted.
 
 **Post-Condition**:
-  * The contract denotes `predicate_1 AND predicate_2 AND ... AND predicate_n`.
+  * `precondition.predicates` denotes `predicate_1 AND predicate_2 AND ... AND
+    predicate_n` for Gamma.
+  * `postcondition.predicates` denotes `predicate_1 AND predicate_2 AND ... AND
+    predicate_n` for Psi.
+  * `contract.predicates` is identical to `precondition.predicates`.
+  * Empty predicate lists mean no executable predicate could be soundly emitted for
+    that side; they do not authorize inventing a natural-language predicate.
   * Each predicate is typed by `PredicateBasis`.
   * Do not emit natural-language pseudo-predicates such as `visible(...)`,
     `textexists(...)`, `selected(...)`, `matches(...)`, or `is_recipient(...)`.
+  * Do not emit side-effect pseudo-predicates such as `appears(...)`,
+    `disappears(...)`, or `changes_value(...)`; these belong in
+    `postcondition.effect_requirements`.
 
 [SPECIFICATION of Executability Admission]
 **Pre-Condition**:
-  * A predicate is proposed for executable admission.
+  * A predicate is proposed for executable admission in `precondition` or
+    `postcondition`.
 
 **Post-Condition**:
-  * Element predicates must use a source registry alias backed by `resource_id`, or a
-    known source `resource_id` itself.
-  * `action(type)` is normalized to `action(action_type)`.
-  * Action predicates may use only `action_type`, `target_text`,
+  * Precondition element predicates must use a source registry alias backed by
+    `resource_id`, or a known source `resource_id` itself.
+  * Precondition `action(type)` is normalized to `action(action_type)`.
+  * Precondition action predicates may use only `action_type`, `target_text`,
     `target_resource_id`, `target_content_desc`, or `input_text`.
+  * Precondition predicates may not read target-only UI.
+  * Postcondition element/effect predicates must use a target alias/resource id
+    observed in Q, or an effect fact explicitly supported by the source-to-target diff.
+  * Postcondition predicates may not read source-only UI unless it is represented as
+    the fixed known action or a diff-supported effect requirement.
   * `in_state` requires `args.state`; `time_in` requires `args.start` and `args.end`.
-  * If any predicate violates these rules, omit it. If no sound predicate remains,
-    return Case 3.
+  * If any predicate violates these rules, omit it from the relevant side. If no
+    sound precondition predicate remains, return Case 3 for Gamma; if no sound
+    postcondition predicate remains, return Case P3 for Psi.
 
 [SPECIFICATION of `$intent.*`]
 **Pre-Condition**:
-  * A predicate uses `expected.kind == "intent"`.
+  * A precondition or postcondition predicate uses `expected.kind == "intent"`.
 
 **Post-Condition**:
   * `expected.slot` is non-null.
-  * `required_slots` contains the same slot name.
+  * The same side's `required_slots` contains the slot name.
   * The slot denotes user/task intent, not UI-side row binding.
+  * If the same intent slot appears in both Gamma and Psi, use the same slot name,
+    type, and value-domain description on both sides.
   * Common executable forms include `action(input_text) == $intent.<slot>` and
     `action(target_text) == $intent.<slot>` when supported by the known action.
+  * Common postcondition forms include
+    `contains(target_list, $intent.<slot>)`,
+    `value(target_field) == $intent.<slot>`, and
+    `read(target_toggle, is_checked) == $intent.<slot>` when supported by Q/diff
+    evidence.
+  * When Q shows a value selected or written by the action, reuse the same slot name
+    from Gamma so the verifier can connect pre-action intent binding to post-action
+    effect evidence.
 
 [SPECIFICATION of `$bind.*`]
 **Pre-Condition**:
@@ -377,59 +571,84 @@ ReadableActionProperty:
 
 **Post-Condition**:
   * Add an item to `binding_requirements`.
-  * Do not put `$bind.*` in predicates.
+  * Do not put `$bind.*` in precondition or postcondition predicates.
   * Set `semantic_binding_incomplete = true` if no executable `$intent.*` predicate
     captures the required semantic binding.
+  * If the missing binding is an arrival/effect check, record it in
+    `postcondition.effect_requirements` and set `postcondition.intent_effect_incomplete`
+    plus top-level `postcondition_incomplete`.
 
 [SPECIFICATION of Taxonomy-Driven Guard Obligation Policy]
 **Pre-Condition**:
-  * A transition must be assigned `kind`, `risk_level`, `required`, and
-    `semantic_binding_required`.
+  * A transition must be assigned precondition `kind`, `risk_level`, `required`,
+    and `semantic_binding_required`.
+  * A transition must be assigned postcondition `kind`, `risk_level`, `required`,
+    and `intent_effect_required`.
 
 **Post-Condition**:
   * Use the Action Impact Taxonomy, not a closed keyword list, to classify the
     transition. Text labels and resource ids are evidence hints, not the policy.
-    `risk_level` is descriptive metadata; it must not be the source of a guard
-    obligation.
-  * Set `required = false` and `semantic_binding_required = false` when the
+    `risk_level` is descriptive metadata; it must not be the source of a guard or
+    postcondition obligation.
+  * Set precondition `required = false` and `semantic_binding_required = false` when the
     transition is only state_topology/navigation and no user-specific semantic
     binding is needed.
-  * Set `required = true` and `semantic_binding_required = true` when the transition
-    selects or edits a
-    user-intended item/value/content but the effect is local or reversible before
-    the final commit.
-  * Set `required = true` and `semantic_binding_required = true` when Q/siblings show
-    that the action commits previously chosen values to a side-effectful,
+  * Set precondition `required = true` and `semantic_binding_required = true` when
+    the transition selects or edits a user-intended item/value/content but the effect
+    is local or reversible before the final commit.
+  * Set precondition `required = true` and `semantic_binding_required = true` when
+    Q/siblings show that the action commits previously chosen values to a side-effectful,
     externally visible, destructive, financial, privacy-sensitive, or
     authority-granting effect.
-  * Set `risk_level` consistently with the taxonomy for report/audit analysis, but
-    do not rely on it to decide whether semantic binding is required.
   * For semantic-required actions, generate predicates that bind the
     relevant user intent dimension whenever source/action evidence supports it:
     item identity, recipient/account/address identity, amount/value, content, target
     file/resource, permission/scope, or confirmation choice.
   * If only enabledness/clickability/source presence is executable, emit that partial
     guard only as Case 2 and set `semantic_binding_incomplete = true`.
-  * Record the taxonomy basis in `provenance` or `notes`, for example
+  * Set postcondition `required = true` and `intent_effect_required = true` when Q or
+    the source-to-target diff should show that the intended value/content/item/state
+    appeared, disappeared, changed, or was committed.
+  * Set postcondition `required = false` and `intent_effect_required = false` for
+    pure topology transitions whose target consistency is fully represented by state
+    invariants.
+  * If only generic arrival evidence is executable for an effect-required transition,
+    emit Case P2 and set `postcondition_incomplete = true`.
+  * Give `postcondition.kind = "arrival_state"` to topology-only postcondition
+    metadata. Give `postcondition.kind` one of `content_effect`, `item_added`,
+    `item_removed`, `message_sent`, `payment_or_transfer`, `toggle_effect`, or
+    `form_effect` when executable predicates check a transition-specific effect.
+  * Set precondition and postcondition `risk_level` consistently with the taxonomy
+    for report/audit analysis.
+  * Record the taxonomy basis in precondition/postcondition `provenance` or `notes`, for example
     `impact:semantic_binding`, `impact:external_side_effect`,
-    `reversibility:irreversible`, or `binding:item_identity`.
+    `reversibility:irreversible`, `binding:item_identity`, or
+    `effect:intent_content_visible`.
 
 [SPECIFICATION of Static APK Priors]
 **Pre-Condition**:
   * Static APK prior fields are provided.
 
 **Post-Condition**:
-  * Use them only for role/domain/audit-risk hints.
-  * Do not admit predicates based solely on static prior.
-  * Do not create transitions, post-state checks, or runtime verdicts from static prior.
+  * Use them only for role/domain/side-effect hints.
+  * Do not admit precondition or postcondition predicates based solely on static prior.
+  * Do not create transitions, prove postconditions, or produce runtime verdicts from
+    static prior.
 
 [SPECIFICATION of Invalid Output]
 **Pre-Condition**:
-  * A candidate predicate would require invented aliases, invented literals, target-only
-    elements, unsupported vocabulary, unsupported expected kinds, undeclared intent
-    slots, or any non-executable admission rule.
+  * A candidate predicate would require invented aliases, invented literals,
+    target-only elements in Gamma, source-only elements in Psi, unsupported vocabulary,
+    unsupported expected kinds, undeclared intent slots, or any non-executable
+    admission rule.
 
 **Post-Condition**:
-  * Omit the invalid predicate.
-  * If omitting it makes the guard incomplete, set `semantic_binding_incomplete = true`.
-  * If no sound predicate remains, return Case 3 from [SPECIFICATION].
+  * Omit the invalid predicate from the relevant side.
+  * If omitting it makes Gamma incomplete, set
+    `precondition.semantic_binding_incomplete = true` and top-level
+    `semantic_binding_incomplete = true`.
+  * If omitting it makes Psi incomplete, set
+    `postcondition.intent_effect_incomplete = true` and top-level
+    `postcondition_incomplete = true`.
+  * If no sound precondition predicate remains, return Case 3 for Gamma.
+  * If no sound postcondition predicate remains, return Case P3 for Psi.

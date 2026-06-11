@@ -16,7 +16,7 @@ This document is the paper and implementation spine for Vigil. The taxonomy defi
 |--------------|-----------------|----------------|------------------|
 | GUI State and Transition Errors | `neuro/explorer.py`, `neuro/state_abstractor.py`, `neuro/fsm_builder.py`, `neuro/replay_verifier.py` | `symbolic/state_locator.py`, `symbolic/fsm_checker.py`, `symbolic/trajectory_verifier.py` | `DENY` for illegal transitions; `UNCERTAIN` for unknown or low-confidence states. |
 | GUI Semantic Binding Errors | `neuro/semantic_grounder.py`, `neuro/dsl_generator.py`, `neuro/widget_templates.py`, `neuro/evolution.py` | `symbolic/intent_extractor.py`, `symbolic/dsl_evaluator.py`, `symbolic/trajectory_verifier.py`, `symbolic/decision_engine.py` | `DENY` for guard violations; `UNCERTAIN` for missing bindings. |
-| GUI Safety and Side-Effect Errors | Guard generation, replay verification, invariant mining, high-risk transition labeling | `symbolic/invariant_checker.py`, `symbolic/decision_engine.py`, `integration/agent_runner.py`, `scripts/verify_action.py` | `DENY` for invariant or safety violations; `UNCERTAIN` for high-risk under-specification. |
+| GUI Safety and Side-Effect Errors | Guard generation, replay verification, invariant mining, side-effect/irreversible-action obligations | `symbolic/invariant_checker.py`, `symbolic/decision_engine.py`, `integration/agent_runner.py`, `scripts/verify_action.py` | `DENY` for invariant or safety violations; `UNCERTAIN` when side-effecting actions are under-specified. |
 
 ## Benchmark Alignment
 
@@ -38,7 +38,7 @@ Use benchmark results to justify the taxonomy and structure evaluation by family
 |--------------|-------------------|
 | GUI State and Transition Errors | Invalid-action reduction, wrong-state localization rate, dead-end reduction, loop reduction, reachability preservation, replay pass rate. |
 | GUI Semantic Binding Errors | Wrong-field prevention, wrong-value prevention, intent-slot match rate, task-state progress accuracy, dynamic-template binding accuracy. |
-| GUI Safety and Side-Effect Errors | Harm prevention rate, false-deny rate, unsafe-confirmation prevention, prompt-injection resistance, high-risk `UNCERTAIN` rate. |
+| GUI Safety and Side-Effect Errors | Harm prevention rate, false-deny rate, unsafe-confirmation prevention, prompt-injection resistance, side-effect `UNCERTAIN` rate. |
 
 ## Design Rules
 

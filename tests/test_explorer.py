@@ -464,6 +464,31 @@ class TestEnumerateAllClickables:
             actions = explorer._enumerate_all_clickables("sid", [])
         assert {a.target_resource_id for a in actions} == {"x:id/one"}
 
+    def test_root_state_does_not_enumerate_navigate_back(self, explorer: AppExplorer) -> None:
+        scr = _screen_with_clickables("scr", ["x:id/one"], scrollable=False)
+        with (
+            patch.object(explorer, "_cold_start_app", return_value=True),
+            patch.object(explorer, "_execute_action", return_value=True),
+            patch.object(explorer, "_capture_screen", return_value=scr),
+        ):
+            actions = explorer._enumerate_actions_for_state("sid_root", [])
+        assert ActionType.NAVIGATE_BACK not in {a.action_type for a in actions}
+
+    def test_child_state_enumerates_navigate_back(self, explorer: AppExplorer) -> None:
+        scr = _screen_with_clickables("scr", ["x:id/one"], scrollable=False)
+        nav_path = [Action(action_type=ActionType.CLICK, target_resource_id="x:id/open")]
+        with (
+            patch.object(explorer, "_cold_start_app", return_value=True),
+            patch.object(explorer, "_execute_action", return_value=True),
+            patch.object(explorer, "_capture_screen", return_value=scr),
+        ):
+            actions = explorer._enumerate_actions_for_state("sid_child", nav_path)
+
+        back_actions = [a for a in actions if a.action_type == ActionType.NAVIGATE_BACK]
+        assert len(back_actions) == 1
+        assert action_key(back_actions[0]) == "navigate_back||||"
+        assert back_actions[0].metadata == {"scope": "global_navigation"}
+
     def test_external_package_element_dropped(self, explorer: AppExplorer) -> None:
         in_app = UIElement(
             element_id="e0",

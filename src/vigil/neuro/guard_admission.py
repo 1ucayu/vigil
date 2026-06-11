@@ -32,7 +32,13 @@ from lark.exceptions import LarkError
 from pydantic import BaseModel, Field
 
 from vigil.core.paths import resolve_dsl_grammar_path
-from vigil.models.guard import GuardAdmissionStatus, GuardContract, PredicateSpec, ValueRef
+from vigil.models.guard import (
+    GuardAdmissionStatus,
+    GuardContract,
+    PredicateSpec,
+    TransitionPostcondition,
+    ValueRef,
+)
 from vigil.neuro.guard_dsl_compiler import compile_predicate_spec
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -106,6 +112,18 @@ _KNOWN_STRING_PROPS: tuple[str, ...] = (
     "class_name",
 )
 
+_EFFECT_POSTCONDITION_KINDS: frozenset[str] = frozenset(
+    {
+        "content_effect",
+        "item_added",
+        "item_removed",
+        "message_sent",
+        "payment_or_transfer",
+        "toggle_effect",
+        "form_effect",
+    }
+)
+
 
 def _literal_type_error(ptype: str, prop: str, value: object) -> str:
     """Return an admission rejection reason for literal/property type mismatch."""
@@ -146,6 +164,18 @@ class GuardAdmissionResult(BaseModel):
     reason: str = ""
     rejected_predicates: list[str] = Field(default_factory=list)
     semantic_binding_incomplete: bool = False
+
+
+class PostconditionAdmissionResult(BaseModel):
+    """Outcome of admitting a postcondition contract as executable ``Psi`` DSL."""
+
+    admitted: bool
+    status: GuardAdmissionStatus
+    postcondition: str | None = None
+    reason: str = ""
+    rejected_predicates: list[str] = Field(default_factory=list)
+    unsupported_effects: list[str] = Field(default_factory=list)
+    intent_effect_incomplete: bool = False
 
 
 @lru_cache(maxsize=8)
@@ -347,4 +377,192 @@ def admit_guard_contract(
         guard=guard,
         reason=reason,
         semantic_binding_incomplete=semantic_binding_incomplete,
+    )
+
+
+def _postcondition_state_name(pred: PredicateSpec) -> str:
+    state = pred.args.get("state")
+    if state is None and pred.expected is not None and pred.expected.kind == "literal":
+        state = pred.expected.value
+    return str(state or "")
+
+
+def _lower_postcondition_predicate(
+    pred: PredicateSpec,
+    evidence: GuardEvidence,
+    declared_slots: set[str],
+) -> _Lowered:
+    """Lower one target/effect-side ``Psi`` predicate."""
+    if (
+        pred.expected is not None
+        and pred.expected.kind == "intent"
+        and (not pred.expected.slot or pred.expected.slot not in declared_slots)
+    ):
+        return _Lowered(None, f"undeclared intent slot '{pred.expected.slot}'")
+
+    if pred.predicate_type == "in_state":
+        state = _postcondition_state_name(pred)
+        if not state:
+            return _Lowered(None, "in_state predicate missing args.state")
+        if state != evidence.target_state_id:
+            return _Lowered(
+                None,
+                f"in_state({state}) does not match target state {evidence.target_state_id}",
+            )
+        compiled = compile_predicate_spec(pred)
+        if compiled is None:
+            return _Lowered(None, "in_state predicate not compilable")
+        return _Lowered(compiled, "")
+
+    if pred.predicate_type not in ("read", "value", "contains", "count"):
+        return _Lowered(
+            None,
+            f"{pred.predicate_type} predicate is not supported in postcondition Psi",
+        )
+
+    if evidence.target_registry is None:
+        return _Lowered(None, "target registry unavailable for postcondition element predicate")
+    return _lower_predicate(pred, evidence.target_registry, declared_slots)
+
+
+def _mark_unsupported_effects(postcondition: TransitionPostcondition) -> list[str]:
+    unsupported: list[str] = []
+    for effect in postcondition.effect_requirements:
+        kind = effect.effect_kind or "unknown"
+        name = effect.name or "effect"
+        reason = (
+            f"effect_requirement kind '{kind}' is audit-only; current DSL admission "
+            "only compiles postcondition.predicates"
+        )
+        effect.unsupported_reason = reason
+        unsupported.append(f"{name}: {reason}")
+    return unsupported
+
+
+def _has_transition_specific_postcondition(
+    postcondition: TransitionPostcondition,
+    admitted_predicates: list[PredicateSpec],
+    has_intent_effect: bool,
+) -> bool:
+    """Return whether admitted ``Psi`` carries transition-specific effect content.
+
+    State identity and stable target facts are checked by the state-invariant layer. A
+    transition postcondition is executable/auditable when it reflects the proposed
+    action's value, selected item, toggle state, committed content, or similar
+    effect-specific target fact.
+    """
+    if has_intent_effect:
+        return True
+    kind = (postcondition.kind or "").strip().lower()
+    if kind not in _EFFECT_POSTCONDITION_KINDS:
+        return False
+    return any(pred.predicate_type != "in_state" for pred in admitted_predicates)
+
+
+def admit_postcondition_contract(
+    postcondition: TransitionPostcondition,
+    evidence: GuardEvidence,
+    grammar_path: str | None = None,
+) -> PostconditionAdmissionResult:
+    """Admit (or reject) a postcondition contract as executable target-side ``Psi``."""
+    declared = {slot.name for slot in postcondition.required_slots}
+    unsupported_effects = _mark_unsupported_effects(postcondition)
+
+    surviving: list[str] = []
+    admitted_predicates: list[PredicateSpec] = []
+    rejected: list[str] = []
+    has_intent_effect = False
+    for pred in postcondition.predicates:
+        result = _lower_postcondition_predicate(pred, evidence, declared)
+        if result.compiled is None:
+            rejected.append(result.reason)
+        else:
+            surviving.append(result.compiled)
+            admitted_predicates.append(pred)
+            has_intent_effect = has_intent_effect or result.is_binding
+
+    if rejected:
+        return PostconditionAdmissionResult(
+            admitted=False,
+            status=GuardAdmissionStatus.REJECTED,
+            postcondition=None,
+            reason="rejected non-executable postcondition predicate(s): " + "; ".join(rejected),
+            rejected_predicates=rejected,
+            unsupported_effects=unsupported_effects,
+            intent_effect_incomplete=postcondition.intent_effect_required,
+        )
+
+    if not surviving:
+        if not postcondition.required:
+            return PostconditionAdmissionResult(
+                admitted=True,
+                status=GuardAdmissionStatus.ADMITTED,
+                postcondition=None,
+                reason="optional postcondition; no executable Psi required",
+                unsupported_effects=unsupported_effects,
+                intent_effect_incomplete=postcondition.intent_effect_incomplete,
+            )
+        return PostconditionAdmissionResult(
+            admitted=False,
+            status=GuardAdmissionStatus.REJECTED,
+            postcondition=None,
+            reason="required postcondition has no runtime-executable predicate",
+            unsupported_effects=unsupported_effects,
+            intent_effect_incomplete=True,
+        )
+
+    if not _has_transition_specific_postcondition(
+        postcondition,
+        admitted_predicates,
+        has_intent_effect,
+    ):
+        if not postcondition.intent_effect_required:
+            return PostconditionAdmissionResult(
+                admitted=True,
+                status=GuardAdmissionStatus.ADMITTED,
+                postcondition=None,
+                reason=(
+                    "target-state consistency handled by invariant layer; "
+                    "no transition-specific Psi attached"
+                ),
+                unsupported_effects=unsupported_effects,
+                intent_effect_incomplete=postcondition.intent_effect_incomplete,
+            )
+        return PostconditionAdmissionResult(
+            admitted=False,
+            status=GuardAdmissionStatus.REJECTED,
+            postcondition=None,
+            reason="effect-required postcondition has no transition-specific executable Psi",
+            unsupported_effects=unsupported_effects,
+            intent_effect_incomplete=True,
+        )
+
+    psi = " && ".join(surviving)
+    try:
+        _parser(grammar_path).parse(psi)
+    except LarkError as exc:
+        return PostconditionAdmissionResult(
+            admitted=False,
+            status=GuardAdmissionStatus.REJECTED,
+            postcondition=None,
+            reason=f"parse error: {exc}",
+            unsupported_effects=unsupported_effects,
+            intent_effect_incomplete=postcondition.intent_effect_required,
+        )
+
+    intent_effect_incomplete = (not has_intent_effect) and (
+        postcondition.intent_effect_required or postcondition.intent_effect_incomplete
+    )
+    reason = (
+        "executable postcondition admitted; intent effect incomplete"
+        if intent_effect_incomplete
+        else f"admitted: {len(surviving)} executable postcondition predicate(s)"
+    )
+    return PostconditionAdmissionResult(
+        admitted=True,
+        status=GuardAdmissionStatus.ADMITTED,
+        postcondition=psi,
+        reason=reason,
+        unsupported_effects=unsupported_effects,
+        intent_effect_incomplete=intent_effect_incomplete,
     )

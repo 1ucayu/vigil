@@ -48,7 +48,7 @@ executable guard must be evaluated only on the source screen.
 The LLM is a candidate generator, not a proof oracle. Generate typed candidates
 over the allowed abstract domains and predicate vocabulary; the admission layer
 will verify alias resolution, evidence support, preservation, DSL executability,
-and risk policy.
+and guard-obligation policy.
 
 ## Primary Prompt
 [RELY]
@@ -139,11 +139,11 @@ INVARIANT_GUARD_EVIDENCE_PACKET:
         examples: selected option is checked, error text absent, status label
                   present, field is editable, value domain is enum/numeric hint
       I_safe:
-        meaning: safety/risk/side-effect facts that explain why a guard or audit
+        meaning: safety/side-effect facts that explain why a guard or audit
                  invariant is needed.
         examples: destructive confirmation present, permission scope shown,
                   success receipt/status appears after commit
-        note: high-risk safety facts usually require a transition guard; a
+        note: side-effecting safety facts usually require a transition guard; a
               post-arrival invariant is only an audit check.
 
   [Arrival-state widget registry]:
@@ -172,7 +172,7 @@ INVARIANT_GUARD_EVIDENCE_PACKET:
     string_arrays?: map<string, list<string>>
     layout_widget_declarations?: list<string>
     menu_navigation_resources?: list<string>
-    role: semantic role/domain/value-domain/audit-risk hints only; not runtime proof
+    role: semantic role/domain/value-domain/side-effect hints only; not runtime proof
 
   [Verifier Basis]:
     predicate_vocabulary: PredicateBasis
@@ -204,7 +204,7 @@ INVARIANT_GUARD_EVIDENCE_PACKET:
         meaning: communication, publication, order placement, transfer, payment,
                  account/security change, deletion, permission grant, or device/app
                  state change outside the current screen
-        usual_obligation: high-risk guard plus effect/status invariant when executable
+        usual_obligation: source guard plus effect/status invariant when executable
 ```
 
 ```text
@@ -293,7 +293,6 @@ ReadableActionProperty:
       "evidence_count": 0,
       "source": "llm|llm+cross_visit|llm+apk_prior|llm+cross_visit+apk_prior",
       "volatility": "stable|likely_stable|volatile|unknown",
-      "risk_level": "low|medium|high|unknown",
       "provenance": ["llm"],
       "notes": "",
       "rejection_reason": ""
@@ -307,7 +306,6 @@ ReadableActionProperty:
       "contract": {
         "kind": "none|navigation|item_binding|input_binding|toggle_binding|form_check|confirm_commit|safety_check|invariant_hint|unknown",
         "required": true,
-        "risk_level": "low|medium|high|unknown",
         "required_slots": [
           {
             "name": "amount",
@@ -357,7 +355,6 @@ ReadableActionProperty:
       "description": "Post-arrival fact that would be useful if conditional/action-aware invariants are supported.",
       "desired_expr": "read(com.app:id/status, text) == \"Sent\"",
       "why_not_runtime_state_invariant": "depends_on_action|depends_on_intent|target_only_single_visit|unsupported_predicate|volatile|unknown",
-      "risk_level": "low|medium|high|unknown",
       "provenance": ["llm"]
     }
   ],
@@ -452,7 +449,7 @@ ReadableActionProperty:
   * Incoming preservation evidence may support a runtime invariant, but the LLM must
     not claim a proof beyond the replay observations provided.
   * A post-arrival invariant never replaces a required pre-action guard for a
-    high-risk commit.
+    side-effecting commit.
   * A guard never uses target-only UI as executable evidence.
   * A runtime state invariant never uses source-only UI from a predecessor state.
   * Static APK priors never prove current UI values, current element presence,
@@ -531,7 +528,7 @@ ReadableActionProperty:
   * Use `safety_summary` or `side_effect_audit` for `I_safe` facts: irreversible,
     costly, externally visible, privacy/security-sensitive, or permission-related
     UI facts. These facts explain guard obligations; they do not by themselves
-    authorize high-risk actions.
+    authorize side-effecting actions.
 
 [SPECIFICATION of Hoare / wp Coupling]
 **Pre-Condition**:
@@ -560,7 +557,7 @@ ReadableActionProperty:
     invariant on the arrival observation.
   * If an invariant holds only for one predecessor, action, or intent value, emit it
     as `effect_invariant_hints` rather than a runtime state invariant.
-  * Low-trust incoming transitions may provide notes or risk hints, but they do not
+  * Low-trust incoming transitions may provide notes or side-effect hints, but they do not
     justify high-confidence runtime invariants.
   * Missing incoming evidence lowers confidence or moves the candidate to
     metadata-only; it does not authorize invention.
@@ -587,7 +584,7 @@ ReadableActionProperty:
   * Examples include "after send, status is Sent", "after selecting recipient,
     summary shows $intent.recipient", and "after payment, total equals
     $intent.amount".
-  * If the fact is high-risk, also produce or request a pre-action guard when source
+  * If the fact is side-effecting or authority-changing, also produce or request a pre-action guard when source
     evidence supports one.
 
 [SPECIFICATION of Executable DSL]
@@ -633,7 +630,7 @@ ReadableActionProperty:
     domains only after runtime evidence confirms the widget exists.
   * A screenshot-only visual impression without XML/registry support is annotation
     evidence, not executable invariant proof.
-  * Confidence is evidence strength, not semantic importance. High-risk facts may
+  * Confidence is evidence strength, not semantic importance. Side-effecting facts may
     be important while still having low confidence or incomplete admission.
 
 [SPECIFICATION of Candidate Admission Style]
@@ -672,7 +669,7 @@ ReadableActionProperty:
 **Post-Condition**:
   * Prefer a required transition guard with semantic binding to `$intent.*`.
   * A post-arrival success/status invariant may be emitted as an audit check, but
-    it does not make the high-risk transition safe by itself.
+    it does not make the side-effecting transition safe by itself.
   * If source evidence cannot support a semantic guard, mark the guard incomplete
     so runtime can route to `UNCERTAIN`.
 

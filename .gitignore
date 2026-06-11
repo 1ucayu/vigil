@@ -70,3 +70,4 @@ fidelity_app/captures/
 # Generated guard/FSM report JSON under output_docs (already-tracked ground-truth
 # JSON remains versioned; gitignore does not untrack files already in the index)
 output_docs/**/*.json
+outputs

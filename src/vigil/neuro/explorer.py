@@ -806,6 +806,8 @@ class AppExplorer:
           - SCROLL_DOWN / SCROLL_UP per scrollable container as *formal*
             candidate actions (so the FSM records them as transitions /
             affordances even when source == target).
+          - NAVIGATE_BACK as a global navigation action for non-entry
+            states reached through a replay nav path.
 
         The internal scroll *sweep* used to reveal offscreen widgets is
         distinct from the formal SCROLL *candidates* emitted into the
@@ -829,6 +831,7 @@ class AppExplorer:
         collected: dict[str, Action] = {}
         skipped_risky = 0
         scroll_candidate_keys: set[str] = set()
+        saw_source_screen = False
         last_anchors: frozenset[tuple[str, str]] | None = None
         prev_screen: RawScreen | None = None
         prev_anchor_h: str = ""
@@ -840,6 +843,7 @@ class AppExplorer:
             screen = self._capture_screen()
             if screen is None:
                 break
+            saw_source_screen = True
             for e in screen.elements:
                 # SYSTEM_UI elements never become app actions.
                 if self._scope_policy.should_filter_element(e.package):
@@ -960,6 +964,12 @@ class AppExplorer:
             logger.info(
                 f"state={state_id[:6]} skipped {skipped_risky} risky element(s) during enumeration"
             )
+        if nav_path and saw_source_screen:
+            back_action = Action(
+                action_type=ActionType.NAVIGATE_BACK,
+                metadata={"scope": "global_navigation"},
+            )
+            collected.setdefault(action_key(back_action), back_action)
         self._scroll_candidate_keys[state_id] = scroll_candidate_keys
         return list(collected.values())
 

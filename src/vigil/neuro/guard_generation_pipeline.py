@@ -28,8 +28,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from vigil.models.guard import GuardContract, LlmGuardContractCandidate
-from vigil.neuro.guard_admission import GuardAdmissionResult, admit_guard_contract
+from vigil.models.guard import GuardContract, LlmGuardContractCandidate, TransitionPostcondition
+from vigil.neuro.guard_admission import (
+    GuardAdmissionResult,
+    PostconditionAdmissionResult,
+    admit_guard_contract,
+    admit_postcondition_contract,
+)
 from vigil.neuro.guard_contract_llm import (
     DEFAULT_GUARD_PROMPT,
     generate_llm_guard_candidate,
@@ -54,6 +59,8 @@ class _ResolvedContract:
     fallback_reason: str
     precomputed_result: GuardAdmissionResult | None = None
     llm_audit_path: str = ""
+    postcondition: TransitionPostcondition | None = None
+    postcondition_incomplete: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,6 +68,20 @@ class _CachedLlmCandidate:
     candidate: LlmGuardContractCandidate
     audit_path: str
     action_schema_index: int
+
+
+def _prompt_schema_key(evidence: GuardEvidence) -> tuple[Any, ...]:
+    """LLM amortization key for one source/action/target guard packet.
+
+    Gamma depends mostly on source/action evidence, while Psi depends on the target
+    state and source-to-target diff. Include the transition endpoints so a postcondition
+    generated for one target is never reused for a different target state.
+    """
+    return (
+        ("source", evidence.source_state_id),
+        ("target", evidence.target_state_id),
+        *guard_action_schema_key(evidence.action),
+    )
 
 
 def _action_summary(action: dict[str, Any]) -> dict[str, Any]:
@@ -128,13 +149,31 @@ def _candidate_from_audit(path: Path) -> LlmGuardContractCandidate:
     """Load a persisted LLM guard attempt without re-querying the model."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        contract_payload = payload.get("contract", {})
+        contract_payload = payload.get("contract") or payload.get("precondition") or {}
         contract = GuardContract.model_validate(contract_payload)
+        postcondition_payload = payload.get("postcondition")
+        postcondition = (
+            TransitionPostcondition.model_validate(postcondition_payload)
+            if isinstance(postcondition_payload, dict)
+            else None
+        )
+        postcondition_incomplete = bool(
+            payload.get(
+                "postcondition_incomplete",
+                postcondition.intent_effect_incomplete if postcondition is not None else False,
+            )
+        )
+        if postcondition is not None:
+            postcondition.intent_effect_incomplete = (
+                postcondition.intent_effect_incomplete or postcondition_incomplete
+            )
         raw_responses = payload.get("raw_responses") or []
         parse_errors = payload.get("parse_errors") or []
         return LlmGuardContractCandidate(
             contract=contract,
+            postcondition=postcondition,
             semantic_binding_incomplete=contract.semantic_binding_incomplete,
+            postcondition_incomplete=postcondition_incomplete,
             rejection_reason=str(payload.get("rejection_reason") or ""),
             raw_responses=[str(item) for item in raw_responses],
             parse_errors=[str(item) for item in parse_errors],
@@ -182,7 +221,14 @@ def _write_llm_attempt_audit(
         "rejection_reason": candidate.rejection_reason,
         "parse_errors": candidate.parse_errors,
         "repair_attempted": candidate.repair_attempted,
+        "precondition": candidate.contract.model_dump(mode="json"),
         "contract": candidate.contract.model_dump(mode="json"),
+        "postcondition": (
+            candidate.postcondition.model_dump(mode="json")
+            if candidate.postcondition is not None
+            else None
+        ),
+        "postcondition_incomplete": candidate.postcondition_incomplete,
         "raw_responses": candidate.raw_responses
         or ([candidate.raw_response] if candidate.raw_response else []),
     }
@@ -263,6 +309,8 @@ def _resolve_contract(
             guard_origin="llm",
             fallback_reason=candidate.rejection_reason,
             llm_audit_path=audit_path,
+            postcondition=candidate.postcondition,
+            postcondition_incomplete=candidate.postcondition_incomplete,
         )
 
     # hybrid
@@ -299,6 +347,8 @@ def _resolve_contract(
         fallback_reason="",
         precomputed_result=result,
         llm_audit_path=audit_path,
+        postcondition=candidate.postcondition,
+        postcondition_incomplete=candidate.postcondition_incomplete,
     )
 
 
@@ -323,6 +373,8 @@ def _resolve_contract_from_llm_candidate(
             guard_origin="llm",
             fallback_reason=candidate.rejection_reason,
             llm_audit_path=audit_path,
+            postcondition=candidate.postcondition,
+            postcondition_incomplete=candidate.postcondition_incomplete,
         )
 
     # hybrid / audit replay
@@ -358,6 +410,8 @@ def _resolve_contract_from_llm_candidate(
         fallback_reason="",
         precomputed_result=result,
         llm_audit_path=audit_path,
+        postcondition=candidate.postcondition,
+        postcondition_incomplete=candidate.postcondition_incomplete,
     )
 
 
@@ -388,7 +442,7 @@ def generate_contract_guards(
 
     evidence_items = build_all_guard_evidence(fsm, raw_screens, app_prior)
     report: list[dict[str, Any]] = []
-    llm_candidates_by_action: dict[tuple[tuple[str, str], ...], _CachedLlmCandidate] = {}
+    llm_candidates_by_prompt: dict[tuple[Any, ...], _CachedLlmCandidate] = {}
     audit_rows_by_transition = {
         int(row.get("transition_index", -1)): row
         for row in (llm_audit_report or [])
@@ -398,10 +452,10 @@ def generate_contract_guards(
 
     for index, transition in enumerate(fsm.transitions):
         evidence = evidence_items[index]
-        action_schema_key = guard_action_schema_key(transition.action)
+        prompt_schema_key = _prompt_schema_key(evidence)
         action_schema_index = None
         if guard_source in ("llm", "hybrid"):
-            cached = llm_candidates_by_action.get(action_schema_key)
+            cached = llm_candidates_by_prompt.get(prompt_schema_key)
             if cached is None:
                 assert llm is not None
                 candidate = generate_llm_guard_candidate(
@@ -419,9 +473,9 @@ def generate_contract_guards(
                 cached = _CachedLlmCandidate(
                     candidate=candidate,
                     audit_path=audit_path,
-                    action_schema_index=len(llm_candidates_by_action),
+                    action_schema_index=len(llm_candidates_by_prompt),
                 )
-            llm_candidates_by_action[action_schema_key] = cached
+            llm_candidates_by_prompt[prompt_schema_key] = cached
             action_schema_index = cached.action_schema_index
             resolved = _resolve_contract_from_llm_candidate(evidence, guard_source, cached)
         elif guard_source == "audit":
@@ -466,6 +520,23 @@ def generate_contract_guards(
         fallback_reason = resolved.fallback_reason
         precomputed = resolved.precomputed_result
         result = precomputed or admit_guard_contract(contract, evidence)
+        postcondition = (
+            resolved.postcondition.model_copy(deep=True)
+            if resolved.postcondition is not None
+            else None
+        )
+        postcondition_result: PostconditionAdmissionResult | None = None
+        if postcondition is not None:
+            postcondition_result = admit_postcondition_contract(postcondition, evidence)
+        postcondition_incomplete = bool(
+            resolved.postcondition_incomplete
+            or (postcondition.intent_effect_incomplete if postcondition is not None else False)
+            or (
+                postcondition_result.intent_effect_incomplete
+                if postcondition_result is not None
+                else False
+            )
+        )
 
         # Sync the deterministic admission outcome onto the contract so it survives
         # serialize/deserialize alongside the transition-level metadata. Admission is the
@@ -477,6 +548,24 @@ def generate_contract_guards(
 
         # Attach metadata (no graph mutation).
         transition.guard_contract = contract
+        transition.postcondition_contract = postcondition
+        transition.postcondition_incomplete = postcondition_incomplete
+        transition.postcondition = None
+        transition.postcondition_admission_status = None
+        transition.postcondition_admission_reason = ""
+        transition.postcondition_rejected_predicates = []
+        transition.postcondition_unsupported_effects = []
+        if postcondition_result is not None:
+            transition.postcondition_admission_status = postcondition_result.status
+            transition.postcondition_admission_reason = postcondition_result.reason
+            transition.postcondition_rejected_predicates = list(
+                postcondition_result.rejected_predicates
+            )
+            transition.postcondition_unsupported_effects = list(
+                postcondition_result.unsupported_effects
+            )
+            if postcondition_result.admitted and postcondition_result.postcondition:
+                transition.postcondition = postcondition_result.postcondition
         transition.requires_guard = contract.required
         transition.risk_level = contract.risk_level
         transition.guard_admission_status = result.status
@@ -503,6 +592,32 @@ def generate_contract_guards(
                 "reason": result.reason,
                 "semantic_binding_required": contract.semantic_binding_required,
                 "semantic_binding_incomplete": contract.semantic_binding_incomplete,
+                "precondition": contract.model_dump(mode="json"),
+                "postcondition": (
+                    postcondition.model_dump(mode="json") if postcondition is not None else None
+                ),
+                "postcondition_incomplete": postcondition_incomplete,
+                "postcondition_dsl": (
+                    postcondition_result.postcondition if postcondition_result is not None else None
+                ),
+                "postcondition_status": (
+                    postcondition_result.status.value
+                    if postcondition_result is not None
+                    else "none"
+                ),
+                "postcondition_reason": (
+                    postcondition_result.reason if postcondition_result is not None else ""
+                ),
+                "postcondition_rejected_predicates": (
+                    postcondition_result.rejected_predicates
+                    if postcondition_result is not None
+                    else []
+                ),
+                "postcondition_unsupported_effects": (
+                    postcondition_result.unsupported_effects
+                    if postcondition_result is not None
+                    else []
+                ),
                 "rejected_predicates": result.rejected_predicates,
                 "guard": result.guard if (result.admitted and result.guard) else None,
             }

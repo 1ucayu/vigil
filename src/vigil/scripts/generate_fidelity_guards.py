@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -22,6 +23,11 @@ from vigil.neuro.guard_generation_pipeline import (
     guard_action_schema_key,
     write_guard_generation_report,
 )
+from vigil.neuro.invariant_generation_pipeline import (
+    generate_contract_invariants,
+    write_invariant_generation_report,
+)
+from vigil.neuro.invariant_guard_llm import DEFAULT_INVARIANT_PROMPT
 from vigil.neuro.visual_grounder import (
     ground_fsm_visual_annotations,
     write_visual_grounding_report,
@@ -32,13 +38,15 @@ from vigil.neuro.visual_grounder import (
 class FidelityAppSpec:
     name: str
     package: str
+    trace_package: str
+    output_slug: str
 
 
 FIDELITY_APPS: tuple[FidelityAppSpec, ...] = (
-    FidelityAppSpec("market", "com_vigil_market_fidelity"),
-    FidelityAppSpec("bank", "com_vigil_bank_fidelity"),
-    FidelityAppSpec("chat", "com_vigil_chat_fidelity"),
-    FidelityAppSpec("clock", "com_vigil_clock_fidelity"),
+    FidelityAppSpec("market", "com_vigil_market_fidelity", "com_vigil_market", "vigilmarket"),
+    FidelityAppSpec("bank", "com_vigil_bank_fidelity", "com_vigil_bank", "vigilbank"),
+    FidelityAppSpec("chat", "com_vigil_chat_fidelity", "com_vigil_chat", "vigilchat"),
+    FidelityAppSpec("clock", "com_vigil_clock_fidelity", "com_vigil_clock", "vigilclock"),
 )
 
 _PREFERRED_MODELS = (
@@ -106,6 +114,21 @@ def main() -> None:
         help="Optional output root. Defaults to overwriting the input bundle fsm.json.",
     )
     parser.add_argument(
+        "--output-docs-layout",
+        action="store_true",
+        help=(
+            "Use output_docs fidelity layout: input from "
+            "<report-root>/<app>/explored_fsm/fsm.json, traces from formal "
+            "data/apps/com_vigil_* directories, and output to "
+            "<report-root>/<app>/transition_guard/."
+        ),
+    )
+    parser.add_argument(
+        "--clean-output",
+        action="store_true",
+        help="Delete each app's guard output/report directory before regenerating it.",
+    )
+    parser.add_argument(
         "--skip-visual",
         action="store_true",
         help="Skip LLM screenshot/layout grounding and only generate guards.",
@@ -145,6 +168,46 @@ def main() -> None:
         help="Disable source/target screenshot attachments for LLM guard generation.",
     )
     parser.add_argument(
+        "--skip-invariants",
+        action="store_true",
+        help="Skip contract-first state-invariant generation.",
+    )
+    parser.add_argument(
+        "--invariant-source",
+        choices=["deterministic", "llm", "hybrid", "audit"],
+        default="deterministic",
+        help=(
+            "State-invariant candidate source: deterministic rules, LLM packet, hybrid "
+            "(LLM first, deterministic fallback), or audit replay (reuse prior packet "
+            "audits with no model calls)."
+        ),
+    )
+    parser.add_argument(
+        "--invariant-prompt",
+        default=DEFAULT_INVARIANT_PROMPT,
+        help="System-prompt file name (under src/vigil/system_prompt/) for the LLM invariant path.",
+    )
+    parser.add_argument(
+        "--invariant-no-images",
+        action="store_true",
+        help="Disable observation screenshot attachments for LLM invariant generation.",
+    )
+    parser.add_argument(
+        "--invariant-audit-root",
+        type=Path,
+        default=None,
+        help=(
+            "Report root containing prior per-app invariant_generation.json files for "
+            "--invariant-source audit. Defaults to --report-root."
+        ),
+    )
+    parser.add_argument(
+        "--min-invariant-observations",
+        type=int,
+        default=2,
+        help="Minimum replay observations required before attaching a runtime state invariant.",
+    )
+    parser.add_argument(
         "--force-visual",
         action="store_true",
         help="Regenerate visual annotations even when state annotations already exist.",
@@ -158,10 +221,14 @@ def main() -> None:
     args = parser.parse_args()
 
     selected = [spec for spec in FIDELITY_APPS if spec.name in set(args.apps)]
-    # The LLM client is needed for visual grounding and for the LLM/hybrid guard sources.
-    # Deterministic guard generation must never query or construct the model.
+    # The LLM client is needed for visual grounding and for the LLM/hybrid guard/invariant
+    # sources. Deterministic and audit generation must never query or construct the model.
     need_llm_for_guards = (not args.skip_guards) and args.guard_source in ("llm", "hybrid")
-    need_llm = (not args.skip_visual) or need_llm_for_guards
+    need_llm_for_invariants = (not args.skip_invariants) and args.invariant_source in (
+        "llm",
+        "hybrid",
+    )
+    need_llm = (not args.skip_visual) or need_llm_for_guards or need_llm_for_invariants
     llm = None
     if need_llm:
         model = args.model or discover_default_model(args.models_url)
@@ -185,6 +252,8 @@ def main() -> None:
                 bundle_root=args.bundle_root,
                 report_root=args.report_root,
                 output_root=args.output_root,
+                output_docs_layout=args.output_docs_layout,
+                clean_output=args.clean_output,
                 llm=llm,
                 skip_visual=args.skip_visual,
                 skip_guards=args.skip_guards,
@@ -194,6 +263,12 @@ def main() -> None:
                 guard_prompt=args.guard_prompt,
                 guard_use_images=not args.guard_no_images,
                 guard_audit_root=args.guard_audit_root,
+                skip_invariants=args.skip_invariants,
+                invariant_source=args.invariant_source,
+                invariant_prompt=args.invariant_prompt,
+                invariant_use_images=not args.invariant_no_images,
+                invariant_audit_root=args.invariant_audit_root,
+                min_invariant_observations=args.min_invariant_observations,
             )
         )
 
@@ -249,14 +324,28 @@ def run_one_app(
     skip_guards: bool,
     force_visual: bool,
     max_states: int | None,
+    output_docs_layout: bool = False,
+    clean_output: bool = False,
     guard_source: str = "deterministic",
     guard_prompt: str = DEFAULT_GUARD_PROMPT,
     guard_use_images: bool = True,
     guard_audit_root: Path | None = None,
+    skip_invariants: bool = False,
+    invariant_source: str = "deterministic",
+    invariant_prompt: str = DEFAULT_INVARIANT_PROMPT,
+    invariant_use_images: bool = True,
+    invariant_audit_root: Path | None = None,
+    min_invariant_observations: int = 2,
 ) -> dict[str, Any]:
-    app_data_dir = data_root / spec.package
-    bundle_dir = bundle_root / spec.package
-    fsm_path = bundle_dir / "fsm.json"
+    if output_docs_layout:
+        app_data_dir = data_root / spec.trace_package
+        fsm_path = report_root / spec.output_slug / "explored_fsm" / "fsm.json"
+        app_report_dir = report_root / spec.output_slug / "transition_guard"
+    else:
+        app_data_dir = data_root / spec.package
+        bundle_dir = bundle_root / spec.package
+        fsm_path = bundle_dir / "fsm.json"
+        app_report_dir = report_root / spec.name
     if not fsm_path.exists():
         raise SystemExit(f"FSM bundle missing for {spec.name}: {fsm_path}")
 
@@ -268,7 +357,8 @@ def run_one_app(
 
     prior = _load_prior(app_data_dir)
     fsm = AppFSM.deserialize(fsm_path)
-    app_report_dir = report_root / spec.name
+    if clean_output and app_report_dir.exists():
+        shutil.rmtree(app_report_dir)
     app_report_dir.mkdir(parents=True, exist_ok=True)
 
     visual_report: list[dict[str, Any]] = []
@@ -318,7 +408,49 @@ def run_one_app(
         )
         write_guard_generation_report(guard_report, app_report_dir / "guard_generation.json")
 
-    output_path = _output_fsm_path(spec.package, fsm_path, output_root)
+    invariant_report: list[dict[str, Any]] = []
+    if not skip_invariants:
+        logger.info(
+            f"[{spec.name}] contract invariant generation ({invariant_source}) "
+            f"over {len(fsm.states)} states"
+        )
+        invariant_audit_replay = None
+        if invariant_source == "audit":
+            audit_report_root = invariant_audit_root or report_root
+            audit_report_path = audit_report_root / spec.name / "invariant_generation.json"
+            if not audit_report_path.exists():
+                raise SystemExit(
+                    f"Invariant audit report missing for {spec.name}: {audit_report_path}"
+                )
+            loaded = json.loads(audit_report_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, list):
+                raise SystemExit(f"Invariant audit report is not a list: {audit_report_path}")
+            invariant_audit_replay = loaded
+        invariant_report = generate_contract_invariants(
+            fsm,
+            raw_screens,
+            prior,
+            invariant_source=invariant_source,  # type: ignore[arg-type]
+            llm=llm if invariant_source in ("llm", "hybrid") else None,
+            invariant_prompt=invariant_prompt,
+            use_images=invariant_use_images,
+            llm_audit_dir=(
+                app_report_dir / "llm_invariant_attempts"
+                if invariant_source in ("llm", "hybrid")
+                else None
+            ),
+            llm_audit_report=invariant_audit_replay,
+            min_runtime_observations=min_invariant_observations,
+        )
+        write_invariant_generation_report(
+            invariant_report, app_report_dir / "invariant_generation.json"
+        )
+
+    output_path = (
+        app_report_dir / "fsm.json"
+        if output_docs_layout
+        else _output_fsm_path(spec.package, fsm_path, output_root)
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fsm.serialize(output_path)
     logger.info(f"[{spec.name}] enriched FSM written to {output_path}")
@@ -326,6 +458,7 @@ def run_one_app(
     summary = {
         "app": spec.name,
         "package": spec.package,
+        "trace_package": spec.trace_package,
         "input_fsm": str(fsm_path),
         "output_fsm": str(output_path),
         "trace": str(trace_path),
@@ -342,6 +475,20 @@ def run_one_app(
         ),
         "guard_origin_counts": _count_field(guard_report, "guard_origin"),
         "guard_status_counts": _guard_status_counts(fsm),
+        "postcondition_status_counts": _postcondition_status_counts(fsm),
+        "postconditions_attached": sum(1 for t in fsm.transitions if t.postcondition),
+        "postconditions_unsupported_effects": sum(
+            len(t.postcondition_unsupported_effects) for t in fsm.transitions
+        ),
+        "invariant_source": invariant_source,
+        "invariants_attached": sum(len(s.invariant_specs) for s in fsm.states.values()),
+        "invariant_states": sum(1 for s in fsm.states.values() if s.invariant_specs),
+        "invariants_admitted_run": sum(
+            len(row.get("invariants_admitted", [])) for row in invariant_report
+        ),
+        "invariant_hints": sum(len(row.get("effect_hints", [])) for row in invariant_report),
+        "invariants_rejected": sum(len(row.get("rejected", [])) for row in invariant_report),
+        "min_invariant_observations": min_invariant_observations,
     }
     (app_report_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False),
@@ -374,6 +521,15 @@ def _guard_status_counts(fsm: AppFSM) -> dict[str, int]:
     counts: dict[str, int] = {}
     for transition in fsm.transitions:
         status = transition.guard_admission_status
+        key = str(getattr(status, "value", status or "none"))
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _postcondition_status_counts(fsm: AppFSM) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for transition in fsm.transitions:
+        status = transition.postcondition_admission_status
         key = str(getattr(status, "value", status or "none"))
         counts[key] = counts.get(key, 0) + 1
     return dict(sorted(counts.items()))

@@ -22,7 +22,7 @@
 
 ## 2. One-Paragraph Summary
 
-Vigil is a **neuro-symbolic runtime verification system** for mobile GUI agents. Its paper narrative is organized around three mobile GUI error families: **GUI state and transition errors** (wrong screen, illegal action, dead end, loop), **GUI semantic binding errors** (wrong field, value, item, contact, address, or intent slot), and **GUI safety and side-effect errors** (structurally legal actions that violate user constraints or cause harmful irreversible effects). In the **offline construction phase**, Vigil consumes two evidence sources: APK static files (manifest, layout XML, strings/resources, permissions) and exploration trace files (runtime UI XML, screenshots, action logs). Deterministic XML/static/trace processing constructs a **per-app hierarchical Finite State Machine (FSM)**, while offline LLM calls add semantic labels, risk annotations, invariants, and grammar-checked **DSL guards**. The FSM is verified by test-case generation and on-device replay. In the **online symbolic phase**, a lightweight engine checks every proposed GUI action before execution using FSM structure, DSL guards, task-state progress, invariants, and confidence thresholds, returning **ALLOW / DENY / UNCERTAIN** without a runtime LLM in the common path. Vigil is also **self-evolving**: unseen but structurally similar UI states inherit parameterized templates, while truly novel states trigger asynchronous micro-evolution and are cached back into the FSM bundle after validation.
+Vigil is a **neuro-symbolic runtime verification system** for mobile GUI agents. Its paper narrative is organized around three mobile GUI error families: **GUI state and transition errors** (wrong screen, illegal action, dead end, loop), **GUI semantic binding errors** (wrong field, value, item, contact, address, or intent slot), and **GUI safety and side-effect errors** (structurally legal actions that violate user constraints or cause harmful irreversible effects). In the **offline construction phase**, Vigil consumes two evidence sources: APK static files (manifest, layout XML, strings/resources, permissions) and exploration trace files (runtime UI XML, screenshots, action logs). Deterministic XML/static/trace processing constructs a **per-app hierarchical Finite State Machine (FSM)**, while offline LLM calls add semantic labels, side-effect/semantic-binding obligations, invariants, and grammar-checked **DSL guards**. The FSM is verified by test-case generation and on-device replay. In the **online symbolic phase**, a lightweight engine checks every proposed GUI action before execution using FSM structure, DSL guards, task-state progress, invariants, and confidence thresholds, returning **ALLOW / DENY / UNCERTAIN** without a runtime LLM in the common path. Vigil is also **self-evolving**: unseen but structurally similar UI states inherit parameterized templates, while truly novel states trigger asynchronous micro-evolution and are cached back into the FSM bundle after validation.
 
 ---
 
@@ -85,7 +85,7 @@ This contract interpretation is the paper bridge between FSM topology, DSL seman
 The offline FSM builder must separate **graph truth** from **semantic annotation**.
 
 - **Graph truth is evidence-driven.** State identity, action identity, and transition existence come from APK static priors plus runtime trace XML/action logs/replay. The LLM must not decide state equality, create static-only edges, assign replay confidence, or make runtime verdicts.
-- **Semantic annotation is LLM-assisted.** Because Android apps rarely provide official task APIs or docs, an offline LLM may summarize static files into an App Prior Card, label screen function and icon-only widgets, detect parameterized templates, generate DSL guard candidates, and classify risk. All generated guards must be grammar-checked and stored with provenance.
+- **Semantic annotation is LLM-assisted.** Because Android apps rarely provide official task APIs or docs, an offline LLM may summarize static files into an App Prior Card, label screen function and icon-only widgets, detect parameterized templates, generate DSL guard candidates, and identify side-effect/semantic-binding obligations. All generated guards must be grammar-checked and stored with provenance.
 - **Static files are priors, not proofs.** Manifest activities, parent activities, launcher intent-filters, permissions, strings, and layout XML provide activity names, initial-state hints, widget-type ground truth, hierarchy skeletons, and capability boundaries. They guide abstraction and guards, but transitions require trace or replay evidence.
 - **Trace files are behavioral evidence.** Runtime UI XML and screenshots determine observed states, canonical actions, and edges. Screenshots fill visual semantics missing from XML; XML remains the primary source for deterministic matching.
 
@@ -99,7 +99,7 @@ The offline FSM builder must separate **graph truth** from **semantic annotation
 |--------------|-----------------|-----------------|--------------------|
 | GUI State and Transition Errors | `models/fsm.py`, `models/action.py`, `core/ui_parser.py`, `core/action_types.py`, `symbolic/state_locator.py`, `symbolic/fsm_checker.py`, `symbolic/trajectory_verifier.py` | `neuro/explorer.py`, `neuro/state_abstractor.py`, `neuro/fsm_builder.py`, `neuro/replay_verifier.py` build and validate the topology. | Locate current state, check legal transition, reject unreachable paths, detect loops, return UNCERTAIN on low-confidence transitions. |
 | GUI Semantic Binding Errors | `models/dsl.py`, `models/state.py`, `symbolic/dsl_evaluator.py`, `symbolic/intent_extractor.py`, `symbolic/trajectory_verifier.py`, `symbolic/decision_engine.py` | `neuro/semantic_grounder.py`, `neuro/dsl_generator.py`, `neuro/widget_templates.py`, `neuro/evolution.py` create semantic profiles, guards, and dynamic templates. | Freeze intent, bind `$intent.*` variables, evaluate guards, track multi-step task progress, inherit and bind templates for dynamic content. |
-| GUI Safety and Side-Effect Errors | `symbolic/decision_engine.py`, `symbolic/invariant_checker.py`, `symbolic/dsl_evaluator.py`, `symbolic/fsm_checker.py`, `integration/agent_runner.py`, `scripts/verify_action.py` | Replay verification and guard generation identify high-risk transitions, irreversible actions, and state invariants. | Enforce safety guards and invariants before execution; return DENY or UNCERTAIN for risky, under-specified, or low-confidence actions. |
+| GUI Safety and Side-Effect Errors | `symbolic/decision_engine.py`, `symbolic/invariant_checker.py`, `symbolic/dsl_evaluator.py`, `symbolic/fsm_checker.py`, `integration/agent_runner.py`, `scripts/verify_action.py` | Replay verification and guard generation identify side-effecting transitions, irreversible actions, and state invariants. | Enforce safety guards and invariants before execution; return DENY or UNCERTAIN for side-effecting, under-specified, or low-confidence actions. |
 
 ### 4.1 Offline Pipeline (Construction Layer — 6 Stages)
 
@@ -108,7 +108,7 @@ Keep the root implementation skeleton concise. The deeper literature survey, des
 **Stage 0: App Prior Extraction** (`vigil.neuro.app_prior`, `core.platform_priors`)
 - Technical challenge: consumer Android apps rarely expose public control APIs or complete documentation, so static APK files are the best available prior.
 - Implementation role: parse manifest, layout XML, strings/resources, permissions, launcher activity, parent activity metadata, and widget declarations into an `AppPrior` / App Prior Card.
-- Artifact: static priors for entry state, activity hierarchy, widget-type templates, permission/capability boundaries, and risk categories. Static files guide construction but never create FSM transitions by themselves.
+- Artifact: static priors for entry state, activity hierarchy, widget-type templates, permission/capability boundaries, and side-effect semantics. Static files guide construction but never create FSM transitions by themselves.
 
 **Stage 1: UI Exploration** (`vigil.neuro.explorer`, `vigil.neuro.ape_explorer`, `core.ui_parser`, `core.action_types`)
 - Technical challenge: Android apps expose huge action spaces, nondeterministic transitions, scroll-dependent widgets, system dialogs, and state aliases caused by dynamic content.
@@ -127,8 +127,8 @@ Keep the root implementation skeleton concise. The deeper literature survey, des
 
 **Stage 4: Semantic Grounding + DSL Guard Generation** (`vigil.neuro.semantic_grounder`, `vigil.neuro.dsl_generator`, `vigil.neuro.widget_templates`, `models.dsl`)
 - Technical challenge: topology alone cannot prove semantic correctness; the verifier must know which recipient, amount, field, contact, item, or constraint the action binds.
-- Implementation role: use offline LLM calls over the App Prior Card, compressed XML, screenshots, and widget templates to label page function, icon-only widgets, parameterized templates, required intent variables, high-risk actions, and grammar-valid DSL predicates. Parse every guard with `output_docs/dsl_grammar.lark` before admitting it to the bundle.
-- Artifact: transition guard map `Gamma: S x Sigma -> guard`, required `$intent.*` bindings, guard provenance, semantic profiles, high-risk action labels, and candidate state/action invariants.
+- Implementation role: use offline LLM calls over the App Prior Card, compressed XML, screenshots, and widget templates to label page function, icon-only widgets, parameterized templates, required intent variables, side-effecting/irreversible action obligations, and grammar-valid DSL predicates. Parse every guard with `output_docs/dsl_grammar.lark` before admitting it to the bundle.
+- Artifact: transition guard map `Gamma: S x Sigma -> guard`, required `$intent.*` bindings, guard provenance, semantic profiles, side-effect/semantic-binding obligations, and candidate state/action invariants.
 
 **Stage 5: Replay Verification + Confidence Scoring** (`vigil.neuro.replay_verifier`, `symbolic.trajectory_verifier`)
 - Technical challenge: explored GUI transitions may be flaky because of timing, permissions, network state, animation, or hidden app state.
@@ -918,13 +918,13 @@ Create files in this sequence:
 10. **Never commit `data/` or `models/bundles/`** — large generated artifacts.
 11. **All LLM calls are offline only** — runtime symbolic layer must NEVER call an LLM in the common path; Tier 3 is async and infrequent.
 12. **uv is the only package manager** — no pip, no requirements.txt.
-13. **Graph truth vs semantic annotation:** XML/static/trace/replay decide states, actions, and edges; LLMs label semantics, generate guards, and classify risk.
+13. **Graph truth vs semantic annotation:** XML/static/trace/replay decide states, actions, and edges; LLMs label semantics, generate guards, and identify side-effect/semantic-binding obligations.
 14. **Reference code and papers to borrow:**
     - DroidBot: screenshot + UIAutomator hierarchy -> observed state transition graph.
     - Stoat: static event identification, weighted exploration, and stochastic model-testing intuition.
     - APE: adaptive GUI tree abstraction and refinement to balance precision with state explosion.
     - AndroidArena: compressed XML for LLM prompting and component-handle action grounding.
-    - VeriSafe: predicate patterns for payment, messaging, shopping, and other high-risk DSL guards.
+    - VeriSafe: predicate patterns for payment, messaging, shopping, and other side-effecting DSL guards.
 15. **Fidelity app development:** keep the controlled Android benchmark app in a root-level `fidelity_app/` directory, separate from `src/vigil/`. Use native Kotlin + Jetpack Compose with simple deterministic UI, stable accessibility/test identifiers, seeded local data, and hidden `gold/` FSM/guard/task artifacts. The app is for FSM-construction fidelity testing on Android emulators; the Vigil explorer/evaluator remains Python.
 
 ### 19.1 Current FSM Construction Status (May 2026)
@@ -943,7 +943,7 @@ Highest-priority alignment patches before the implementation section freezes:
 
 1. **Builder-validator agreement:** update trace validation to use current `state_id`, template, selector, and canonical action semantics instead of legacy fingerprint matching.
 2. **Canonical action identity:** compare the full `<tau, q, v>` signature so different widgets or values are not collapsed into the same transition.
-3. **Static prior integration:** use `AppPrior` during state naming, initial-state selection, widget template lookup, permission/risk annotation, and abstraction refinement; never create static-only edges.
+3. **Static prior integration:** use `AppPrior` during state naming, initial-state selection, widget template lookup, permission/side-effect annotation, and abstraction refinement; never create static-only edges.
 4. **APE-style refinement loop:** split states when one abstract state plus one canonical action yields conflicting successors, safety semantics conflict, or guard variables cannot be read; coarsen/template states that only differ by dynamic list/detail content.
 5. **Three-valued DSL evaluation:** missing GUI elements, missing intent variables, parse failures, or unreadable predicates should produce `UNCERTAIN`, not ordinary semantic failure.
 6. **Replay verifier completion:** replay bounded paths, update `Transition.confidence`, and preserve low-confidence transitions for `UNCERTAIN` handling.
@@ -997,4 +997,4 @@ Design goals:
 | WebView/mini-program poor Accessibility support | Low-Medium | Acknowledge scope limitation, focus on native UI |
 | Google Play Accessibility policy risk | Low | Our system is deterministic rule-based, not autonomous agent |
 | Taxonomy and implementation drift apart | Medium | Keep `docs/error_taxonomy.md`, Section 4.0 module mapping, and evaluation metrics aligned |
-| Safety layer becomes a loose prompt policy | High | Express high-risk constraints as DSL guards/invariants whenever possible; use LLM fallback only after UNCERTAIN |
+| Safety layer becomes a loose prompt policy | High | Express side-effect and semantic-binding constraints as DSL guards/invariants whenever possible; use LLM fallback only after UNCERTAIN |

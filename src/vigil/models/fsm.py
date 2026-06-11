@@ -23,7 +23,12 @@ from pydantic import (
     model_validator,
 )
 
-from vigil.models.guard import GuardAdmissionStatus, GuardContract, RiskLevel
+from vigil.models.guard import (
+    GuardAdmissionStatus,
+    GuardContract,
+    RiskLevel,
+    TransitionPostcondition,
+)
 
 
 class HierarchyLevel(StrEnum):
@@ -818,6 +823,9 @@ class Transition(BaseModel):
         target: Target state ID.
         action: Action that triggers this transition (e.g., {"type": "click", "target": ...}).
         guard: Optional DSL guard expression that must evaluate to true.
+        postcondition: Optional DSL postcondition expression over the target/effect
+            context. This is the executable/auditable ``Psi`` sibling of ``guard`` /
+            ``Gamma``.
         confidence: Replay confidence score (success_count / total_trials).
         low_trust: Whether the edge came from a low-trust observation scope.
         observed_count: Number of times this transition was observed during exploration.
@@ -825,6 +833,9 @@ class Transition(BaseModel):
         guard_contract: Optional typed guard-synthesis IR/metadata for this
             transition. Does not by itself produce a runtime verdict; the executable
             backend remains ``guard``.
+        postcondition_contract: Optional typed post-action effect/postcondition
+            candidate for this transition. Executable predicates are admitted into
+            ``postcondition``; unsupported effect requirements remain audit metadata.
         requires_guard: Whether policy requires an admitted guard before this
             transition may be trusted at runtime.
         risk_level: Denormalized transition-level policy summary intended for future
@@ -833,17 +844,28 @@ class Transition(BaseModel):
         guard_admission_status: Admission lifecycle status surfaced at the
             transition level, mirroring ``guard_contract.admission_status`` when set.
         guard_admission_reason: Human-readable rationale for the admission status.
+        postcondition_admission_status: Admission lifecycle status for
+            ``postcondition`` / ``Psi``.
+        postcondition_admission_reason: Human-readable rationale for the
+            postcondition admission status.
     """
 
     source: str
     target: str
     action: dict[str, Any]
     guard: str | None = None
+    postcondition: str | None = None
     confidence: float = 0.0
     low_trust: bool = False
     observed_count: int = 0
     provenance: list[ProvenanceEntry] = Field(default_factory=list)
     guard_contract: GuardContract | None = None
+    postcondition_contract: TransitionPostcondition | None = None
+    postcondition_incomplete: bool = False
+    postcondition_admission_status: GuardAdmissionStatus | None = None
+    postcondition_admission_reason: str = ""
+    postcondition_rejected_predicates: list[str] = Field(default_factory=list)
+    postcondition_unsupported_effects: list[str] = Field(default_factory=list)
     requires_guard: bool = False
     risk_level: RiskLevel = RiskLevel.UNKNOWN
     guard_admission_status: GuardAdmissionStatus | None = None
@@ -910,6 +932,7 @@ class AppFSM:
             transition.target,
             action=transition.action,
             guard=transition.guard,
+            postcondition=transition.postcondition,
             confidence=transition.confidence,
             low_trust=transition.low_trust,
             observed_count=transition.observed_count,

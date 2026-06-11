@@ -1,0 +1,427 @@
+"""Contract-first invariant generation pipeline (Stage 4, invariant half).
+
+Ties the invariant stages together over an existing ``AppFSM``:
+
+    build_all_invariant_evidence
+      -> (deterministic | llm | hybrid | audit packet)
+      -> admit_state_invariant_candidate (deterministic, evidence-replay)
+      -> merge admitted StateInvariants into AbstractState.invariant_specs (dedup, additive)
+
+This enriches states with ``I`` (runtime invariants) only. It does **not** mutate the FSM
+graph, state identity, replay confidence, canonical action identity, or
+``Transition.guard``. Transition-guard candidates in the packet are admitted through the
+**existing** :func:`~vigil.neuro.guard_admission.admit_guard_contract` (reusing, not
+reinventing, the guard path) and surfaced in the report for audit — guard attachment stays
+the responsibility of :func:`~vigil.neuro.guard_generation_pipeline.generate_contract_guards`.
+
+Effect-invariant hints and rejected candidates are written to the JSON report only, never
+onto the FSM, so schema v4 nested-only state payloads are preserved (only the existing
+``invariant_specs`` field is touched).
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
+
+from vigil.models.invariant_candidate import InvariantGuardCandidatePacket
+from vigil.neuro.guard_admission import admit_guard_contract
+from vigil.neuro.guard_evidence import build_guard_evidence_for_transition
+from vigil.neuro.guard_registry import _slug
+from vigil.neuro.invariant_admission import admit_state_invariant_candidate
+from vigil.neuro.invariant_contract_synthesizer import synthesize_invariant_candidates
+from vigil.neuro.invariant_evidence import (
+    build_all_invariant_evidence,
+    canonical_action_key_str,
+)
+from vigil.neuro.invariant_guard_llm import (
+    DEFAULT_INVARIANT_PROMPT,
+    LlmInvariantPacketCandidate,
+    generate_llm_invariant_guard_candidate,
+)
+from vigil.symbolic.dsl_evaluator import DSLEvaluator
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from vigil.core.llm_client import LlmClient
+    from vigil.models.fsm import AppFSM, StateInvariant
+    from vigil.models.invariant_candidate import TransitionGuardCandidate
+    from vigil.neuro.app_prior import AppPrior
+    from vigil.neuro.invariant_evidence import InvariantEvidence
+
+InvariantSource = Literal["deterministic", "llm", "hybrid", "audit"]
+
+
+# ---------------------------------------------------------------------------
+# Packet audit (parallels guard_generation_pipeline's per-attempt audit)
+# ---------------------------------------------------------------------------
+
+
+def _write_packet_audit(
+    evidence: InvariantEvidence,
+    candidate: LlmInvariantPacketCandidate,
+    audit_dir: Path | None,
+) -> str:
+    if audit_dir is None:
+        return ""
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    path = audit_dir / f"state_{_slug(evidence.target_state_id)}.json"
+    payload = {
+        "state_id": evidence.target_state_id,
+        "rejection_reason": candidate.rejection_reason,
+        "parse_errors": candidate.parse_errors,
+        "packet": candidate.packet.model_dump(mode="json"),
+        "raw_responses": candidate.raw_responses,
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return str(path)
+
+
+def _packet_from_audit(path: Path) -> InvariantGuardCandidatePacket | None:
+    """Load a prior audit packet, or ``None`` on any load/parse/validation failure.
+
+    ``None`` is the explicit load-failure signal so strict audit replay can report an
+    accurate skip reason. A valid file whose ``packet`` is empty/absent returns an
+    empty-but-valid packet (``{}`` -> no candidates), which is distinct from a failure.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return InvariantGuardCandidatePacket.model_validate(payload.get("packet", {}))
+    except Exception:  # noqa: BLE001 - strict audit reports failure; it never synthesizes
+        return None
+
+
+def _resolve_packet(
+    evidence: InvariantEvidence,
+    invariant_source: InvariantSource,
+    llm: LlmClient | None,
+    invariant_prompt: str,
+    use_images: bool,
+    audit_dir: Path | None,
+    audit_rows_by_state: dict[str, dict[str, Any]],
+) -> tuple[InvariantGuardCandidatePacket, str, str, str]:
+    """Resolve the candidate packet for one state.
+
+    Returns ``(packet, origin, fallback_reason, audit_path)``.
+    """
+    if invariant_source == "deterministic":
+        return synthesize_invariant_candidates(evidence), "deterministic", "", ""
+
+    if invariant_source == "audit":
+        # Strict, reproducible replay: audit mode attaches ONLY invariants present in the
+        # prior audit packet. A missing path or an unreadable/invalid file attaches nothing
+        # and reports the reason — it never silently synthesizes deterministic invariants
+        # (which would add invariants that were not in the prior audit).
+        row = audit_rows_by_state.get(evidence.target_state_id, {})
+        audit_path = str(row.get("packet_audit_path") or "")
+        if not audit_path:
+            return (
+                InvariantGuardCandidatePacket(),
+                "audit",
+                "audit packet path missing for state; no invariants attached",
+                "",
+            )
+        packet = _packet_from_audit(Path(audit_path))
+        if packet is None:
+            return (
+                InvariantGuardCandidatePacket(),
+                "audit",
+                f"audit packet missing/unreadable: {audit_path}",
+                audit_path,
+            )
+        return packet, "audit", "", audit_path
+
+    assert llm is not None
+    candidate = generate_llm_invariant_guard_candidate(
+        evidence, llm, prompt_name=invariant_prompt, use_images=use_images
+    )
+    audit_path = _write_packet_audit(evidence, candidate, audit_dir)
+    if invariant_source == "llm":
+        return candidate.packet, "llm", candidate.rejection_reason, audit_path
+
+    # hybrid: prefer the LLM packet; fall back to deterministic synthesis on LLM failure.
+    if candidate.rejection_reason:
+        return (
+            synthesize_invariant_candidates(evidence),
+            "fallback",
+            f"llm packet rejected: {candidate.rejection_reason}",
+            audit_path,
+        )
+    return candidate.packet, "llm", "", audit_path
+
+
+# ---------------------------------------------------------------------------
+# Attachment helpers
+# ---------------------------------------------------------------------------
+
+
+def _merge_invariants(state: Any, admitted: list[StateInvariant]) -> list[StateInvariant]:
+    """Additively merge admitted invariants into ``state.invariant_specs`` (dedup by expr)."""
+    existing = {spec.expr for spec in state.invariant_specs}
+    newly: list[StateInvariant] = []
+    for invariant in admitted:
+        if invariant.expr in existing:
+            continue
+        existing.add(invariant.expr)
+        state.invariant_specs.append(invariant)
+        newly.append(invariant)
+    return newly
+
+
+@dataclass(frozen=True)
+class _TransitionMatch:
+    """Result of resolving a packet guard candidate to an FSM transition."""
+
+    status: str  # "match" | "ambiguous" | "no_matching_transition"
+    index: int | None = None
+    transition: Any = None
+    reason: str = ""
+
+
+def _key_matches(action: dict[str, Any], candidate_key: str) -> bool:
+    """True when ``candidate_key`` identifies ``action``.
+
+    Exact-string match first (the prompt shows the same ``canonical_action_key_str``
+    output the matcher computes); then a structural fallback that re-parses both sides as
+    JSON, so cosmetic LLM reformatting (whitespace, key order) still binds. A structural
+    match is a genuine identity match — ``canonical_action_key_str`` is deterministic — so
+    this never mis-binds; it only improves recall over byte-for-byte equality.
+    """
+    target = canonical_action_key_str(action)
+    if target == candidate_key:
+        return True
+    try:
+        return json.loads(target) == json.loads(candidate_key)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return False
+
+
+def _find_transition(fsm: AppFSM, candidate: TransitionGuardCandidate) -> _TransitionMatch:
+    """Resolve a guard candidate to a transition by (source, target) + canonical action key.
+
+    Never falls back to an arbitrary sibling: when several transitions share the candidate's
+    (source, target) and the candidate's ``canonical_action_key`` is empty or matches none,
+    the result is ``ambiguous`` (reported, not admitted). A single same-(source, target)
+    transition matches regardless of the candidate key.
+    """
+    matches = [
+        (index, transition)
+        for index, transition in enumerate(fsm.transitions)
+        if transition.source == candidate.source_state_id
+        and transition.target == candidate.target_state_id
+    ]
+    if not matches:
+        return _TransitionMatch(
+            status="no_matching_transition",
+            reason="no FSM transition matched (source, target)",
+        )
+    if len(matches) == 1:
+        index, transition = matches[0]
+        return _TransitionMatch(status="match", index=index, transition=transition)
+    if candidate.canonical_action_key:
+        for index, transition in matches:
+            if _key_matches(transition.action, candidate.canonical_action_key):
+                return _TransitionMatch(status="match", index=index, transition=transition)
+    return _TransitionMatch(
+        status="ambiguous",
+        reason=(
+            f"{len(matches)} transitions share (source, target); candidate "
+            "canonical_action_key is empty or matches none"
+        ),
+    )
+
+
+def _admit_packet_guard_candidates(
+    fsm: AppFSM,
+    raw_screens: dict[str, Any],
+    app_prior: AppPrior | None,
+    candidates: list[TransitionGuardCandidate],
+) -> list[dict[str, Any]]:
+    """Admit packet guard candidates via the EXISTING guard admission — report only.
+
+    Reuses :func:`admit_guard_contract` against each matching transition's source-state
+    evidence. This never writes ``Transition.guard`` (that stays
+    ``generate_contract_guards``' job); it only records the admission outcome (and lets a
+    target-only guard predicate be observably rejected).
+    """
+    rows: list[dict[str, Any]] = []
+    for candidate in candidates:
+        match = _find_transition(fsm, candidate)
+        if match.status != "match":
+            rows.append(
+                {
+                    "source": candidate.source_state_id,
+                    "target": candidate.target_state_id,
+                    "status": match.status,
+                    "admitted": False,
+                    "reason": match.reason,
+                }
+            )
+            continue
+        transition = match.transition
+        evidence = build_guard_evidence_for_transition(
+            fsm, transition, match.index, raw_screens, app_prior
+        )
+        result = admit_guard_contract(candidate.contract, evidence)
+        rows.append(
+            {
+                "source": transition.source,
+                "target": transition.target,
+                "status": result.status.value,
+                "admitted": result.admitted,
+                "guard": result.guard,
+                "reason": result.reason,
+                "rejected_predicates": result.rejected_predicates,
+            }
+        )
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+
+def generate_contract_invariants(
+    fsm: AppFSM,
+    raw_screens: dict[str, Any],
+    app_prior: AppPrior | None = None,
+    *,
+    invariant_source: InvariantSource = "deterministic",
+    llm: LlmClient | None = None,
+    invariant_prompt: str = DEFAULT_INVARIANT_PROMPT,
+    use_images: bool = True,
+    llm_audit_dir: Path | None = None,
+    llm_audit_report: list[dict[str, Any]] | None = None,
+    grammar_path: str | None = None,
+    min_runtime_observations: int = 2,
+) -> list[dict[str, Any]]:
+    """Synthesize, admit, and attach runtime state invariants across ``fsm``'s states.
+
+    Returns a per-state report. The FSM graph and ``Transition.guard`` are left unchanged;
+    only ``AbstractState.invariant_specs`` is enriched (additive, dedup by expr).
+    """
+    if invariant_source in ("llm", "hybrid") and llm is None:
+        raise ValueError(f"invariant_source={invariant_source!r} requires an LLM client")
+    if invariant_source == "audit" and llm_audit_report is None:
+        raise ValueError("invariant_source='audit' requires llm_audit_report")
+
+    evaluator = DSLEvaluator(grammar_path)
+    evidence_items = build_all_invariant_evidence(fsm, raw_screens, app_prior)
+    audit_rows_by_state = {
+        str(row.get("state_id")): row for row in (llm_audit_report or []) if isinstance(row, dict)
+    }
+
+    report: list[dict[str, Any]] = []
+    for evidence in evidence_items:
+        state = fsm.states.get(evidence.target_state_id)
+        packet, origin, fallback, audit_path = _resolve_packet(
+            evidence,
+            invariant_source,
+            llm,
+            invariant_prompt,
+            use_images,
+            llm_audit_dir,
+            audit_rows_by_state,
+        )
+
+        admitted: list[StateInvariant] = []
+        invariant_rows: list[dict[str, Any]] = []
+        hint_rows: list[dict[str, Any]] = []
+        rejected_rows: list[dict[str, Any]] = []
+
+        for candidate in packet.state_invariant_candidates:
+            target = (candidate.admission_target or "").strip().lower()
+            if target == "reject":
+                rejected_rows.append(
+                    {
+                        "expr": candidate.expr,
+                        "reason": candidate.rejection_reason or "marked reject",
+                    }
+                )
+                continue
+            if target == "metadata_only":
+                hint_rows.append(
+                    {
+                        "expr": candidate.expr,
+                        "why_not_runtime_state_invariant": "metadata_only",
+                        "reason": candidate.notes or "candidate marked metadata_only",
+                    }
+                )
+                continue
+
+            result = admit_state_invariant_candidate(
+                candidate,
+                evidence,
+                grammar_path=grammar_path,
+                evaluator=evaluator,
+                min_runtime_observations=min_runtime_observations,
+            )
+            row = {
+                "expr": candidate.expr,
+                "kind": candidate.kind,
+                "status": result.classification,
+                "reason": result.reason,
+                "lowered_expr": result.lowered_expr,
+            }
+            if result.classification == "runtime_state_invariant" and result.invariant is not None:
+                admitted.append(result.invariant)
+                invariant_rows.append(row)
+            elif result.classification == "effect_hint":
+                row["why_not_runtime_state_invariant"] = result.hint_reason
+                hint_rows.append(row)
+            else:
+                rejected_rows.append(row)
+
+        for hint in packet.effect_invariant_hints:
+            hint_rows.append(
+                {
+                    "expr": hint.desired_expr,
+                    "why_not_runtime_state_invariant": hint.why_not_runtime_state_invariant,
+                    "reason": hint.description,
+                    "source": "packet_hint",
+                }
+            )
+        for rejected in packet.rejected_candidates:
+            rejected_rows.append(
+                {
+                    "expr": rejected.expr_or_summary,
+                    "reason": rejected.reason,
+                    "candidate_type": rejected.candidate_type,
+                    "source": "packet_rejected",
+                }
+            )
+
+        attached: list[StateInvariant] = []
+        if state is not None and admitted:
+            attached = _merge_invariants(state, admitted)
+
+        guard_rows = _admit_packet_guard_candidates(
+            fsm, raw_screens, app_prior, packet.transition_guard_candidates
+        )
+
+        report.append(
+            {
+                "state_id": evidence.target_state_id,
+                "state_name": evidence.target_state_name,
+                "source": origin,
+                "fallback_reason": fallback,
+                "packet_audit_path": audit_path,
+                "observation_count": evidence.observation_count,
+                "invariants_admitted": invariant_rows,
+                "invariants_attached": [invariant.expr for invariant in attached],
+                "effect_hints": hint_rows,
+                "rejected": rejected_rows,
+                "guard_candidates": guard_rows,
+            }
+        )
+
+    return report
+
+
+def write_invariant_generation_report(report: list[dict[str, Any]], path: Path) -> None:
+    """Write an invariant-generation report as JSON. Callers pass an ``output_docs/`` path."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
