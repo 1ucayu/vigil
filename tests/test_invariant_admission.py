@@ -369,7 +369,7 @@ def test_market_gold_like_examples() -> None:
     )
     r2 = admit_state_invariant_candidate(_cand('contains(title, "Payment successful")'), success)
     assert r2.admitted
-    assert r2.invariant.expr == f'contains({MARKET}:id/title, "Payment successful")'
+    assert r2.invariant.expr == f'value({MARKET}:id/title) contains "Payment successful"'
 
 
 def test_bank_gold_like_examples() -> None:
@@ -392,7 +392,7 @@ def test_bank_gold_like_examples() -> None:
     )
     r2 = admit_state_invariant_candidate(_cand('contains(title, "Transfer successful")'), success)
     assert r2.admitted
-    assert r2.invariant.expr == f'contains({BANK}:id/title, "Transfer successful")'
+    assert r2.invariant.expr == f'value({BANK}:id/title) contains "Transfer successful"'
 
 
 def test_chat_thread_intent_title_is_hint_not_invariant() -> None:

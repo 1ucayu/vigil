@@ -366,21 +366,26 @@ def test_hybrid_accepts_complete_llm_contract():
     assert report[0]["precondition"]["kind"] == "item_binding"
     assert report[0]["postcondition"]["kind"] == "content_effect"
     assert report[0]["postcondition_incomplete"] is False
-    assert report[0]["postcondition_dsl"] == (
-        f"contains({PKG}:id/message_input, $intent.contact_name) && "
-        f"appeared({PKG}:id/message_input)"
+    assert (
+        report[0]["postcondition_dsl"]
+        == f"value({PKG}:id/message_input) contains $intent.contact_name"
     )
     assert report[0]["postcondition_status"] == "admitted"
-    assert report[0]["postcondition_unsupported_effects"] == []
+    assert report[0]["postcondition_unsupported_effects"] == [
+        "thread_visible: appeared effect is audit-only"
+    ]
     assert fsm.transitions[0].guard == "action(target_text) == $intent.contact_name"
-    assert fsm.transitions[0].postcondition == (
-        f"contains({PKG}:id/message_input, $intent.contact_name) && "
-        f"appeared({PKG}:id/message_input)"
+    assert (
+        fsm.transitions[0].postcondition
+        == f"value({PKG}:id/message_input) contains $intent.contact_name"
     )
     assert fsm.transitions[0].postcondition_admission_status is GuardAdmissionStatus.ADMITTED
     assert fsm.transitions[0].postcondition_contract is not None
     assert fsm.transitions[0].postcondition_contract.kind == "content_effect"
-    assert not fsm.transitions[0].postcondition_contract.effect_requirements[0].unsupported_reason
+    assert (
+        fsm.transitions[0].postcondition_contract.effect_requirements[0].unsupported_reason
+        == "appeared effect is audit-only"
+    )
 
 
 def test_hybrid_keeps_arrival_only_postcondition_on_transition():

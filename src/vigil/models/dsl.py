@@ -24,6 +24,8 @@ class ComparisonOp(StrEnum):
     LT = "<"
     GTE = ">="
     LTE = "<="
+    CONTAINS = "contains"
+    NOT_CONTAINS = "not_contains"
 
 
 class LogicalOp(StrEnum):
@@ -41,7 +43,7 @@ class PredicateType(StrEnum):
     VALUE = "value"
     TIME_IN = "time_in"
     IN_STATE = "in_state"
-    CONTAINS = "contains"
+    CONTAINS = "contains"  # legacy function-form compatibility only
     COUNT = "count"
     ACTION = "action"
 
@@ -54,7 +56,7 @@ class DSLPredicate(BaseModel):
         time_in(09:00, 17:00)
         in_state(PaymentConfirm)
         value(recipient_field) != ""
-        contains(wifi_list, $intent.network_name)
+        value(wifi_list) contains $intent.network_name
         count(recycler_view) >= 1
         action(target_text) == $intent.menu_item
     """

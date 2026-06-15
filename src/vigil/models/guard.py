@@ -113,8 +113,11 @@ class PredicateSpec(BaseModel):
     """A single typed predicate within a guard contract.
 
     This is the contract-level analogue of one DSL predicate. ``predicate_type``
-    mirrors the supported DSL predicate vocabulary; the compiler lowers a
-    ``PredicateSpec`` into concrete DSL syntax during the (later) compilation pass.
+    mirrors the supported contract vocabulary; the compiler lowers executable
+    ``PredicateSpec`` objects into concrete DSL syntax during the compilation pass.
+    The ``contains`` and before/after effect predicate types are compatibility IR:
+    containment lowers to ``value(element) contains ...``, while effect predicate types
+    are audit-only and do not compile to executable DSL.
     """
 
     predicate_type: Literal[
@@ -161,8 +164,8 @@ class EffectRequirement(BaseModel):
 
     These records describe what should be checked after a transition arrives at its
     target state, such as content appearing, an item disappearing, or a value
-    changing. Supported effect kinds are lowered into executable/auditable Psi DSL
-    during postcondition admission when they carry enough grounding fields.
+    changing. The current executable DSL does not admit before/after effects; admission
+    records them as audit-only metadata unless a future evaluator can express them.
     """
 
     name: str

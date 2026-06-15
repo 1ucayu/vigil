@@ -286,7 +286,7 @@ def test_render_fsm_compare_html_includes_gold_explored_details_and_screenshots(
     explored.transitions[0].guard = _GUARD
     explored.transitions[
         0
-    ].postcondition = "in_state(s2) && contains(detail.title, $intent.selected_item)"
+    ].postcondition = "in_state(s2) && value(detail.title) contains $intent.selected_item"
     explored.transitions[0].postcondition_admission_status = GuardAdmissionStatus.ADMITTED
     explored.transitions[0].postcondition_admission_reason = "admitted: 2 executable predicates"
     explored.transitions[0].postcondition_contract = TransitionPostcondition(
@@ -387,7 +387,7 @@ def test_render_fsm_compare_html_includes_gold_explored_details_and_screenshots(
         == "read"
     )
     assert payload["explored"]["transitions"][0]["postcondition"] == (
-        "in_state(s2) && contains(detail.title, $intent.selected_item)"
+        "in_state(s2) && value(detail.title) contains $intent.selected_item"
     )
     assert payload["explored"]["transitions"][0]["postcondition_logic"]["status"] == "parsed"
     assert (
@@ -396,7 +396,7 @@ def test_render_fsm_compare_html_includes_gold_explored_details_and_screenshots(
     )
     assert (
         payload["explored"]["transitions"][0]["postcondition_logic"]["clauses"][1]["text"]
-        == "contains(detail.title, $intent.selected_item)"
+        == "value(detail.title) contains $intent.selected_item"
     )
     assert payload["explored"]["transitions"][0]["postcondition_effects"][0]["text"].startswith(
         "detail_visible:"

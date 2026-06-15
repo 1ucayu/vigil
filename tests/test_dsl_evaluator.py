@@ -222,49 +222,41 @@ class TestLogicClauseParsing:
         assert "error" in parsed
 
 
-class TestPostconditionEffectPredicates:
+class TestPostconditionDslScope:
     def setup_method(self) -> None:
         self.ev = DSLEvaluator()
 
-    def test_appeared_disappeared_and_value_changed(self) -> None:
+    def test_postcondition_reads_target_side_predicates(self) -> None:
         ctx = PostconditionContext(
-            source_screen=ScreenContext(
-                elements={
-                    "old_panel": {"text": "Old"},
-                    "counter": {"text": "0"},
-                }
-            ),
             target_screen=ScreenContext(
                 elements={
-                    "new_panel": {"text": "New"},
-                    "counter": {"text": "1"},
+                    "title": {"text": "Thread"},
+                    "message_list": {"children": [{"text": "hello"}]},
                 },
                 current_state="s2",
             ),
         )
 
         result = self.ev.evaluate_postcondition(
-            "appeared(new_panel) && disappeared(old_panel) "
-            '&& value_changed(counter, "0", "1") && in_state(s2)',
+            'read(title, text) == "Thread" && value(message_list) contains "hello" '
+            "&& in_state(s2)",
             postcondition_ctx=ctx,
         )
 
         assert result.passed is True
 
-    def test_effect_predicate_without_pair_context_is_unknown(self) -> None:
+    def test_effect_predicate_is_not_executable_dsl(self) -> None:
         result = self.ev.evaluate("appeared(new_panel)")
 
         assert result.passed is False
         assert result.status == "unknown"
+        assert "Parse error" in result.failure_reason
 
-    def test_parse_logic_clauses_for_effect_predicates(self) -> None:
+    def test_parse_logic_clauses_rejects_effect_predicates(self) -> None:
         parsed = self.ev.parse_logic_clauses("appeared(new_panel) && value_changed(counter)")
 
-        assert parsed["status"] == "parsed"
-        assert [c["predicate_type"] for c in parsed["clauses"]] == [
-            "appeared",
-            "value_changed",
-        ]
+        assert parsed["status"] == "parse_error"
+        assert parsed["clauses"] == []
 
 
 # ============================================================
@@ -313,6 +305,34 @@ class TestContainsPredicate:
     def test_contains_text_fallback(self) -> None:
         ctx = ScreenContext(elements={"msg": {"text": "Hello World"}})
         r = self.ev.evaluate('contains(msg, "World")', screen_ctx=ctx)
+        assert r.passed is True
+
+    def test_contains_operator_over_children(self) -> None:
+        ctx = ScreenContext(
+            elements={
+                "wifi_list": {
+                    "children": [
+                        {"text": "HKU_WiFi"},
+                        {"text": "eduroam"},
+                    ]
+                }
+            }
+        )
+        r = self.ev.evaluate('value(wifi_list) contains "HKU_WiFi"', screen_ctx=ctx)
+        assert r.passed is True
+
+    def test_not_contains_operator_over_children(self) -> None:
+        ctx = ScreenContext(
+            elements={
+                "wifi_list": {
+                    "children": [
+                        {"text": "HKU_WiFi"},
+                        {"text": "eduroam"},
+                    ]
+                }
+            }
+        )
+        r = self.ev.evaluate('value(wifi_list) not_contains "NonExistent"', screen_ctx=ctx)
         assert r.passed is True
 
 
@@ -412,7 +432,7 @@ class TestIntentVarInGrammar:
         )
         intent = IntentContext(variables={"wifi_name": "HKU_WiFi"})
         r = self.ev.evaluate(
-            "contains(wifi_list, $intent.wifi_name)",
+            "value(wifi_list) contains $intent.wifi_name",
             intent_ctx=intent,
             screen_ctx=ctx,
         )
@@ -455,7 +475,7 @@ class TestCombinedNewPredicates:
         )
         intent = IntentContext(variables={"wifi_name": "HKU_WiFi"})
         r = self.ev.evaluate(
-            "contains(wifi_list, $intent.wifi_name) && count(cart) > 0",
+            "value(wifi_list) contains $intent.wifi_name && count(cart) > 0",
             intent_ctx=intent,
             screen_ctx=ctx,
         )

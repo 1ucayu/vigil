@@ -2,7 +2,7 @@
 
 A state-invariant *candidate* is a single DSL predicate string proposed by the LLM or the
 deterministic synthesizer (e.g. ``value(total_amount) >= 0`` or
-``contains(title, "Payment successful")``). This module decides — deterministically,
+``value(title) contains "Payment successful"``). This module decides — deterministically,
 with no LLM — whether that candidate may become a runtime
 :class:`~vigil.models.fsm.StateInvariant` in ``AbstractState.invariant_specs``.
 
@@ -66,6 +66,7 @@ _NAMED_TERMINALS: frozenset[str] = frozenset(
     {"ELEMENT", "PROPERTY", "OP", "VALUE", "STATE_NAME", "TIME"}
 )
 _COMBINATOR_TOKENS: frozenset[str] = frozenset({"&&", "||", "!"})
+_CONTAINMENT_OPS: frozenset[str] = frozenset({"contains", "not_contains"})
 
 # Boolean element properties exposed by the runtime screen context. Always populated so a
 # ``read(x, is_enabled)`` predicate can evaluate rather than read UNKNOWN.
@@ -392,6 +393,16 @@ def admit_state_invariant_candidate(
     if parsed.kind == "read":
         if not parsed.property or parsed.property not in _READABLE_PROPS:
             return _reject(f"property {parsed.property!r} is not runtime-readable")
+        if parsed.operator in _CONTAINMENT_OPS and parsed.property not in {
+            "text",
+            "content_description",
+            "value",
+            "class_name",
+            "resource_id",
+        }:
+            return _reject(
+                f"containment operator is not valid for non-string property {parsed.property!r}"
+            )
         expected = _normalize_literal_value("read", parsed.property, spec.expected)
         if expected is not spec.expected:
             spec = spec.model_copy(update={"expected": expected})
@@ -400,6 +411,8 @@ def admit_state_invariant_candidate(
             if type_error:
                 return _reject(type_error)
     elif parsed.kind == "count" and spec.expected is not None and spec.expected.kind == "literal":
+        if parsed.operator in _CONTAINMENT_OPS:
+            return _reject("containment operator is not valid for count(...)")
         type_error = _literal_type_error("count", "", spec.expected.value)
         if type_error:
             return _reject(type_error)

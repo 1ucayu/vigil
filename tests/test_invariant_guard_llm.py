@@ -56,7 +56,7 @@ _PACKET_JSON = json.dumps(
         "state_invariant_candidates": [
             {
                 "kind": "success_presence",
-                "expr": 'contains(title, "Done")',
+                "expr": 'value(title) contains "Done"',
                 "admission_target": "runtime_state_invariant",
                 "source": "llm",
             }
@@ -80,7 +80,7 @@ def test_parse_packet_success() -> None:
     candidate = parse_invariant_guard_packet(_PACKET_JSON)
     assert candidate.rejection_reason == ""
     assert len(candidate.packet.state_invariant_candidates) == 1
-    assert candidate.packet.state_invariant_candidates[0].expr == 'contains(title, "Done")'
+    assert candidate.packet.state_invariant_candidates[0].expr == 'value(title) contains "Done"'
     assert len(candidate.packet.effect_invariant_hints) == 1
 
 

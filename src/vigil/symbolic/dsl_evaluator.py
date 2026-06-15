@@ -52,7 +52,12 @@ class ScreenContext(BaseModel):
 
 
 class PostconditionContext(BaseModel):
-    """Before/after screen pair for transition-effect Psi evaluation."""
+    """Postcondition evaluation context.
+
+    The executable DSL now reads target-side facts only. ``source_screen`` remains in the
+    API so older callers can pass a before/after pair, but before/after effect predicates
+    are audit metadata and are not part of the executable grammar.
+    """
 
     source_screen: ScreenContext = Field(default_factory=ScreenContext)
     target_screen: ScreenContext = Field(default_factory=ScreenContext)
@@ -93,6 +98,7 @@ _OPS: dict[str, Any] = {
     ">=": operator.ge,
     "<=": operator.le,
 }
+_CONTAINMENT_OPS = frozenset({"contains", "not_contains"})
 
 
 class _Unknown:
@@ -123,9 +129,6 @@ _STRUCTURAL_TOKENS = frozenset(
         "contains(",
         "count(",
         "action(",
-        "appeared(",
-        "disappeared(",
-        "value_changed(",
         ",",
         ")",
         "(",
@@ -156,15 +159,11 @@ class _GuardEvaluator(Transformer):
         screen_ctx: ScreenContext,
         intent_ctx: IntentContext | None = None,
         action_ctx: dict[str, Any] | None = None,
-        source_ctx: ScreenContext | None = None,
-        target_ctx: ScreenContext | None = None,
     ) -> None:
         super().__init__()
         self._ctx = screen_ctx
         self._intent = intent_ctx
         self._action = action_ctx
-        self._source_ctx = source_ctx
-        self._target_ctx = target_ctx
 
     def start(self, args: list[Any]) -> Any:
         return args[0]
@@ -240,9 +239,9 @@ class _GuardEvaluator(Transformer):
         el = self._ctx.elements.get(element_name)
         if el is None:
             return _Unknown(f"element '{element_name}' not present on screen")
-        if "value" not in el and "text" not in el:
+        if "value" not in el and "text" not in el and op_str not in _CONTAINMENT_OPS:
             return _Unknown(f"no value on '{element_name}'")
-        actual = el.get("value", el.get("text"))
+        actual = el.get("value", el.get("text", el))
         return self._compare(actual, op_str, expected)
 
     def time_pred(self, args: list[Any]) -> Any:
@@ -277,13 +276,7 @@ class _GuardEvaluator(Transformer):
         el = self._ctx.elements.get(element_name)
         if el is None:
             return _Unknown(f"element '{element_name}' not present on screen")
-        children = el.get("children", [])
-        if children:
-            return any(child.get("text") == search_value for child in children)
-        text = el.get("text")
-        if text is None:
-            return _Unknown(f"no text on '{element_name}'")
-        return str(search_value) in text
+        return self._contains(el, search_value)
 
     def count_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
@@ -320,69 +313,6 @@ class _GuardEvaluator(Transformer):
         actual = self._action.get(prop_name)
         return self._compare(actual, op_str, expected)
 
-    def appeared_pred(self, args: list[Any]) -> Any:
-        named = _filter_named(args)
-        if not named:
-            return _Unknown("malformed appeared predicate")
-        contexts = self._post_contexts()
-        if _is_unknown(contexts):
-            return contexts
-        source, target = contexts
-        element_name = str(named[0])
-        return element_name not in source.elements and element_name in target.elements
-
-    def disappeared_pred(self, args: list[Any]) -> Any:
-        named = _filter_named(args)
-        if not named:
-            return _Unknown("malformed disappeared predicate")
-        contexts = self._post_contexts()
-        if _is_unknown(contexts):
-            return contexts
-        source, target = contexts
-        element_name = str(named[0])
-        return element_name in source.elements and element_name not in target.elements
-
-    def value_changed_pred(self, args: list[Any]) -> Any:
-        named = _filter_named(args)
-        if not named:
-            return _Unknown("malformed value_changed predicate")
-        contexts = self._post_contexts()
-        if _is_unknown(contexts):
-            return contexts
-        source, target = contexts
-        element_name = str(named[0])
-        source_value = self._read_post_value(source, element_name)
-        if _is_unknown(source_value):
-            return source_value
-        target_value = self._read_post_value(target, element_name)
-        if _is_unknown(target_value):
-            return target_value
-
-        if len(named) >= 3:
-            expected_before = self._parse_value(named[1])
-            expected_after = self._parse_value(named[2])
-            if _is_unknown(expected_before):
-                return expected_before
-            if _is_unknown(expected_after):
-                return expected_after
-            return source_value == expected_before and target_value == expected_after
-        return source_value != target_value
-
-    def _post_contexts(self) -> tuple[ScreenContext, ScreenContext] | _Unknown:
-        if self._source_ctx is None or self._target_ctx is None:
-            return _Unknown("postcondition source/target context not provided")
-        return self._source_ctx, self._target_ctx
-
-    @staticmethod
-    def _read_post_value(ctx: ScreenContext, element_name: str) -> Any:
-        el = ctx.elements.get(element_name)
-        if el is None:
-            return _Unknown(f"element '{element_name}' not present in postcondition context")
-        for fallback_prop in ("value", "text", "content_description"):
-            if fallback_prop in el:
-                return el.get(fallback_prop)
-        return _Unknown(f"no readable value on '{element_name}'")
-
     def _parse_value(self, token: Token | str) -> Any:
         """Parse a VALUE token into a Python value, resolving $intent.* from context.
 
@@ -411,8 +341,40 @@ class _GuardEvaluator(Transformer):
             return s
 
     @staticmethod
-    def _compare(actual: Any, op_str: str, expected: Any) -> Any:
+    def _contains(actual: Any, expected: Any) -> Any:
+        """Evaluate containment over strings, lists, or runtime element dictionaries."""
+        if actual is None:
+            return _Unknown("actual value is None")
+        if isinstance(actual, dict):
+            children = actual.get("children", [])
+            if children:
+                for child in children:
+                    if isinstance(child, dict) and child.get("text") == expected:
+                        return True
+                    if child == expected:
+                        return True
+                return False
+            text = actual.get("text", actual.get("value"))
+            if text is None:
+                return _Unknown("no text/value for containment")
+            return str(expected) in str(text)
+        if isinstance(actual, list):
+            for item in actual:
+                if isinstance(item, dict) and item.get("text") == expected:
+                    return True
+                if item == expected:
+                    return True
+            return False
+        return str(expected) in str(actual)
+
+    @classmethod
+    def _compare(cls, actual: Any, op_str: str, expected: Any) -> Any:
         """Three-valued comparison with type coercion for numeric comparisons."""
+        if op_str in _CONTAINMENT_OPS:
+            result = cls._contains(actual, expected)
+            if _is_unknown(result):
+                return result
+            return (not result) if op_str == "not_contains" else result
         op_func = _OPS.get(op_str)
         if op_func is None:
             return _Unknown(f"unsupported operator '{op_str}'")
@@ -593,40 +555,6 @@ class _LogicClauseTransformer(Transformer):
             value=value,
         )
 
-    def appeared_pred(self, args: list[Any]) -> dict[str, Any]:
-        named = _filter_named(args)
-        element = str(named[0])
-        return _predicate_clause(
-            "appeared",
-            f"appeared({element})",
-            element=element,
-        )
-
-    def disappeared_pred(self, args: list[Any]) -> dict[str, Any]:
-        named = _filter_named(args)
-        element = str(named[0])
-        return _predicate_clause(
-            "disappeared",
-            f"disappeared({element})",
-            element=element,
-        )
-
-    def value_changed_pred(self, args: list[Any]) -> dict[str, Any]:
-        named = _filter_named(args)
-        element = str(named[0])
-        before = str(named[1]) if len(named) >= 3 else ""
-        after = str(named[2]) if len(named) >= 3 else ""
-        suffix = ""
-        if before or after:
-            suffix = f", {before}, {after}"
-        return _predicate_clause(
-            "value_changed",
-            f"value_changed({element}{suffix})",
-            element=element,
-            before=before,
-            after=after,
-        )
-
 
 class DSLEvaluator:
     """Evaluates DSL guard expressions against runtime context.
@@ -669,19 +597,16 @@ class DSLEvaluator:
         intent_ctx: IntentContext | None = None,
         action_ctx: dict[str, Any] | None = None,
     ) -> GuardResult:
-        """Evaluate Psi over a source/target screen pair.
+        """Evaluate executable Psi over the target screen.
 
-        Ordinary target predicates (`read`, `value`, `contains`, `count`,
-        `in_state`) read the target screen. Effect predicates compare the source
-        and target screens.
+        Before/after effect checks are no longer executable DSL predicates; effect
+        requirements are retained as audit metadata by the guard-admission layer.
         """
         return self._evaluate_with_context(
             postcondition_expr,
             intent_ctx=intent_ctx,
             screen_ctx=postcondition_ctx.target_screen,
             action_ctx=action_ctx,
-            source_ctx=postcondition_ctx.source_screen,
-            target_ctx=postcondition_ctx.target_screen,
         )
 
     def _evaluate_with_context(
@@ -690,8 +615,6 @@ class DSLEvaluator:
         intent_ctx: IntentContext | None = None,
         screen_ctx: ScreenContext | None = None,
         action_ctx: dict[str, Any] | None = None,
-        source_ctx: ScreenContext | None = None,
-        target_ctx: ScreenContext | None = None,
     ) -> GuardResult:
         if screen_ctx is None:
             screen_ctx = ScreenContext()
@@ -715,8 +638,6 @@ class DSLEvaluator:
                 screen_ctx,
                 intent_ctx=intent_ctx,
                 action_ctx=action_ctx,
-                source_ctx=source_ctx,
-                target_ctx=target_ctx,
             )
             result = evaluator.transform(tree)
         except Exception as e:

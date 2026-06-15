@@ -45,7 +45,8 @@ Available predicates:
 - read(element, property) op value — check a UI element's property
 - value(element) op value — shorthand for read(element, value)
 - action(property) op value — check the proposed action's metadata
-- contains(element, value) — check if element contains a value
+- value(element) contains value — check if element contains a value
+- value(element) not_contains value — check if element does not contain a value
 - count(element) op value — check child count
 - in_state(name) — check current FSM state
 - time_in(HH:MM, HH:MM) — time range check

@@ -823,9 +823,9 @@ class Transition(BaseModel):
         target: Target state ID.
         action: Action that triggers this transition (e.g., {"type": "click", "target": ...}).
         guard: Optional DSL guard expression that must evaluate to true.
-        postcondition: Optional DSL postcondition expression over the target/effect
-            context. This is the executable/auditable ``Psi`` sibling of ``guard`` /
-            ``Gamma``.
+        postcondition: Optional DSL postcondition expression over the target context.
+            This is the executable ``Psi`` sibling of ``guard`` / ``Gamma``; before/after
+            effect requirements remain audit metadata.
         confidence: Replay confidence score (success_count / total_trials).
         low_trust: Whether the edge came from a low-trust observation scope.
         observed_count: Number of times this transition was observed during exploration.

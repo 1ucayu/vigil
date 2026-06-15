@@ -423,7 +423,7 @@ def test_postcondition_keeps_arrival_fact_on_edge():
     assert result.reason == "admitted: 1 executable postcondition predicate(s)"
 
 
-def test_postcondition_appeared_resolves_target_only_element():
+def test_postcondition_appeared_is_audit_only_not_executable():
     source = _registry(_entry("feed", resource_id=f"{PKG}:id/feed"))
     target = _registry(_entry("query", resource_id=f"{PKG}:id/search_query"))
     postcondition = TransitionPostcondition(
@@ -438,13 +438,16 @@ def test_postcondition_appeared_resolves_target_only_element():
         ],
     )
     result = admit_postcondition_contract(postcondition, _postcondition_evidence(source, target))
-    assert result.admitted is True
-    assert result.postcondition == f"appeared({PKG}:id/search_query)"
-    assert result.unsupported_effects == []
-    assert postcondition.effect_requirements[0].unsupported_reason == ""
+    assert result.admitted is False
+    assert result.postcondition is None
+    assert result.reason == "required postcondition has no runtime-executable predicate"
+    assert result.unsupported_effects == ["query_appeared: appeared effect is audit-only"]
+    assert (
+        postcondition.effect_requirements[0].unsupported_reason == "appeared effect is audit-only"
+    )
 
 
-def test_postcondition_disappeared_resolves_source_element():
+def test_postcondition_disappeared_is_audit_only_not_executable():
     source = _registry(_entry("feed", resource_id=f"{PKG}:id/feed"))
     target = _registry(_entry("query", resource_id=f"{PKG}:id/search_query"))
     postcondition = TransitionPostcondition(
@@ -459,11 +462,12 @@ def test_postcondition_disappeared_resolves_source_element():
         ],
     )
     result = admit_postcondition_contract(postcondition, _postcondition_evidence(source, target))
-    assert result.admitted is True
-    assert result.postcondition == f"disappeared({PKG}:id/feed)"
+    assert result.admitted is False
+    assert result.postcondition is None
+    assert result.unsupported_effects == ["feed_disappeared: disappeared effect is audit-only"]
 
 
-def test_postcondition_value_changed_requires_stable_element_across_pair():
+def test_postcondition_value_changed_is_audit_only_not_executable():
     source = _registry(_entry("badge", resource_id=f"{PKG}:id/badge"))
     target = _registry(_entry("badge", resource_id=f"{PKG}:id/badge"))
     postcondition = TransitionPostcondition(
@@ -480,5 +484,6 @@ def test_postcondition_value_changed_requires_stable_element_across_pair():
         ],
     )
     result = admit_postcondition_contract(postcondition, _postcondition_evidence(source, target))
-    assert result.admitted is True
-    assert result.postcondition == f'value_changed({PKG}:id/badge, "0", "1")'
+    assert result.admitted is False
+    assert result.postcondition is None
+    assert result.unsupported_effects == ["badge_changes: value_changed effect is audit-only"]

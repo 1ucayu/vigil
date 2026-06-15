@@ -40,7 +40,7 @@ from vigil.models.guard import (
     TransitionPostcondition,
     ValueRef,
 )
-from vigil.neuro.guard_dsl_compiler import compile_effect_requirement, compile_predicate_spec
+from vigil.neuro.guard_dsl_compiler import compile_predicate_spec
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.neuro.guard_evidence import GuardEvidence
@@ -104,6 +104,7 @@ _ALLOWED_ACTION_PROPS: frozenset[str] = frozenset(
         "input_text",
     }
 )
+_CONTAINMENT_OPS: frozenset[str] = frozenset({"contains", "not_contains"})
 
 # Registry-stored string properties usable for offline literal proof-of-false.
 _KNOWN_STRING_PROPS: tuple[str, ...] = (
@@ -238,13 +239,21 @@ def _lower_predicate(
         key, entry, reason = _resolve_element(pred.element, registry)
         if key is None:
             return _Lowered(None, reason)
+        op = pred.operator or ("contains" if ptype == "contains" else "==")
         if ptype == "count" and expected is not None and expected.kind == "literal":
+            if op in _CONTAINMENT_OPS:
+                return _Lowered(None, "containment operator is not valid for count(...)")
             type_error = _literal_type_error(ptype, "", expected.value)
             if type_error:
                 return _Lowered(None, type_error)
         if ptype == "read":
             if not pred.property or pred.property not in _READABLE_PROPS:
                 return _Lowered(None, f"property '{pred.property}' not runtime-readable")
+            if op in _CONTAINMENT_OPS and pred.property not in _READABLE_STRING_PROPS:
+                return _Lowered(
+                    None,
+                    f"containment operator is not valid for non-string property '{pred.property}'",
+                )
             expected = _normalize_literal_value(ptype, pred.property, expected)
             if expected is not pred.expected:
                 pred = pred.model_copy(update={"expected": expected})
@@ -285,101 +294,15 @@ def _lower_predicate(
     return _Lowered(compiled, "", is_binding)
 
 
-def _registry_has_key(registry: WidgetRegistry | None, key: str) -> bool:
-    """Return whether a registry contains a runtime key by resource id or alias."""
-    if registry is None:
-        return False
-    return key in registry.resource_id_to_alias or key in registry.entries
-
-
-def _resolve_stable_postcondition_element(
-    element: str,
-    evidence: GuardEvidence,
-) -> tuple[str | None, str]:
-    """Resolve an element that must be stable across source and target registries."""
-    if evidence.target_registry is None:
-        return None, "target registry unavailable for postcondition effect predicate"
-    source_key, _source_entry, source_reason = _resolve_element(
-        element,
-        evidence.source_registry,
-        "source",
-    )
-    if source_key is not None:
-        if _registry_has_key(evidence.target_registry, source_key):
-            return source_key, ""
-        return (
-            None,
-            f"element '{element}' resolves to {source_key!r} in source but not target registry",
-        )
-
-    target_key, _target_entry, target_reason = _resolve_element(
-        element,
-        evidence.target_registry,
-        "target",
-    )
-    if target_key is not None:
-        if _registry_has_key(evidence.source_registry, target_key):
-            return target_key, ""
-        return (
-            None,
-            f"element '{element}' resolves to {target_key!r} in target but not source registry",
-        )
-    return None, f"{source_reason}; {target_reason}"
-
-
-def _intent_slots_in_value(ref: ValueRef | None) -> set[str]:
-    if ref is not None and ref.kind == "intent" and ref.slot:
-        return {ref.slot}
-    return set()
-
-
-def _validate_effect_slots(effect: EffectRequirement, declared_slots: set[str]) -> str:
-    for slot in _intent_slots_in_value(effect.before) | _intent_slots_in_value(effect.after):
-        if slot not in declared_slots:
-            return f"undeclared intent slot '{slot}'"
-    return ""
-
-
 def _lower_effect_requirement(
     effect: EffectRequirement,
     evidence: GuardEvidence,
     declared_slots: set[str],
 ) -> _Lowered:
     kind = (effect.effect_kind or "").strip().lower()
-    name = effect.name or "effect"
-    if kind not in {"appeared", "disappeared", "value_changed"}:
-        return _Lowered(None, f"{name}: effect_requirement kind '{kind or 'unknown'}' unsupported")
-    slot_error = _validate_effect_slots(effect, declared_slots)
-    if slot_error:
-        return _Lowered(None, f"{name}: {slot_error}")
-    if not effect.element:
-        return _Lowered(None, f"{name}: effect requirement missing element")
-
-    if kind == "appeared":
-        if evidence.target_registry is None:
-            return _Lowered(None, f"{name}: target registry unavailable for appeared")
-        key, _entry, reason = _resolve_element(effect.element, evidence.target_registry, "target")
-        if key is None:
-            return _Lowered(None, f"{name}: {reason}")
-        if _registry_has_key(evidence.source_registry, key):
-            return _Lowered(None, f"{name}: element '{key}' is present in source registry")
-    elif kind == "disappeared":
-        key, _entry, reason = _resolve_element(effect.element, evidence.source_registry, "source")
-        if key is None:
-            return _Lowered(None, f"{name}: {reason}")
-        if _registry_has_key(evidence.target_registry, key):
-            return _Lowered(None, f"{name}: element '{key}' is present in target registry")
-    else:
-        key, reason = _resolve_stable_postcondition_element(effect.element, evidence)
-        if key is None:
-            return _Lowered(None, f"{name}: {reason}")
-
-    lowered = effect.model_copy(update={"element": key, "effect_kind": kind})
-    compiled = compile_effect_requirement(lowered)
-    if compiled is None:
-        return _Lowered(None, f"{name}: effect requirement not compilable")
-    is_binding = bool(_intent_slots_in_value(effect.before) or _intent_slots_in_value(effect.after))
-    return _Lowered(compiled, "", is_binding)
+    if kind in {"appeared", "disappeared", "value_changed"}:
+        return _Lowered(None, f"{kind} effect is audit-only")
+    return _Lowered(None, f"effect_requirement kind '{kind or 'unknown'}' unsupported")
 
 
 def admit_guard_contract(
@@ -481,7 +404,7 @@ def _lower_postcondition_predicate(
     evidence: GuardEvidence,
     declared_slots: set[str],
 ) -> _Lowered:
-    """Lower one target/effect-side ``Psi`` predicate."""
+    """Lower one target-side ``Psi`` predicate."""
     if (
         pred.expected is not None
         and pred.expected.kind == "intent"
@@ -504,30 +427,7 @@ def _lower_postcondition_predicate(
         return _Lowered(compiled, "")
 
     if pred.predicate_type in {"appeared", "disappeared", "value_changed"}:
-        effect = EffectRequirement(
-            name=pred.source or pred.predicate_type,
-            effect_kind=pred.predicate_type,
-            element=pred.element,
-            before=(
-                ValueRef.model_validate(pred.args["before"])
-                if isinstance(pred.args.get("before"), dict)
-                else (
-                    ValueRef(kind="literal", value=pred.args.get("before"))
-                    if "before" in pred.args
-                    else None
-                )
-            ),
-            after=(
-                ValueRef.model_validate(pred.args["after"])
-                if isinstance(pred.args.get("after"), dict)
-                else (
-                    ValueRef(kind="literal", value=pred.args.get("after"))
-                    if "after" in pred.args
-                    else None
-                )
-            ),
-        )
-        return _lower_effect_requirement(effect, evidence, declared_slots)
+        return _Lowered(None, f"{pred.predicate_type} effect predicate is audit-only")
 
     if pred.predicate_type not in ("read", "value", "contains", "count"):
         return _Lowered(

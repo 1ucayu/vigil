@@ -22,7 +22,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     pass
 
 _DEFAULT_OP = "=="
-_VALID_OPS: frozenset[str] = frozenset({"==", "!=", ">", "<", ">=", "<="})
+_VALID_OPS: frozenset[str] = frozenset(
+    {"==", "!=", ">", "<", ">=", "<=", "contains", "not_contains"}
+)
+_CONTAINMENT_OPS: frozenset[str] = frozenset({"contains", "not_contains"})
 
 
 def _render_value(ref: ValueRef | None) -> str | None:
@@ -45,20 +48,6 @@ def _render_value(ref: ValueRef | None) -> str | None:
     # kind == "action" / "read": a VALUE token cannot be action(...)/read(...) on the
     # right-hand side of the current grammar — drop conservatively.
     return None
-
-
-def _coerce_value_ref(value: object) -> ValueRef | None:
-    """Coerce typed JSON fragments or raw literals to a renderable ``ValueRef``."""
-    if isinstance(value, ValueRef):
-        return value
-    if isinstance(value, dict):
-        try:
-            return ValueRef.model_validate(value)
-        except Exception:  # noqa: BLE001 - compiler drops malformed fragments
-            return None
-    if value is None:
-        return None
-    return ValueRef(kind="literal", value=value)
 
 
 def _op(predicate: PredicateSpec) -> str | None:
@@ -105,7 +94,8 @@ def compile_predicate_spec(predicate: PredicateSpec) -> str | None:
         value = _render_value(predicate.expected)
         if not predicate.element or value is None:
             return None
-        return f"contains({predicate.element}, {value})"
+        op = predicate.operator if predicate.operator in _CONTAINMENT_OPS else "contains"
+        return f"value({predicate.element}) {op} {value}"
 
     if ptype == "count":
         if not predicate.element:
@@ -131,27 +121,8 @@ def compile_predicate_spec(predicate: PredicateSpec) -> str | None:
             return None
         return f"time_in({start}, {end})"
 
-    if ptype == "appeared":
-        if not predicate.element:
-            return None
-        return f"appeared({predicate.element})"
-
-    if ptype == "disappeared":
-        if not predicate.element:
-            return None
-        return f"disappeared({predicate.element})"
-
-    if ptype == "value_changed":
-        if not predicate.element:
-            return None
-        before = _coerce_value_ref(predicate.args.get("before"))
-        after = _coerce_value_ref(predicate.args.get("after"))
-        if before is not None and after is not None:
-            before_value = _render_value(before)
-            after_value = _render_value(after)
-            if before_value is not None and after_value is not None:
-                return f"value_changed({predicate.element}, {before_value}, {after_value})"
-        return f"value_changed({predicate.element})"
+    if ptype in {"appeared", "disappeared", "value_changed"}:
+        return None
 
     return None
 
@@ -173,19 +144,5 @@ def compile_guard_contract(contract: GuardContract) -> str | None:
 
 
 def compile_effect_requirement(effect: EffectRequirement) -> str | None:
-    """Compile a supported post-action effect requirement into Psi DSL."""
-    kind = (effect.effect_kind or "").strip().lower()
-    if kind not in {"appeared", "disappeared", "value_changed"}:
-        return None
-    if not effect.element:
-        return None
-    if kind == "appeared":
-        return f"appeared({effect.element})"
-    if kind == "disappeared":
-        return f"disappeared({effect.element})"
-
-    before = _render_value(effect.before)
-    after = _render_value(effect.after)
-    if before is not None and after is not None:
-        return f"value_changed({effect.element}, {before}, {after})"
-    return f"value_changed({effect.element})"
+    """Return ``None`` because post-arrival effects are audit metadata, not DSL."""
+    return None

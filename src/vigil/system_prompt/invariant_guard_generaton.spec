@@ -262,13 +262,12 @@ PredicateBasis:
   read(element, property) <op> value
   value(element) <op> value
   action(property) <op> value
-  contains(element, value)
   count(element) <op> value
   in_state(state_name)
   time_in(start, end)
 
 AllowedOperator:
-  == | != | > | < | >= | <=
+  == | != | > | < | >= | <= | contains | not_contains
 
 ReadableElementProperty:
   text | content_description | value | is_clickable | is_long_clickable |
@@ -592,11 +591,13 @@ ReadableActionProperty:
   * A candidate contains an executable expression or predicate list.
 
 **Post-Condition**:
-  * Use only `read`, `value`, `contains`, `count`, `in_state`, `time_in`, and
-    `action` as allowed by the candidate scope.
-  * For runtime state invariants, allowed predicates are `read`, `value`,
-    `contains`, `count`, `in_state`, and `time_in`; avoid `time_in` unless a
-    stable time policy is explicitly provided.
+  * Use only `read`, `value`, `count`, `in_state`, `time_in`, and `action` as
+    allowed by the candidate scope.
+  * Express containment as the `contains` or `not_contains` operator over `read`
+    or `value`, for example `value(title) contains "Done"`.
+  * For runtime state invariants, allowed predicate variables are `read`, `value`,
+    `count`, `in_state`, and `time_in`; avoid `time_in` unless a stable time policy
+    is explicitly provided.
   * For transition guards, `action` is allowed only over known action properties.
   * Do not emit natural-language pseudo-predicates such as `visible(...)`,
     `selected(...)`, `matches(...)`, `is_recipient(...)`, `has_error(...)`, or

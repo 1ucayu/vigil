@@ -140,7 +140,7 @@ def test_contains_and_in_state_and_time_in():
         element="picker",
         expected=ValueRef(kind="intent", slot="attachment"),
     )
-    assert compile_predicate_spec(contains) == "contains(picker, $intent.attachment)"
+    assert compile_predicate_spec(contains) == "value(picker) contains $intent.attachment"
 
     in_state = PredicateSpec(predicate_type="in_state", args={"state": "checkout"})
     assert compile_predicate_spec(in_state) == "in_state(checkout)"
@@ -154,12 +154,12 @@ def test_optional_contract_without_predicates_compiles_to_none():
     assert compile_guard_contract(contract) is None
 
 
-def test_effect_requirement_compiles_minimal_postcondition_predicates():
+def test_effect_requirement_is_audit_only_not_dsl():
     assert (
         compile_effect_requirement(
             EffectRequirement(name="query_appeared", effect_kind="appeared", element="search.query")
         )
-        == "appeared(search.query)"
+        is None
     )
     assert (
         compile_effect_requirement(
@@ -169,7 +169,7 @@ def test_effect_requirement_compiles_minimal_postcondition_predicates():
                 element="home.feed",
             )
         )
-        == "disappeared(home.feed)"
+        is None
     )
     assert (
         compile_effect_requirement(
@@ -179,7 +179,7 @@ def test_effect_requirement_compiles_minimal_postcondition_predicates():
                 element="cart.badge_count",
             )
         )
-        == "value_changed(cart.badge_count)"
+        is None
     )
     assert (
         compile_effect_requirement(
@@ -191,7 +191,7 @@ def test_effect_requirement_compiles_minimal_postcondition_predicates():
                 after=ValueRef(kind="literal", value="Cart"),
             )
         )
-        == 'value_changed(top_bar.title, "Home", "Cart")'
+        is None
     )
 
 
