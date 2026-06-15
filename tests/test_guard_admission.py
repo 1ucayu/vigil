@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from vigil.models.guard import (
+    EffectRequirement,
     GuardAdmissionStatus,
     GuardContract,
     GuardKind,
@@ -10,9 +11,10 @@ from vigil.models.guard import (
     PredicateSpec,
     RiskLevel,
     SlotType,
+    TransitionPostcondition,
     ValueRef,
 )
-from vigil.neuro.guard_admission import admit_guard_contract
+from vigil.neuro.guard_admission import admit_guard_contract, admit_postcondition_contract
 from vigil.neuro.guard_evidence import GuardEvidence
 from vigil.neuro.guard_registry import WidgetRegistry, WidgetRegistryEntry
 
@@ -374,3 +376,109 @@ def test_optional_no_guard_contract_admitted():
     assert result.admitted is True
     assert result.status is GuardAdmissionStatus.ADMITTED
     assert result.guard is None
+
+
+def test_precondition_rejects_postcondition_only_predicate():
+    contract = _contract(
+        required=True,
+        predicates=[PredicateSpec(predicate_type="appeared", element="target_only")],
+    )
+    result = admit_guard_contract(contract, _evidence(_registry()))
+    assert result.admitted is False
+    assert "postcondition-only" in result.reason
+
+
+def _postcondition_evidence(
+    source: WidgetRegistry,
+    target: WidgetRegistry,
+) -> GuardEvidence:
+    return GuardEvidence(
+        transition_index=0,
+        source_state_id="s1",
+        target_state_id="s2",
+        action={"type": "click"},
+        source_registry=source,
+        target_registry=target,
+    )
+
+
+def test_postcondition_keeps_arrival_fact_on_edge():
+    postcondition = TransitionPostcondition(
+        kind="arrival_state",
+        required=False,
+        predicates=[
+            PredicateSpec(
+                predicate_type="in_state",
+                expected=ValueRef(kind="literal", value="s2"),
+                args={"state": "s2"},
+            )
+        ],
+    )
+    result = admit_postcondition_contract(
+        postcondition,
+        _postcondition_evidence(_registry(), _registry()),
+    )
+    assert result.admitted is True
+    assert result.postcondition == "in_state(s2)"
+    assert result.reason == "admitted: 1 executable postcondition predicate(s)"
+
+
+def test_postcondition_appeared_resolves_target_only_element():
+    source = _registry(_entry("feed", resource_id=f"{PKG}:id/feed"))
+    target = _registry(_entry("query", resource_id=f"{PKG}:id/search_query"))
+    postcondition = TransitionPostcondition(
+        kind="content_effect",
+        required=True,
+        effect_requirements=[
+            EffectRequirement(
+                name="query_appeared",
+                effect_kind="appeared",
+                element="query",
+            )
+        ],
+    )
+    result = admit_postcondition_contract(postcondition, _postcondition_evidence(source, target))
+    assert result.admitted is True
+    assert result.postcondition == f"appeared({PKG}:id/search_query)"
+    assert result.unsupported_effects == []
+    assert postcondition.effect_requirements[0].unsupported_reason == ""
+
+
+def test_postcondition_disappeared_resolves_source_element():
+    source = _registry(_entry("feed", resource_id=f"{PKG}:id/feed"))
+    target = _registry(_entry("query", resource_id=f"{PKG}:id/search_query"))
+    postcondition = TransitionPostcondition(
+        kind="content_effect",
+        required=True,
+        effect_requirements=[
+            EffectRequirement(
+                name="feed_disappeared",
+                effect_kind="disappeared",
+                element="feed",
+            )
+        ],
+    )
+    result = admit_postcondition_contract(postcondition, _postcondition_evidence(source, target))
+    assert result.admitted is True
+    assert result.postcondition == f"disappeared({PKG}:id/feed)"
+
+
+def test_postcondition_value_changed_requires_stable_element_across_pair():
+    source = _registry(_entry("badge", resource_id=f"{PKG}:id/badge"))
+    target = _registry(_entry("badge", resource_id=f"{PKG}:id/badge"))
+    postcondition = TransitionPostcondition(
+        kind="content_effect",
+        required=True,
+        effect_requirements=[
+            EffectRequirement(
+                name="badge_changes",
+                effect_kind="value_changed",
+                element="badge",
+                before=ValueRef(kind="literal", value="0"),
+                after=ValueRef(kind="literal", value="1"),
+            )
+        ],
+    )
+    result = admit_postcondition_contract(postcondition, _postcondition_evidence(source, target))
+    assert result.admitted is True
+    assert result.postcondition == f'value_changed({PKG}:id/badge, "0", "1")'

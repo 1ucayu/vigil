@@ -73,6 +73,7 @@ class GuardEvidence(BaseModel):
     target_screen: ScreenEvidence = Field(default_factory=lambda: ScreenEvidence(state_id=""))
     source_registry: WidgetRegistry
     target_registry: WidgetRegistry | None = None
+    target_invariants: list[str] = Field(default_factory=list)
     sibling_actions: list[dict[str, Any]] = Field(default_factory=list)
     action_target_alias: str | None = None
     action_target_alias_reason: str = ""
@@ -405,6 +406,9 @@ def build_guard_evidence_for_transition(
         target_screen=_screen_evidence(target, transition.target, target_screen_ids, raw_screens),
         source_registry=source_registry,
         target_registry=target_registry,
+        target_invariants=[spec.expr for spec in target.invariant_specs]
+        if target is not None
+        else [],
         sibling_actions=_sibling_actions(fsm, transition),
         action_target_alias=action_target_alias,
         action_target_alias_reason=alias_reason,

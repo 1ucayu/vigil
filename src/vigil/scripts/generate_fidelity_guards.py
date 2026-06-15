@@ -375,44 +375,11 @@ def run_one_app(
         )
         write_visual_grounding_report(visual_report, app_report_dir / "visual_grounding.json")
 
-    guard_report: list[dict[str, Any]] = []
-    if not skip_guards:
-        action_schema_count = len({guard_action_schema_key(t.action) for t in fsm.transitions})
-        logger.info(
-            f"[{spec.name}] contract guard generation ({guard_source}) "
-            f"{action_schema_count} guard action schemas over "
-            f"{len(fsm.transitions)} edge transitions"
-        )
-        llm_audit_report = None
-        if guard_source == "audit":
-            audit_report_root = guard_audit_root or report_root
-            audit_report_path = audit_report_root / spec.name / "guard_generation.json"
-            if not audit_report_path.exists():
-                raise SystemExit(f"Guard audit report missing for {spec.name}: {audit_report_path}")
-            loaded = json.loads(audit_report_path.read_text(encoding="utf-8"))
-            if not isinstance(loaded, list):
-                raise SystemExit(f"Guard audit report is not a list: {audit_report_path}")
-            llm_audit_report = loaded
-        guard_report = generate_contract_guards(
-            fsm,
-            raw_screens,
-            prior,
-            guard_source=guard_source,  # type: ignore[arg-type]
-            llm=llm if guard_source in ("llm", "hybrid") else None,
-            guard_prompt=guard_prompt,
-            guard_use_images=guard_use_images,
-            llm_audit_dir=(
-                app_report_dir / "llm_guard_attempts" if guard_source in ("llm", "hybrid") else None
-            ),
-            llm_audit_report=llm_audit_report,
-        )
-        write_guard_generation_report(guard_report, app_report_dir / "guard_generation.json")
-
     invariant_report: list[dict[str, Any]] = []
     if not skip_invariants:
         logger.info(
             f"[{spec.name}] contract invariant generation ({invariant_source}) "
-            f"over {len(fsm.states)} states"
+            f"over {len(fsm.states)} states before postcondition/precondition generation"
         )
         invariant_audit_replay = None
         if invariant_source == "audit":
@@ -445,6 +412,39 @@ def run_one_app(
         write_invariant_generation_report(
             invariant_report, app_report_dir / "invariant_generation.json"
         )
+
+    guard_report: list[dict[str, Any]] = []
+    if not skip_guards:
+        action_schema_count = len({guard_action_schema_key(t.action) for t in fsm.transitions})
+        logger.info(
+            f"[{spec.name}] contract postcondition/precondition generation ({guard_source}) "
+            f"{action_schema_count} guard action schemas over "
+            f"{len(fsm.transitions)} edge transitions"
+        )
+        llm_audit_report = None
+        if guard_source == "audit":
+            audit_report_root = guard_audit_root or report_root
+            audit_report_path = audit_report_root / spec.name / "guard_generation.json"
+            if not audit_report_path.exists():
+                raise SystemExit(f"Guard audit report missing for {spec.name}: {audit_report_path}")
+            loaded = json.loads(audit_report_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, list):
+                raise SystemExit(f"Guard audit report is not a list: {audit_report_path}")
+            llm_audit_report = loaded
+        guard_report = generate_contract_guards(
+            fsm,
+            raw_screens,
+            prior,
+            guard_source=guard_source,  # type: ignore[arg-type]
+            llm=llm if guard_source in ("llm", "hybrid") else None,
+            guard_prompt=guard_prompt,
+            guard_use_images=guard_use_images,
+            llm_audit_dir=(
+                app_report_dir / "llm_guard_attempts" if guard_source in ("llm", "hybrid") else None
+            ),
+            llm_audit_report=llm_audit_report,
+        )
+        write_guard_generation_report(guard_report, app_report_dir / "guard_generation.json")
 
     output_path = (
         app_report_dir / "fsm.json"

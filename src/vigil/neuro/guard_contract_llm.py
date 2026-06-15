@@ -13,7 +13,7 @@ Design constraints (CLAUDE.md → "DSL Guard Generation Direction"; plan):
   JSON. Compilation/admission to executable DSL is a later deterministic step.
 - The LLM may not create/modify FSM states, actions, transitions, replay confidence, or
   runtime verdicts. Target-state evidence is the read scope for postcondition ``Psi``
-  and effect-only evidence for precondition ``Gamma``.
+  and background evidence for precondition ``Gamma``.
 - ``$bind.*`` is metadata only: it appears in ``contract.binding_requirements`` /
   ``precondition.binding_requirements``, never as a predicate /
   :class:`~vigil.models.guard.ValueRef`. A predicate's ``expected.kind`` may only be
@@ -148,6 +148,10 @@ def _sibling_lines(siblings: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _invariant_lines(invariants: list[str]) -> list[str]:
+    return [f"- {expr}" for expr in invariants if str(expr).strip()]
+
+
 def _fenced(label: str, value: str) -> str:
     if not value.strip():
         return f"{label}:\n(none)"
@@ -163,7 +167,7 @@ def _screen_section(title: str, screen: ScreenEvidence, *, source_readable: bool
         "This is P/source: the ONLY UI state that precondition Gamma may read."
         if source_readable
         else (
-            "This is Q/target: postcondition Psi read scope and EFFECT-ONLY evidence "
+            "This is Q/target: postcondition Psi read scope and background evidence "
             "for precondition Gamma. Do NOT reference target-only elements in "
             "precondition predicates."
         )
@@ -210,7 +214,7 @@ def guard_image_paths(evidence: GuardEvidence) -> tuple[list[Path], list[str]]:
         (
             "TARGET",
             evidence.target_screen,
-            "TARGET screenshot: post-state Q. Use for Psi; effect-only for Gamma.",
+            "TARGET screenshot: post-state Q. Use for Psi; background evidence for Gamma.",
         ),
     ):
         path = _existing_image_path(screen.screenshot_path)
@@ -229,6 +233,7 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
     """Build the Hoare-style user prompt for one transition's pre/post contract."""
     reg_lines = _registry_lines(evidence.source_registry)
     sib_lines = _sibling_lines(evidence.sibling_actions)
+    invariant_lines = _invariant_lines(evidence.target_invariants)
     hints = evidence.static_prior_hints
 
     sections: list[str] = []
@@ -240,7 +245,10 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
         "Psi(source, known_action, target, frozen $intent.*) }.\n"
         "The top-level `contract` field must be an exact compatibility alias of "
         "`precondition` for the current parser.\n"
-        "$bind.* needs are metadata in binding_requirements, not executable Gamma/Psi predicates."
+        "$bind.* needs are metadata in binding_requirements, not executable Gamma/Psi predicates.\n"
+        "Generation order: first use the target invariants I(Q) as reusable background, "
+        "then generate edge-local postcondition Psi from P/a/Q, and only then generate "
+        "source-side precondition Gamma needed to make that edge meaningful."
     )
 
     sections.append(
@@ -279,10 +287,19 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
 
     sections.append(
         _screen_section(
-            "Post-state Evidence: Q / target (Psi read scope; effect-only for Gamma)",
+            "Post-state Evidence: Q / target (Psi read scope; background for Gamma)",
             evidence.target_screen,
             source_readable=False,
         )
+    )
+
+    sections.append(
+        "[Target-state invariants I(Q)]\n"
+        "Purpose: reusable target-state facts already admitted before this transition "
+        "contract pass. Use them as background context for Psi, but do not remove "
+        "edge-local arrival/effect facts from Psi just because I(Q) also contains "
+        "related target facts.\n"
+        + ("\n".join(invariant_lines) if invariant_lines else "- (none admitted)")
     )
 
     sections.append(
@@ -314,7 +331,10 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
         "- `contract` must be an exact alias of `precondition`; current admission consumes "
         "that precondition path.\n"
         "- Predicates compile to conjunctions over: read, value, action, contains, count, "
-        "in_state, time_in.\n"
+        "in_state, time_in, appeared, disappeared, value_changed.\n"
+        "- Generation order is I(Q) first, Psi second, Gamma last. Runtime checks Gamma "
+        "before the action and Psi/I after the action; generation follows information "
+        "dependencies instead.\n"
         "- Precondition predicates may reference only source widget aliases, proposed action "
         "properties, literal values, and declared frozen $intent.* slots.\n"
         "- Postcondition predicates may reference only target/effect facts, literal values, "

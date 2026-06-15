@@ -305,7 +305,7 @@ _VALID_ITEM_CONTRACT = json.dumps(
             "effect_requirements": [
                 {
                     "name": "thread_visible",
-                    "effect_kind": "appears",
+                    "effect_kind": "appeared",
                     "description": "Thread screen should be visible.",
                     "element": f"{PKG}:id/message_input",
                     "evidence": "target state is s2",
@@ -368,14 +368,14 @@ def test_hybrid_accepts_complete_llm_contract():
     assert report[0]["postcondition_incomplete"] is False
     assert report[0]["postcondition_dsl"] == (
         f"contains({PKG}:id/message_input, $intent.contact_name) && "
-        f"appears({PKG}:id/message_input)"
+        f"appeared({PKG}:id/message_input)"
     )
     assert report[0]["postcondition_status"] == "admitted"
     assert report[0]["postcondition_unsupported_effects"] == []
     assert fsm.transitions[0].guard == "action(target_text) == $intent.contact_name"
     assert fsm.transitions[0].postcondition == (
         f"contains({PKG}:id/message_input, $intent.contact_name) && "
-        f"appears({PKG}:id/message_input)"
+        f"appeared({PKG}:id/message_input)"
     )
     assert fsm.transitions[0].postcondition_admission_status is GuardAdmissionStatus.ADMITTED
     assert fsm.transitions[0].postcondition_contract is not None
@@ -397,6 +397,52 @@ def test_hybrid_keeps_arrival_only_postcondition_on_transition():
     assert report[0]["postcondition_reason"] == "admitted: 1 executable postcondition predicate(s)"
     assert fsm.transitions[0].postcondition == "in_state(s2)"
     assert fsm.transitions[0].postcondition_admission_status is GuardAdmissionStatus.ADMITTED
+
+
+def test_hybrid_rejects_postcondition_slot_missing_from_precondition():
+    missing_slot = json.dumps(
+        {
+            "contract": {
+                "kind": "navigation",
+                "required": False,
+                "risk_level": "low",
+                "predicates": [
+                    {
+                        "predicate_type": "action",
+                        "property": "target_text",
+                        "operator": "==",
+                        "expected": {"kind": "literal", "value": "Alice"},
+                    }
+                ],
+            },
+            "postcondition": {
+                "kind": "content_effect",
+                "required": True,
+                "risk_level": "low",
+                "required_slots": [{"name": "contact_name", "slot_type": "string"}],
+                "predicates": [
+                    {
+                        "predicate_type": "contains",
+                        "element": f"{PKG}:id/message_input",
+                        "expected": {"kind": "intent", "slot": "contact_name"},
+                    }
+                ],
+                "intent_effect_required": True,
+                "intent_effect_incomplete": False,
+            },
+        }
+    )
+    fsm, raw_screens = _build_fsm()
+    report = generate_contract_guards(
+        fsm,
+        raw_screens,
+        guard_source="hybrid",
+        llm=_FakeLlm(missing_slot),
+    )
+
+    assert report[0]["postcondition_status"] == "rejected"
+    assert "not declared by precondition" in report[0]["postcondition_reason"]
+    assert fsm.transitions[0].postcondition is None
 
 
 def test_hybrid_falls_back_to_deterministic_on_invalid_llm():

@@ -10,10 +10,11 @@
 //   contains(element, value)           - element contains value (list or text)
 //   count(element) op value            - child count of element
 //   action(property) op value          - proposed action property check
-//   appears(element)                   - post-action: element absent before, present after
-//   disappears(element)                - post-action: element present before, absent after
-//   changes_value(element[, property[, before, after]])
-//                                      - post-action: readable value/property changes
+//   appeared(element)                  - post-action: element absent before, present after
+//   disappeared(element)               - post-action: element present before, absent after
+//   value_changed(element)             - post-action: readable value changes
+//   value_changed(element, before, after)
+//                                      - post-action: readable value changes from before to after
 
 start: guard
 
@@ -24,8 +25,8 @@ guard: predicate
      | "(" guard ")"
 
 predicate: read_pred | time_pred | state_pred | value_pred
-         | contains_pred | count_pred | action_pred | appears_pred
-         | disappears_pred | changes_value_pred
+         | contains_pred | count_pred | action_pred | appeared_pred
+         | disappeared_pred | value_changed_pred
 
 read_pred: "read(" ELEMENT "," PROPERTY ")" OP VALUE
 time_pred: "time_in(" TIME "," TIME ")"
@@ -34,11 +35,10 @@ value_pred: "value(" ELEMENT ")" OP VALUE
 contains_pred: "contains(" ELEMENT "," VALUE ")"
 count_pred: "count(" ELEMENT ")" OP VALUE
 action_pred: "action(" PROPERTY ")" OP VALUE
-appears_pred: "appears(" ELEMENT ")"
-disappears_pred: "disappears(" ELEMENT ")"
-changes_value_pred: "changes_value(" ELEMENT ")"
-                  | "changes_value(" ELEMENT "," PROPERTY ")"
-                  | "changes_value(" ELEMENT "," PROPERTY "," VALUE "," VALUE ")"
+appeared_pred: "appeared(" ELEMENT ")"
+disappeared_pred: "disappeared(" ELEMENT ")"
+value_changed_pred: "value_changed(" ELEMENT ")"
+                  | "value_changed(" ELEMENT "," VALUE "," VALUE ")"
 
 OP: "==" | "!=" | ">" | "<" | ">=" | "<="
 

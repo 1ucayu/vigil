@@ -123,9 +123,9 @@ _STRUCTURAL_TOKENS = frozenset(
         "contains(",
         "count(",
         "action(",
-        "appears(",
-        "disappears(",
-        "changes_value(",
+        "appeared(",
+        "disappeared(",
+        "value_changed(",
         ",",
         ")",
         "(",
@@ -320,10 +320,10 @@ class _GuardEvaluator(Transformer):
         actual = self._action.get(prop_name)
         return self._compare(actual, op_str, expected)
 
-    def appears_pred(self, args: list[Any]) -> Any:
+    def appeared_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
         if not named:
-            return _Unknown("malformed appears predicate")
+            return _Unknown("malformed appeared predicate")
         contexts = self._post_contexts()
         if _is_unknown(contexts):
             return contexts
@@ -331,10 +331,10 @@ class _GuardEvaluator(Transformer):
         element_name = str(named[0])
         return element_name not in source.elements and element_name in target.elements
 
-    def disappears_pred(self, args: list[Any]) -> Any:
+    def disappeared_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
         if not named:
-            return _Unknown("malformed disappears predicate")
+            return _Unknown("malformed disappeared predicate")
         contexts = self._post_contexts()
         if _is_unknown(contexts):
             return contexts
@@ -342,26 +342,25 @@ class _GuardEvaluator(Transformer):
         element_name = str(named[0])
         return element_name in source.elements and element_name not in target.elements
 
-    def changes_value_pred(self, args: list[Any]) -> Any:
+    def value_changed_pred(self, args: list[Any]) -> Any:
         named = _filter_named(args)
         if not named:
-            return _Unknown("malformed changes_value predicate")
+            return _Unknown("malformed value_changed predicate")
         contexts = self._post_contexts()
         if _is_unknown(contexts):
             return contexts
         source, target = contexts
         element_name = str(named[0])
-        prop_name = str(named[1]) if len(named) >= 2 else ""
-        source_value = self._read_post_value(source, element_name, prop_name)
+        source_value = self._read_post_value(source, element_name)
         if _is_unknown(source_value):
             return source_value
-        target_value = self._read_post_value(target, element_name, prop_name)
+        target_value = self._read_post_value(target, element_name)
         if _is_unknown(target_value):
             return target_value
 
-        if len(named) >= 4:
-            expected_before = self._parse_value(named[2])
-            expected_after = self._parse_value(named[3])
+        if len(named) >= 3:
+            expected_before = self._parse_value(named[1])
+            expected_after = self._parse_value(named[2])
             if _is_unknown(expected_before):
                 return expected_before
             if _is_unknown(expected_after):
@@ -375,14 +374,10 @@ class _GuardEvaluator(Transformer):
         return self._source_ctx, self._target_ctx
 
     @staticmethod
-    def _read_post_value(ctx: ScreenContext, element_name: str, prop_name: str) -> Any:
+    def _read_post_value(ctx: ScreenContext, element_name: str) -> Any:
         el = ctx.elements.get(element_name)
         if el is None:
             return _Unknown(f"element '{element_name}' not present in postcondition context")
-        if prop_name:
-            if prop_name not in el:
-                return _Unknown(f"property '{prop_name}' not readable on '{element_name}'")
-            return el.get(prop_name)
         for fallback_prop in ("value", "text", "content_description"):
             if fallback_prop in el:
                 return el.get(fallback_prop)
@@ -598,38 +593,36 @@ class _LogicClauseTransformer(Transformer):
             value=value,
         )
 
-    def appears_pred(self, args: list[Any]) -> dict[str, Any]:
+    def appeared_pred(self, args: list[Any]) -> dict[str, Any]:
         named = _filter_named(args)
         element = str(named[0])
         return _predicate_clause(
-            "appears",
-            f"appears({element})",
+            "appeared",
+            f"appeared({element})",
             element=element,
         )
 
-    def disappears_pred(self, args: list[Any]) -> dict[str, Any]:
+    def disappeared_pred(self, args: list[Any]) -> dict[str, Any]:
         named = _filter_named(args)
         element = str(named[0])
         return _predicate_clause(
-            "disappears",
-            f"disappears({element})",
+            "disappeared",
+            f"disappeared({element})",
             element=element,
         )
 
-    def changes_value_pred(self, args: list[Any]) -> dict[str, Any]:
+    def value_changed_pred(self, args: list[Any]) -> dict[str, Any]:
         named = _filter_named(args)
         element = str(named[0])
-        prop = str(named[1]) if len(named) >= 2 else ""
-        before = str(named[2]) if len(named) >= 4 else ""
-        after = str(named[3]) if len(named) >= 4 else ""
-        suffix = f", {prop}" if prop else ""
+        before = str(named[1]) if len(named) >= 3 else ""
+        after = str(named[2]) if len(named) >= 3 else ""
+        suffix = ""
         if before or after:
-            suffix = f", {prop}, {before}, {after}"
+            suffix = f", {before}, {after}"
         return _predicate_clause(
-            "changes_value",
-            f"changes_value({element}{suffix})",
+            "value_changed",
+            f"value_changed({element}{suffix})",
             element=element,
-            property=prop,
             before=before,
             after=after,
         )

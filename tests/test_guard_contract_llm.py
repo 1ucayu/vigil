@@ -86,6 +86,7 @@ def _evidence() -> GuardEvidence:
             page_function="messaging/sent",
         ),
         source_registry=reg,
+        target_invariants=['read(com.test:id/banner, text) == "Sent"'],
         action_target_alias="send",
         sibling_actions=[{"type": "click", "target_text": "Attach"}],
         static_prior_hints=["perm:SEND_SMS"],
@@ -125,7 +126,7 @@ def _contract_json(**overrides: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_user_prompt_includes_evidence_and_marks_target_effect_only():
+def test_user_prompt_includes_evidence_and_generation_order():
     prompt = build_guard_user_prompt(_evidence())
     assert "s1" in prompt and "s2" in prompt
     assert "Send" in prompt
@@ -133,7 +134,11 @@ def test_user_prompt_includes_evidence_and_marks_target_effect_only():
     assert "precondition" in prompt
     assert "postcondition" in prompt
     assert "compatibility contract" in prompt
-    assert "EFFECT-ONLY" in prompt
+    assert "background evidence" in prompt
+    assert "Generation order" in prompt
+    assert "I(Q) first, Psi second, Gamma last" in prompt
+    assert "[Target-state invariants I(Q)]" in prompt
+    assert 'read(com.test:id/banner, text) == "Sent"' in prompt
     assert "messaging/thread" in prompt
     assert "[Transition]" in prompt
     assert "[Known action]" in prompt

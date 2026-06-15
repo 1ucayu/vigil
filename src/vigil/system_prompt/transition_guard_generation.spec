@@ -104,7 +104,7 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
 
   [Post-state Evidence: Q / target]:
     role: executable postcondition read scope for transition-effect Psi;
-          effect-only evidence for Gamma
+          background evidence for Gamma
     state_id: string
     screen_id: string
     xml_excerpt: string       // full XML text when available; field name is legacy
@@ -130,7 +130,7 @@ HOARE_TRANSITION_EVIDENCE_PACKET:
     resource_strings?: map<string, string>
     string_arrays?: map<string, list<string>>
     layout_widget_declarations?: list<string>
-    role: role/domain/side-effect hints only; not runtime proof
+    role: role/domain/postcondition hints only; not runtime proof
 
   [Verifier Basis]:
     predicate_vocabulary: PredicateBasis
@@ -189,7 +189,6 @@ WidgetRegistryEntry:
          list_item | title | menu_item | toolbar_action | dialog_action |
          image_button | unknown
   readable_props: set<Property>
-  risk_hints: set<string>
 ```
 
 ```text
@@ -201,11 +200,10 @@ PredicateBasis:
   count(element) <op> value
   in_state(state_name)        // args.state in GuardContract JSON
   time_in(start, end)         // args.start and args.end in GuardContract JSON
-  appears(element)            // Psi only: absent in P and present in Q
-  disappears(element)         // Psi only: present in P and absent in Q
-  changes_value(element)      // Psi only: readable value/text changes from P to Q
-  changes_value(element, property)
-  changes_value(element, property, before, after)
+  appeared(element)           // Psi only: absent in P and present in Q
+  disappeared(element)        // Psi only: present in P and absent in Q
+  value_changed(element)      // Psi only: readable value/text changes from P to Q
+  value_changed(element, before, after)
 
 AllowedOperator:
   == | != | > | < | >= | <=
@@ -226,7 +224,6 @@ ReadableActionProperty:
   "precondition": {
     "kind": "none|navigation|item_binding|input_binding|toggle_binding|form_check|confirm_commit|safety_check|unknown",
     "required": true,
-    "risk_level": "low|medium|high|unknown",
     "required_slots": [
       {
         "name": "amount",
@@ -267,7 +264,6 @@ ReadableActionProperty:
   "postcondition": {
     "kind": "none|arrival_state|content_effect|item_added|item_removed|message_sent|payment_or_transfer|toggle_effect|form_effect|unknown",
     "required": true,
-    "risk_level": "low|medium|high|unknown",
     "required_slots": [
       {
         "name": "amount",
@@ -294,10 +290,9 @@ ReadableActionProperty:
     "effect_requirements": [
       {
         "name": "message_visible_after_send",
-        "effect_kind": "appears|disappears|changes_value|count_changes|state_reached|unknown",
+        "effect_kind": "appeared|disappeared|value_changed|unknown",
         "description": "",
         "element": "<source or target registry alias/resource id, when applicable>",
-        "property": "<readable property for changes_value, or null>",
         "before": {
           "kind": "literal|intent",
           "value": "<literal before value or null>",
@@ -321,7 +316,6 @@ ReadableActionProperty:
   "contract": {
     "kind": "none|navigation|item_binding|input_binding|toggle_binding|form_check|confirm_commit|safety_check|unknown",
     "required": true,
-    "risk_level": "low|medium|high|unknown",
     "required_slots": [
       {
         "name": "amount",
@@ -371,7 +365,7 @@ ReadableActionProperty:
   * `[Pre-state Evidence: P / source]` is the only executable UI read scope for
     `precondition` / `Gamma`.
   * `[Post-state Evidence: Q / target]` is the executable UI read scope for
-    `postcondition` / `Psi`, and is effect-only evidence for `Gamma`.
+    `postcondition` / `Psi`, and is background evidence for `Gamma`.
   * `[Global Information / Static APK Priors]` is prior knowledge only.
   * Local paths are provenance only; use full `xml_excerpt`, `compact_tree_text`,
     `alt_text`, source widget registry facts, and attached images as evidence.
@@ -431,11 +425,10 @@ ReadableActionProperty:
     * Use `effect_requirements` for source-to-target effect predicates. For
       supported effects, provide `effect_kind` plus the grounding fields needed
       for admission:
-        - `appears`: target element alias/resource id in `element`
-        - `disappears`: source element alias/resource id in `element`
-        - `changes_value`: stable source/target element alias/resource id in
-          `element`, optional readable `property`, and optional `before`/`after`
-          value refs
+        - `appeared`: target element alias/resource id in `element`
+        - `disappeared`: source element alias/resource id in `element`
+        - `value_changed`: stable source/target element alias/resource id in
+          `element`, with optional `before`/`after` value refs
     * Set `intent_effect_required` according to the transition's effect obligation.
     * Set `intent_effect_incomplete = false`.
 
@@ -462,7 +455,7 @@ ReadableActionProperty:
     the fixed transition.
   * Target-state consistency facts from `I` may be used as reusable evidence and
     context when deriving edge-local `Psi`.
-  * Supported postcondition side-effect observations are emitted as grounded
+  * Supported postcondition observations are emitted as grounded
     `effect_requirements`; unsupported effect observations remain as audit-only
     metadata in `effect_requirements` with an evidence-based reason.
   * The top-level `contract` is an exact compatibility alias of `precondition`.
@@ -470,12 +463,12 @@ ReadableActionProperty:
     literals supported by source/action evidence, and declared `$intent.*` slots.
   * Precondition predicates may not reference target-only UI.
   * Postcondition predicates may reference target UI observed in Q. Supported effect
-    requirements may reference source UI for `disappears` and stable source/target UI
-    for `changes_value`.
+    requirements may reference source UI for `disappeared` and stable source/target UI
+    for `value_changed`.
   * No executable predicate references an alias absent from `[Source widget registry]`.
   * For postcondition predicates, use target aliases/resource ids observed in Q or
     effect facts explicitly supported by the source-to-target diff.
-  * Encode `appears`, `disappears`, and `changes_value` as typed
+  * Encode `appeared`, `disappeared`, and `value_changed` as typed
     `effect_requirements` with grounding fields. Use audit metadata for effect kinds
     outside the supported set.
   * Element predicates are executable only when the referenced registry entry exposes
@@ -487,7 +480,7 @@ ReadableActionProperty:
   * No executable predicate uses a predicate outside `PredicateBasis`.
   * For `postcondition.predicates`, prefer only `in_state`, `read`, `contains`,
     `count`, and `value`. Use `postcondition.effect_requirements` for
-    `appears`, `disappears`, and `changes_value`.
+    `appeared`, `disappeared`, and `value_changed`.
   * Do not assert literal equality against a source-known string property unless it
     matches the registry value.
   * Static APK priors never prove runtime presence, transition existence, or safety,
@@ -524,7 +517,7 @@ ReadableActionProperty:
     the fixed edge.
   * The generated postcondition is interpreted together with target-state
     invariants `I(Q)` during the post-action verifier phase.
-  * Target evidence may affect Gamma only through classification, side-effect
+  * Target evidence may affect Gamma only through classification, postcondition
     metadata, notes, binding requirements, or rejection reasons.
   * Target evidence is the executable read scope for effect predicates in Psi.
 
@@ -545,7 +538,7 @@ ReadableActionProperty:
   * Do not emit natural-language pseudo-predicates such as `visible(...)`,
     `textexists(...)`, `selected(...)`, `matches(...)`, or `is_recipient(...)`.
   * Emit source-to-target effect facts as typed `postcondition.effect_requirements`.
-    `appears`, `disappears`, and `changes_value` are supported effect kinds when
+    `appeared`, `disappeared`, and `value_changed` are supported effect kinds when
     grounded by the required fields.
 
 [SPECIFICATION of Executability Admission]
@@ -561,8 +554,8 @@ ReadableActionProperty:
     `target_resource_id`, `target_content_desc`, or `input_text`.
   * Precondition predicates may not read target-only UI.
   * Postcondition element predicates must use a target alias/resource id observed in Q.
-  * `appears` uses an element observed in Q. `disappears` uses an element observed in
-    P. `changes_value` uses a stable element observed across P and Q.
+  * `appeared` uses an element observed in Q. `disappeared` uses an element observed in
+    P. `value_changed` uses a stable element observed across P and Q.
   * `in_state` requires `args.state`; `time_in` requires `args.start` and `args.end`.
   * If any predicate violates these rules, omit it from the relevant side. If no
     sound precondition predicate remains, return Case 3 for Gamma; if no sound
@@ -603,18 +596,16 @@ ReadableActionProperty:
     `postcondition.effect_requirements` and set `postcondition.intent_effect_incomplete`
     plus top-level `postcondition_incomplete`.
 
-[SPECIFICATION of Taxonomy-Driven Guard Obligation Policy]
+[SPECIFICATION of Pre/Postcondition Obligation Policy]
 **Pre-Condition**:
-  * A transition must be assigned precondition `kind`, `risk_level`, `required`,
-    and `semantic_binding_required`.
-  * A transition must be assigned postcondition `kind`, `risk_level`, `required`,
-    and `intent_effect_required`.
+  * A transition must be assigned precondition `kind`, `required`, and
+    `semantic_binding_required`.
+  * A transition must be assigned postcondition `kind`, `required`, and
+    `intent_effect_required`.
 
 **Post-Condition**:
-  * Use the Action Impact Taxonomy, not a closed keyword list, to classify the
-    transition. Text labels and resource ids are evidence hints, not the policy.
-    `risk_level` is descriptive metadata; it must not be the source of a guard or
-    postcondition obligation.
+  * Use the evidence packet, not a closed keyword list, to classify the transition.
+    Text labels and resource ids are evidence hints, not the policy.
   * Set precondition `required = false` and `semantic_binding_required = false` when the
     transition is only state_topology/navigation and no user-specific semantic
     binding is needed.
@@ -622,9 +613,8 @@ ReadableActionProperty:
     the transition selects or edits a user-intended item/value/content but the effect
     is local or reversible before the final commit.
   * Set precondition `required = true` and `semantic_binding_required = true` when
-    Q/siblings show that the action commits previously chosen values to a side-effectful,
-    externally visible, destructive, financial, privacy-sensitive, or
-    authority-granting effect.
+    Q/siblings show that the action commits previously chosen values to an externally
+    visible, destructive, financial, privacy-sensitive, or authority-granting effect.
   * For semantic-required actions, generate predicates that bind the
     relevant user intent dimension whenever source/action evidence supports it:
     item identity, recipient/account/address identity, amount/value, content, target
@@ -643,10 +633,8 @@ ReadableActionProperty:
     metadata. Give `postcondition.kind` one of `content_effect`, `item_added`,
     `item_removed`, `message_sent`, `payment_or_transfer`, `toggle_effect`, or
     `form_effect` when executable predicates check a transition-specific effect.
-  * Set precondition and postcondition `risk_level` consistently with the taxonomy
-    for report/audit analysis.
   * Record the taxonomy basis in precondition/postcondition `provenance` or `notes`, for example
-    `impact:semantic_binding`, `impact:external_side_effect`,
+    `impact:semantic_binding`, `impact:external_effect`,
     `reversibility:irreversible`, `binding:item_identity`, or
     `effect:intent_content_visible`.
 
@@ -655,7 +643,7 @@ ReadableActionProperty:
   * Static APK prior fields are provided.
 
 **Post-Condition**:
-  * Use them only for role/domain/side-effect hints.
+  * Use them only for role/domain/postcondition hints.
   * Do not admit precondition or postcondition predicates based solely on static prior.
   * Do not create transitions, prove postconditions, or produce runtime verdicts from
     static prior.

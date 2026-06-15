@@ -308,7 +308,7 @@ def test_render_fsm_compare_html_includes_gold_explored_details_and_screenshots(
         effect_requirements=[
             EffectRequirement(
                 name="detail_visible",
-                effect_kind="appears",
+                effect_kind="appeared",
                 description="Detail screen should be visible after opening the item.",
                 evidence="target state is s2",
                 unsupported_reason="audit-only effect requirement",

@@ -78,7 +78,7 @@ def _sample_postcondition() -> TransitionPostcondition:
         effect_requirements=[
             EffectRequirement(
                 name="message_visible_after_send",
-                effect_kind="appears",
+                effect_kind="appeared",
                 description="Sent message should appear in the thread.",
             )
         ],
@@ -246,7 +246,7 @@ def test_appfsm_roundtrip_preserves_guard_metadata(tmp_path):
     assert rt.postcondition_admission_reason == "postcondition admitted"
     assert rt.postcondition_contract is not None
     assert rt.postcondition_contract.kind == "message_sent"
-    assert rt.postcondition_contract.effect_requirements[0].effect_kind == "appears"
+    assert rt.postcondition_contract.effect_requirements[0].effect_kind == "appeared"
 
 
 def test_guard_remains_independent_executable_string():

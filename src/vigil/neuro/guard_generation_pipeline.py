@@ -28,7 +28,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from vigil.models.guard import GuardContract, LlmGuardContractCandidate, TransitionPostcondition
+from vigil.models.guard import (
+    GuardAdmissionStatus,
+    GuardContract,
+    IntentSlot,
+    LlmGuardContractCandidate,
+    TransitionPostcondition,
+)
 from vigil.neuro.guard_admission import (
     GuardAdmissionResult,
     PostconditionAdmissionResult,
@@ -143,6 +149,37 @@ def guard_action_schema_key(action: dict[str, Any]) -> tuple[tuple[str, str], ..
 def _semantic_binding_required(contract: GuardContract) -> bool:
     """Whether this contract explicitly requires a semantic ``$intent.*`` binding."""
     return contract.semantic_binding_required or contract.semantic_binding_incomplete
+
+
+def _slot_map(slots: list[IntentSlot]) -> dict[str, IntentSlot]:
+    return {slot.name: slot for slot in slots if slot.name}
+
+
+def _postcondition_slot_consistency_errors(
+    contract: GuardContract,
+    postcondition: TransitionPostcondition | None,
+) -> list[str]:
+    """Check that Psi intent slots are declared consistently by Gamma."""
+    if postcondition is None:
+        return []
+    gamma_slots = _slot_map(contract.required_slots)
+    errors: list[str] = []
+    for name, psi_slot in _slot_map(postcondition.required_slots).items():
+        gamma_slot = gamma_slots.get(name)
+        if gamma_slot is None:
+            errors.append(f"postcondition slot '$intent.{name}' not declared by precondition")
+            continue
+        if (
+            psi_slot.slot_type != gamma_slot.slot_type
+            and psi_slot.slot_type.value != "unknown"
+            and gamma_slot.slot_type.value != "unknown"
+        ):
+            errors.append(
+                f"slot '$intent.{name}' type mismatch: "
+                f"precondition={gamma_slot.slot_type.value}, "
+                f"postcondition={psi_slot.slot_type.value}"
+            )
+    return errors
 
 
 def _candidate_from_audit(path: Path) -> LlmGuardContractCandidate:
@@ -528,6 +565,18 @@ def generate_contract_guards(
         postcondition_result: PostconditionAdmissionResult | None = None
         if postcondition is not None:
             postcondition_result = admit_postcondition_contract(postcondition, evidence)
+            slot_errors = _postcondition_slot_consistency_errors(contract, postcondition)
+            if slot_errors:
+                postcondition_result = PostconditionAdmissionResult(
+                    admitted=False,
+                    status=GuardAdmissionStatus.REJECTED,
+                    postcondition=None,
+                    reason="postcondition/precondition intent slot mismatch: "
+                    + "; ".join(slot_errors),
+                    rejected_predicates=list(postcondition_result.rejected_predicates),
+                    unsupported_effects=list(postcondition_result.unsupported_effects),
+                    intent_effect_incomplete=True,
+                )
         postcondition_incomplete = bool(
             resolved.postcondition_incomplete
             or (postcondition.intent_effect_incomplete if postcondition is not None else False)

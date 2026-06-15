@@ -28,11 +28,11 @@ from pydantic import BaseModel, Field
 
 
 class RiskLevel(StrEnum):
-    """Coarse audit/report metadata for an action / guard.
+    """Legacy report metadata kept for serialized FSM compatibility.
 
     Runtime guard obligations are represented by ``required`` and
     ``semantic_binding_required``; admission must not infer obligations from this
-    metadata alone.
+    metadata.
     """
 
     LOW = "low"
@@ -125,9 +125,9 @@ class PredicateSpec(BaseModel):
         "count",
         "in_state",
         "time_in",
-        "appears",
-        "disappears",
-        "changes_value",
+        "appeared",
+        "disappeared",
+        "value_changed",
     ]
     element: str | None = None
     property: str | None = None
@@ -181,7 +181,7 @@ class GuardContract(BaseModel):
     """Typed, pre-compilation description of a transition's intended guard.
 
     A ``GuardContract`` is synthesis IR / metadata attached to a ``Transition``. It
-    captures the guard's kind, optional risk/report metadata, required intent slots,
+    captures the guard's kind, legacy report metadata, required intent slots,
     and typed predicates, plus admission bookkeeping. It does not by itself determine
     a runtime verdict — the executable guard remains the compiled ``Transition.guard``
     DSL string.

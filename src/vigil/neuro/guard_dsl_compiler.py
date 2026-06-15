@@ -47,6 +47,20 @@ def _render_value(ref: ValueRef | None) -> str | None:
     return None
 
 
+def _coerce_value_ref(value: object) -> ValueRef | None:
+    """Coerce typed JSON fragments or raw literals to a renderable ``ValueRef``."""
+    if isinstance(value, ValueRef):
+        return value
+    if isinstance(value, dict):
+        try:
+            return ValueRef.model_validate(value)
+        except Exception:  # noqa: BLE001 - compiler drops malformed fragments
+            return None
+    if value is None:
+        return None
+    return ValueRef(kind="literal", value=value)
+
+
 def _op(predicate: PredicateSpec) -> str | None:
     op = predicate.operator or _DEFAULT_OP
     return op if op in _VALID_OPS else None
@@ -117,35 +131,27 @@ def compile_predicate_spec(predicate: PredicateSpec) -> str | None:
             return None
         return f"time_in({start}, {end})"
 
-    if ptype == "appears":
+    if ptype == "appeared":
         if not predicate.element:
             return None
-        return f"appears({predicate.element})"
+        return f"appeared({predicate.element})"
 
-    if ptype == "disappears":
+    if ptype == "disappeared":
         if not predicate.element:
             return None
-        return f"disappears({predicate.element})"
+        return f"disappeared({predicate.element})"
 
-    if ptype == "changes_value":
+    if ptype == "value_changed":
         if not predicate.element:
             return None
-        prop = predicate.property or predicate.args.get("property")
-        before = predicate.args.get("before")
-        after = predicate.args.get("after")
-        if isinstance(before, dict):
-            before = ValueRef.model_validate(before)
-        if isinstance(after, dict):
-            after = ValueRef.model_validate(after)
-        if prop and isinstance(before, ValueRef) and isinstance(after, ValueRef):
+        before = _coerce_value_ref(predicate.args.get("before"))
+        after = _coerce_value_ref(predicate.args.get("after"))
+        if before is not None and after is not None:
             before_value = _render_value(before)
             after_value = _render_value(after)
-            if before_value is None or after_value is None:
-                return None
-            return f"changes_value({predicate.element}, {prop}, {before_value}, {after_value})"
-        if prop:
-            return f"changes_value({predicate.element}, {prop})"
-        return f"changes_value({predicate.element})"
+            if before_value is not None and after_value is not None:
+                return f"value_changed({predicate.element}, {before_value}, {after_value})"
+        return f"value_changed({predicate.element})"
 
     return None
 
@@ -169,20 +175,17 @@ def compile_guard_contract(contract: GuardContract) -> str | None:
 def compile_effect_requirement(effect: EffectRequirement) -> str | None:
     """Compile a supported post-action effect requirement into Psi DSL."""
     kind = (effect.effect_kind or "").strip().lower()
-    if kind not in {"appears", "disappears", "changes_value"}:
+    if kind not in {"appeared", "disappeared", "value_changed"}:
         return None
     if not effect.element:
         return None
-    if kind == "appears":
-        return f"appears({effect.element})"
-    if kind == "disappears":
-        return f"disappears({effect.element})"
+    if kind == "appeared":
+        return f"appeared({effect.element})"
+    if kind == "disappeared":
+        return f"disappeared({effect.element})"
 
-    prop = effect.property
     before = _render_value(effect.before)
     after = _render_value(effect.after)
-    if prop and before is not None and after is not None:
-        return f"changes_value({effect.element}, {prop}, {before}, {after})"
-    if prop:
-        return f"changes_value({effect.element}, {prop})"
-    return f"changes_value({effect.element})"
+    if before is not None and after is not None:
+        return f"value_changed({effect.element}, {before}, {after})"
+    return f"value_changed({effect.element})"

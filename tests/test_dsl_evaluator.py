@@ -226,7 +226,7 @@ class TestPostconditionEffectPredicates:
     def setup_method(self) -> None:
         self.ev = DSLEvaluator()
 
-    def test_appears_disappears_and_changes_value(self) -> None:
+    def test_appeared_disappeared_and_value_changed(self) -> None:
         ctx = PostconditionContext(
             source_screen=ScreenContext(
                 elements={
@@ -244,26 +244,26 @@ class TestPostconditionEffectPredicates:
         )
 
         result = self.ev.evaluate_postcondition(
-            "appears(new_panel) && disappears(old_panel) "
-            '&& changes_value(counter, text, "0", "1") && in_state(s2)',
+            "appeared(new_panel) && disappeared(old_panel) "
+            '&& value_changed(counter, "0", "1") && in_state(s2)',
             postcondition_ctx=ctx,
         )
 
         assert result.passed is True
 
     def test_effect_predicate_without_pair_context_is_unknown(self) -> None:
-        result = self.ev.evaluate("appears(new_panel)")
+        result = self.ev.evaluate("appeared(new_panel)")
 
         assert result.passed is False
         assert result.status == "unknown"
 
     def test_parse_logic_clauses_for_effect_predicates(self) -> None:
-        parsed = self.ev.parse_logic_clauses("appears(new_panel) && changes_value(counter, text)")
+        parsed = self.ev.parse_logic_clauses("appeared(new_panel) && value_changed(counter)")
 
         assert parsed["status"] == "parsed"
         assert [c["predicate_type"] for c in parsed["clauses"]] == [
-            "appears",
-            "changes_value",
+            "appeared",
+            "value_changed",
         ]
 
 

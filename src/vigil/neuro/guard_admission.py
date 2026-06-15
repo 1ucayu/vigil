@@ -33,13 +33,14 @@ from pydantic import BaseModel, Field
 
 from vigil.core.paths import resolve_dsl_grammar_path
 from vigil.models.guard import (
+    EffectRequirement,
     GuardAdmissionStatus,
     GuardContract,
     PredicateSpec,
     TransitionPostcondition,
     ValueRef,
 )
-from vigil.neuro.guard_dsl_compiler import compile_predicate_spec
+from vigil.neuro.guard_dsl_compiler import compile_effect_requirement, compile_predicate_spec
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.neuro.guard_evidence import GuardEvidence
@@ -110,18 +111,6 @@ _KNOWN_STRING_PROPS: tuple[str, ...] = (
     "content_description",
     "resource_id",
     "class_name",
-)
-
-_EFFECT_POSTCONDITION_KINDS: frozenset[str] = frozenset(
-    {
-        "content_effect",
-        "item_added",
-        "item_removed",
-        "message_sent",
-        "payment_or_transfer",
-        "toggle_effect",
-        "form_effect",
-    }
 )
 
 
@@ -240,6 +229,9 @@ def _lower_predicate(
 
     lowered = pred
 
+    if ptype in {"appeared", "disappeared", "value_changed"}:
+        return _Lowered(None, f"{ptype} predicate is postcondition-only")
+
     if ptype in ("read", "value", "contains", "count"):
         if not pred.element:
             return _Lowered(None, f"{ptype} predicate missing element")
@@ -293,6 +285,103 @@ def _lower_predicate(
     return _Lowered(compiled, "", is_binding)
 
 
+def _registry_has_key(registry: WidgetRegistry | None, key: str) -> bool:
+    """Return whether a registry contains a runtime key by resource id or alias."""
+    if registry is None:
+        return False
+    return key in registry.resource_id_to_alias or key in registry.entries
+
+
+def _resolve_stable_postcondition_element(
+    element: str,
+    evidence: GuardEvidence,
+) -> tuple[str | None, str]:
+    """Resolve an element that must be stable across source and target registries."""
+    if evidence.target_registry is None:
+        return None, "target registry unavailable for postcondition effect predicate"
+    source_key, _source_entry, source_reason = _resolve_element(
+        element,
+        evidence.source_registry,
+        "source",
+    )
+    if source_key is not None:
+        if _registry_has_key(evidence.target_registry, source_key):
+            return source_key, ""
+        return (
+            None,
+            f"element '{element}' resolves to {source_key!r} in source but not target registry",
+        )
+
+    target_key, _target_entry, target_reason = _resolve_element(
+        element,
+        evidence.target_registry,
+        "target",
+    )
+    if target_key is not None:
+        if _registry_has_key(evidence.source_registry, target_key):
+            return target_key, ""
+        return (
+            None,
+            f"element '{element}' resolves to {target_key!r} in target but not source registry",
+        )
+    return None, f"{source_reason}; {target_reason}"
+
+
+def _intent_slots_in_value(ref: ValueRef | None) -> set[str]:
+    if ref is not None and ref.kind == "intent" and ref.slot:
+        return {ref.slot}
+    return set()
+
+
+def _validate_effect_slots(effect: EffectRequirement, declared_slots: set[str]) -> str:
+    for slot in _intent_slots_in_value(effect.before) | _intent_slots_in_value(effect.after):
+        if slot not in declared_slots:
+            return f"undeclared intent slot '{slot}'"
+    return ""
+
+
+def _lower_effect_requirement(
+    effect: EffectRequirement,
+    evidence: GuardEvidence,
+    declared_slots: set[str],
+) -> _Lowered:
+    kind = (effect.effect_kind or "").strip().lower()
+    name = effect.name or "effect"
+    if kind not in {"appeared", "disappeared", "value_changed"}:
+        return _Lowered(None, f"{name}: effect_requirement kind '{kind or 'unknown'}' unsupported")
+    slot_error = _validate_effect_slots(effect, declared_slots)
+    if slot_error:
+        return _Lowered(None, f"{name}: {slot_error}")
+    if not effect.element:
+        return _Lowered(None, f"{name}: effect requirement missing element")
+
+    if kind == "appeared":
+        if evidence.target_registry is None:
+            return _Lowered(None, f"{name}: target registry unavailable for appeared")
+        key, _entry, reason = _resolve_element(effect.element, evidence.target_registry, "target")
+        if key is None:
+            return _Lowered(None, f"{name}: {reason}")
+        if _registry_has_key(evidence.source_registry, key):
+            return _Lowered(None, f"{name}: element '{key}' is present in source registry")
+    elif kind == "disappeared":
+        key, _entry, reason = _resolve_element(effect.element, evidence.source_registry, "source")
+        if key is None:
+            return _Lowered(None, f"{name}: {reason}")
+        if _registry_has_key(evidence.target_registry, key):
+            return _Lowered(None, f"{name}: element '{key}' is present in target registry")
+    else:
+        key, reason = _resolve_stable_postcondition_element(effect.element, evidence)
+        if key is None:
+            return _Lowered(None, f"{name}: {reason}")
+
+    lowered = effect.model_copy(update={"element": key, "effect_kind": kind})
+    compiled = compile_effect_requirement(lowered)
+    if compiled is None:
+        return _Lowered(None, f"{name}: effect requirement not compilable")
+    is_binding = bool(_intent_slots_in_value(effect.before) or _intent_slots_in_value(effect.after))
+    return _Lowered(compiled, "", is_binding)
+
+
 def admit_guard_contract(
     contract: GuardContract,
     evidence: GuardEvidence,
@@ -301,8 +390,8 @@ def admit_guard_contract(
     """Admit (or reject) a guard contract as a runtime-executable guard."""
     registry = evidence.source_registry
     declared = {slot.name for slot in contract.required_slots}
-    # Semantic completeness is controlled by the explicit guard-obligation bit, not by
-    # risk metadata. ``$bind.*`` binding_requirements are metadata only and never satisfy
+    # Semantic completeness is controlled by the explicit guard-obligation bit.
+    # ``$bind.*`` binding_requirements are metadata only and never satisfy
     # this executable ``$intent.*`` requirement.
     binding_required = contract.semantic_binding_required
 
@@ -414,6 +503,32 @@ def _lower_postcondition_predicate(
             return _Lowered(None, "in_state predicate not compilable")
         return _Lowered(compiled, "")
 
+    if pred.predicate_type in {"appeared", "disappeared", "value_changed"}:
+        effect = EffectRequirement(
+            name=pred.source or pred.predicate_type,
+            effect_kind=pred.predicate_type,
+            element=pred.element,
+            before=(
+                ValueRef.model_validate(pred.args["before"])
+                if isinstance(pred.args.get("before"), dict)
+                else (
+                    ValueRef(kind="literal", value=pred.args.get("before"))
+                    if "before" in pred.args
+                    else None
+                )
+            ),
+            after=(
+                ValueRef.model_validate(pred.args["after"])
+                if isinstance(pred.args.get("after"), dict)
+                else (
+                    ValueRef(kind="literal", value=pred.args.get("after"))
+                    if "after" in pred.args
+                    else None
+                )
+            ),
+        )
+        return _lower_effect_requirement(effect, evidence, declared_slots)
+
     if pred.predicate_type not in ("read", "value", "contains", "count"):
         return _Lowered(
             None,
@@ -425,38 +540,26 @@ def _lower_postcondition_predicate(
     return _lower_predicate(pred, evidence.target_registry, declared_slots)
 
 
-def _mark_unsupported_effects(postcondition: TransitionPostcondition) -> list[str]:
-    unsupported: list[str] = []
-    for effect in postcondition.effect_requirements:
-        kind = effect.effect_kind or "unknown"
-        name = effect.name or "effect"
-        reason = (
-            f"effect_requirement kind '{kind}' is audit-only; current DSL admission "
-            "only compiles postcondition.predicates"
-        )
-        effect.unsupported_reason = reason
-        unsupported.append(f"{name}: {reason}")
-    return unsupported
-
-
-def _has_transition_specific_postcondition(
+def _lower_effect_requirements(
     postcondition: TransitionPostcondition,
-    admitted_predicates: list[PredicateSpec],
-    has_intent_effect: bool,
-) -> bool:
-    """Return whether admitted ``Psi`` carries transition-specific effect content.
-
-    State identity and stable target facts are checked by the state-invariant layer. A
-    transition postcondition is executable/auditable when it reflects the proposed
-    action's value, selected item, toggle state, committed content, or similar
-    effect-specific target fact.
-    """
-    if has_intent_effect:
-        return True
-    kind = (postcondition.kind or "").strip().lower()
-    if kind not in _EFFECT_POSTCONDITION_KINDS:
-        return False
-    return any(pred.predicate_type != "in_state" for pred in admitted_predicates)
+    evidence: GuardEvidence,
+    declared_slots: set[str],
+) -> tuple[list[str], list[str], bool]:
+    surviving: list[str] = []
+    unsupported: list[str] = []
+    has_binding = False
+    for effect in postcondition.effect_requirements:
+        name = effect.name or "effect"
+        result = _lower_effect_requirement(effect, evidence, declared_slots)
+        if result.compiled is None:
+            reason = result.reason
+            effect.unsupported_reason = reason
+            unsupported.append(f"{name}: {reason}")
+            continue
+        effect.unsupported_reason = ""
+        surviving.append(result.compiled)
+        has_binding = has_binding or result.is_binding
+    return surviving, unsupported, has_binding
 
 
 def admit_postcondition_contract(
@@ -466,10 +569,8 @@ def admit_postcondition_contract(
 ) -> PostconditionAdmissionResult:
     """Admit (or reject) a postcondition contract as executable target-side ``Psi``."""
     declared = {slot.name for slot in postcondition.required_slots}
-    unsupported_effects = _mark_unsupported_effects(postcondition)
 
     surviving: list[str] = []
-    admitted_predicates: list[PredicateSpec] = []
     rejected: list[str] = []
     has_intent_effect = False
     for pred in postcondition.predicates:
@@ -478,8 +579,15 @@ def admit_postcondition_contract(
             rejected.append(result.reason)
         else:
             surviving.append(result.compiled)
-            admitted_predicates.append(pred)
             has_intent_effect = has_intent_effect or result.is_binding
+
+    effect_predicates, unsupported_effects, effect_has_binding = _lower_effect_requirements(
+        postcondition,
+        evidence,
+        declared,
+    )
+    surviving.extend(effect_predicates)
+    has_intent_effect = has_intent_effect or effect_has_binding
 
     if rejected:
         return PostconditionAdmissionResult(
@@ -507,32 +615,6 @@ def admit_postcondition_contract(
             status=GuardAdmissionStatus.REJECTED,
             postcondition=None,
             reason="required postcondition has no runtime-executable predicate",
-            unsupported_effects=unsupported_effects,
-            intent_effect_incomplete=True,
-        )
-
-    if not _has_transition_specific_postcondition(
-        postcondition,
-        admitted_predicates,
-        has_intent_effect,
-    ):
-        if not postcondition.intent_effect_required:
-            return PostconditionAdmissionResult(
-                admitted=True,
-                status=GuardAdmissionStatus.ADMITTED,
-                postcondition=None,
-                reason=(
-                    "target-state consistency handled by invariant layer; "
-                    "no transition-specific Psi attached"
-                ),
-                unsupported_effects=unsupported_effects,
-                intent_effect_incomplete=postcondition.intent_effect_incomplete,
-            )
-        return PostconditionAdmissionResult(
-            admitted=False,
-            status=GuardAdmissionStatus.REJECTED,
-            postcondition=None,
-            reason="effect-required postcondition has no transition-specific executable Psi",
             unsupported_effects=unsupported_effects,
             intent_effect_incomplete=True,
         )

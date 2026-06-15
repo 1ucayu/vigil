@@ -26,7 +26,7 @@ def test_loads_guard_generation_prompt():
     assert "Psi" in text
     assert "effect_requirements" in text
     assert "audit-only" in text
-    assert "appears" in text
+    assert "appeared" in text
     assert "compatibility alias" in text
     assert "$intent" in text
     assert "$bind" in text
