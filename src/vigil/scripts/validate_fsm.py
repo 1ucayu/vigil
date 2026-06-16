@@ -116,7 +116,7 @@ def _build_screen_to_state(fsm: AppFSM) -> dict[str, str]:
     This is the authoritative mapping the builder produced — FSM construction
     is the only source of truth for which raw screens collapsed to which
     abstract state, so we recover it from the bundle instead of recomputing
-    fingerprints (which would risk drifting from the builder).
+    fingerprints (which could drift from the builder).
     """
     mapping: dict[str, str] = {}
     for state in fsm.states.values():

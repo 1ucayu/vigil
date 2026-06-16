@@ -124,12 +124,6 @@ def test_validate_trace_input_side_effect_warning() -> None:
     assert any("did not clear" in w for w in summary["warnings"])
 
 
-def test_validate_trace_skipped_risky() -> None:
-    traces = [_trace(1, metadata={"risk_tags": ["destructive"]})]
-    summary = validate_trace({"traces": traces, "screens": {}, "nav_stats": {}})
-    assert summary["skipped_risky_count"] == 1
-
-
 def test_validate_trace_repeated_action_ratio() -> None:
     traces = [_trace(i, src="s1", action_type="click") for i in range(1, 6)]
     summary = validate_trace({"traces": traces, "screens": {}, "nav_stats": {}})
@@ -137,15 +131,15 @@ def test_validate_trace_repeated_action_ratio() -> None:
     assert summary["repeated_action_ratio"] == 1.0
 
 
-def test_validate_trace_state_merge_risk_groups() -> None:
+def test_validate_trace_state_merge_conflict_groups() -> None:
     screens = {
         "scr1": {"page_title": "Inbox", "structural_fingerprint": "fpA"},
         "scr2": {"page_title": "Inbox", "structural_fingerprint": "fpB"},
         "scr3": {"page_title": "Sent", "structural_fingerprint": "fpC"},
     }
     summary = validate_trace({"traces": [], "screens": screens, "nav_stats": {}})
-    assert "Inbox" in summary["state_merge_risk_groups"]
-    assert "Sent" not in summary["state_merge_risk_groups"]
+    assert "Inbox" in summary["state_merge_conflict_groups"]
+    assert "Sent" not in summary["state_merge_conflict_groups"]
     assert any("structural fingerprints" in w for w in summary["warnings"])
 
 
@@ -196,8 +190,8 @@ def test_validate_trace_counts_action_attempts() -> None:
                 "step_number": 0,
                 "source_state_id": "s",
                 "action": {"action_type": "click"},
-                "status": "skipped_risky",
-                "metadata": {"severity": "hard_block", "risk_tags": ["destructive"]},
+                "status": "skipped_filtered",
+                "metadata": {},
             },
             {
                 "step_number": 0,
@@ -216,10 +210,8 @@ def test_validate_trace_counts_action_attempts() -> None:
         ],
     }
     summary = validate_trace(payload)
-    assert summary["skipped_risky_count"] == 1
+    assert summary["action_attempt_status_breakdown"]["skipped_filtered"] == 1
     assert summary["ambiguous_selector_count"] == 1
     assert summary["skipped_unsafe_input_count"] == 1
-    assert summary["action_attempt_severity_breakdown"].get("hard_block") == 1
     # Warning surfaces.
-    assert any("hard-block" in w for w in summary["warnings"])
     assert any("INPUT_TEXT" in w for w in summary["warnings"])

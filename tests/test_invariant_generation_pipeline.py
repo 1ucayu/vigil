@@ -167,11 +167,11 @@ def test_single_visit_title_is_not_attached_as_runtime_invariant() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Guard policy preservation: high-risk without admitted guard stays UNCERTAIN
+# Legacy guard metadata remains inert while invariants are generated
 # ---------------------------------------------------------------------------
 
 
-def test_high_risk_without_guard_remains_uncertain_after_invariants() -> None:
+def test_legacy_required_guard_without_admission_does_not_block_after_invariants() -> None:
     fsm = AppFSM(app_package="com.vigil.bank")
     fsm.add_state(_state("transfer_confirm", ["c"]))
     fsm.add_state(_state("transfer_success", ["s"]))
@@ -183,7 +183,7 @@ def test_high_risk_without_guard_remains_uncertain_after_invariants() -> None:
             target="transfer_success",
             action=action,
             confidence=0.95,
-            requires_guard=True,  # high-risk: must have an admitted guard
+            requires_guard=True,
             guard=None,
             guard_admission_status=GuardAdmissionStatus.PENDING,
         )
@@ -209,10 +209,10 @@ def test_high_risk_without_guard_remains_uncertain_after_invariants() -> None:
 
     engine = DecisionEngine(fsm, VerificationConfig())
     before = engine.verify_by_state("transfer_confirm", action)
-    assert before.result is VerifyResult.UNCERTAIN
-    assert before.reason is VerifyReason.GUARD_POLICY_UNSATISFIED
+    assert before.result is VerifyResult.ALLOW
+    assert before.reason is VerifyReason.TRANSITION_VALID
 
-    # Running invariant generation must not touch guard fields or change the verdict.
+    # Running invariant generation must not touch legacy guard fields or change the verdict.
     generate_contract_invariants(fsm, raw_screens, invariant_source="deterministic")
     transition = fsm.transitions[0]
     assert transition.requires_guard is True
@@ -220,9 +220,9 @@ def test_high_risk_without_guard_remains_uncertain_after_invariants() -> None:
 
     engine_after = DecisionEngine(fsm, VerificationConfig())
     after = engine_after.verify_by_state("transfer_confirm", action)
-    assert after.result is VerifyResult.UNCERTAIN
-    assert after.reason is VerifyReason.GUARD_POLICY_UNSATISFIED
-    # Single-visit balance evidence is retained as a hint, not as a hard post-arrival gate.
+    assert after.result is VerifyResult.ALLOW
+    assert after.reason is VerifyReason.TRANSITION_VALID
+    # Single-visit balance evidence is retained as a hint, not as a hard state gate.
     assert fsm.states["transfer_confirm"].invariant_specs == []
 
 
@@ -282,7 +282,6 @@ def test_target_only_guard_predicate_rejected_via_existing_admission() -> None:
                     "contract": {
                         "kind": "item_binding",
                         "required": True,
-                        "risk_level": "medium",
                         "predicates": [
                             {
                                 "predicate_type": "read",
@@ -417,7 +416,6 @@ def _guard_packet(source: str, target: str, cak: str, element: str = "x") -> str
                     "contract": {
                         "kind": "item_binding",
                         "required": True,
-                        "risk_level": "medium",
                         "predicates": [
                             {
                                 "predicate_type": "read",

@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from vigil.models.guard import (
-    EffectRequirement,
     GuardContract,
     GuardKind,
     PredicateSpec,
-    RiskLevel,
     ValueRef,
 )
 from vigil.neuro.guard_dsl_compiler import (
-    compile_effect_requirement,
     compile_guard_contract,
     compile_predicate_spec,
 )
@@ -52,7 +49,6 @@ def test_multiple_predicates_join_with_and():
     contract = GuardContract(
         kind=GuardKind.CONFIRM_COMMIT,
         required=True,
-        risk_level=RiskLevel.HIGH,
         predicates=[
             PredicateSpec(
                 predicate_type="read",
@@ -152,47 +148,6 @@ def test_contains_and_in_state_and_time_in():
 def test_optional_contract_without_predicates_compiles_to_none():
     contract = GuardContract(kind=GuardKind.NAVIGATION, required=False)
     assert compile_guard_contract(contract) is None
-
-
-def test_effect_requirement_is_audit_only_not_dsl():
-    assert (
-        compile_effect_requirement(
-            EffectRequirement(name="query_appeared", effect_kind="appeared", element="search.query")
-        )
-        is None
-    )
-    assert (
-        compile_effect_requirement(
-            EffectRequirement(
-                name="feed_disappeared",
-                effect_kind="disappeared",
-                element="home.feed",
-            )
-        )
-        is None
-    )
-    assert (
-        compile_effect_requirement(
-            EffectRequirement(
-                name="badge_changes",
-                effect_kind="value_changed",
-                element="cart.badge_count",
-            )
-        )
-        is None
-    )
-    assert (
-        compile_effect_requirement(
-            EffectRequirement(
-                name="title_changes",
-                effect_kind="value_changed",
-                element="top_bar.title",
-                before=ValueRef(kind="literal", value="Home"),
-                after=ValueRef(kind="literal", value="Cart"),
-            )
-        )
-        is None
-    )
 
 
 def test_missing_parts_return_none():

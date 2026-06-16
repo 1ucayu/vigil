@@ -12,10 +12,9 @@ guarantees the resulting DSL is **runtime-executable by the current**
   (``action_type``/``target_text``/``target_resource_id``/``target_content_desc``), with
   ``type`` normalized to ``action_type``. ``action(text)``/``action(value)`` are rejected.
 - ``$intent.*`` slots must be declared in ``contract.required_slots``.
-- Contracts that explicitly declare ``semantic_binding_required`` must carry at
-  least one executable semantic *binding* predicate to be marked semantically
-  complete; an enabled/clickable-only predicate is admitted only as incomplete
-  metadata.
+- ``semantic_binding_required`` and ``semantic_binding_incomplete`` are compatibility
+  metadata only. Admission validates executability; it does not impose an extra
+  semantic-completeness policy.
 
 Anything that cannot be guaranteed executable is ``REJECTED`` or ``LOW_TRUST`` — never
 attached.
@@ -33,11 +32,9 @@ from pydantic import BaseModel, Field
 
 from vigil.core.paths import resolve_dsl_grammar_path
 from vigil.models.guard import (
-    EffectRequirement,
     GuardAdmissionStatus,
     GuardContract,
     PredicateSpec,
-    TransitionPostcondition,
     ValueRef,
 )
 from vigil.neuro.guard_dsl_compiler import compile_predicate_spec
@@ -156,18 +153,6 @@ class GuardAdmissionResult(BaseModel):
     semantic_binding_incomplete: bool = False
 
 
-class PostconditionAdmissionResult(BaseModel):
-    """Outcome of admitting a postcondition contract as executable ``Psi`` DSL."""
-
-    admitted: bool
-    status: GuardAdmissionStatus
-    postcondition: str | None = None
-    reason: str = ""
-    rejected_predicates: list[str] = Field(default_factory=list)
-    unsupported_effects: list[str] = Field(default_factory=list)
-    intent_effect_incomplete: bool = False
-
-
 @lru_cache(maxsize=8)
 def _parser(grammar_path: str | None = None) -> Lark:
     path = resolve_dsl_grammar_path(grammar_path)
@@ -230,9 +215,6 @@ def _lower_predicate(
 
     lowered = pred
 
-    if ptype in {"appeared", "disappeared", "value_changed"}:
-        return _Lowered(None, f"{ptype} predicate is postcondition-only")
-
     if ptype in ("read", "value", "contains", "count"):
         if not pred.element:
             return _Lowered(None, f"{ptype} predicate missing element")
@@ -294,17 +276,6 @@ def _lower_predicate(
     return _Lowered(compiled, "", is_binding)
 
 
-def _lower_effect_requirement(
-    effect: EffectRequirement,
-    evidence: GuardEvidence,
-    declared_slots: set[str],
-) -> _Lowered:
-    kind = (effect.effect_kind or "").strip().lower()
-    if kind in {"appeared", "disappeared", "value_changed"}:
-        return _Lowered(None, f"{kind} effect is audit-only")
-    return _Lowered(None, f"effect_requirement kind '{kind or 'unknown'}' unsupported")
-
-
 def admit_guard_contract(
     contract: GuardContract,
     evidence: GuardEvidence,
@@ -313,21 +284,15 @@ def admit_guard_contract(
     """Admit (or reject) a guard contract as a runtime-executable guard."""
     registry = evidence.source_registry
     declared = {slot.name for slot in contract.required_slots}
-    # Semantic completeness is controlled by the explicit guard-obligation bit.
-    # ``$bind.*`` binding_requirements are metadata only and never satisfy
-    # this executable ``$intent.*`` requirement.
-    binding_required = contract.semantic_binding_required
 
     surviving: list[str] = []
     rejected: list[str] = []
-    has_binding = False
     for pred in contract.predicates:
         result = _lower_predicate(pred, registry, declared)
         if result.compiled is None:
             rejected.append(result.reason)
         else:
             surviving.append(result.compiled)
-            has_binding = has_binding or result.is_binding
 
     # Any rejected predicate is genuinely non-executable -> hard reject (do not partially
     # attach). This covers unresolved aliases, unsupported action properties, undeclared
@@ -344,18 +309,11 @@ def admit_guard_contract(
 
     # No executable predicate at all.
     if not surviving:
-        if not contract.required:
-            return GuardAdmissionResult(
-                admitted=True,
-                status=GuardAdmissionStatus.ADMITTED,
-                guard=None,
-                reason="optional contract; no guard required",
-            )
         return GuardAdmissionResult(
-            admitted=False,
-            status=GuardAdmissionStatus.REJECTED,
+            admitted=True,
+            status=GuardAdmissionStatus.ADMITTED,
             guard=None,
-            reason="required guard has no runtime-executable predicate",
+            reason="no runtime-executable predicate",
         )
 
     guard = " && ".join(surviving)
@@ -369,182 +327,10 @@ def admit_guard_contract(
             reason=f"parse error: {exc}",
         )
 
-    # Executable guard admitted. Semantic completeness is strict: a guard is
-    # semantic-complete only when at least one *surviving executable* ``$intent.*`` binding
-    # predicate exists (``has_binding``). A semantic-required guard with only structural /
-    # enabledness predicates — or whose only binding is a non-executable ``$bind.*``
-    # requirement — is still evidence-backed and executable, so we attach it but record
-    # that its semantic binding is incomplete (metadata, not a blocker).
-    semantic_binding_incomplete = (not has_binding) and (
-        binding_required or contract.semantic_binding_incomplete
-    )
-    reason = (
-        "executable guard admitted; semantic binding incomplete"
-        if semantic_binding_incomplete
-        else f"admitted: {len(surviving)} executable predicate(s)"
-    )
     return GuardAdmissionResult(
         admitted=True,
         status=GuardAdmissionStatus.ADMITTED,
         guard=guard,
-        reason=reason,
-        semantic_binding_incomplete=semantic_binding_incomplete,
-    )
-
-
-def _postcondition_state_name(pred: PredicateSpec) -> str:
-    state = pred.args.get("state")
-    if state is None and pred.expected is not None and pred.expected.kind == "literal":
-        state = pred.expected.value
-    return str(state or "")
-
-
-def _lower_postcondition_predicate(
-    pred: PredicateSpec,
-    evidence: GuardEvidence,
-    declared_slots: set[str],
-) -> _Lowered:
-    """Lower one target-side ``Psi`` predicate."""
-    if (
-        pred.expected is not None
-        and pred.expected.kind == "intent"
-        and (not pred.expected.slot or pred.expected.slot not in declared_slots)
-    ):
-        return _Lowered(None, f"undeclared intent slot '{pred.expected.slot}'")
-
-    if pred.predicate_type == "in_state":
-        state = _postcondition_state_name(pred)
-        if not state:
-            return _Lowered(None, "in_state predicate missing args.state")
-        if state != evidence.target_state_id:
-            return _Lowered(
-                None,
-                f"in_state({state}) does not match target state {evidence.target_state_id}",
-            )
-        compiled = compile_predicate_spec(pred)
-        if compiled is None:
-            return _Lowered(None, "in_state predicate not compilable")
-        return _Lowered(compiled, "")
-
-    if pred.predicate_type in {"appeared", "disappeared", "value_changed"}:
-        return _Lowered(None, f"{pred.predicate_type} effect predicate is audit-only")
-
-    if pred.predicate_type not in ("read", "value", "contains", "count"):
-        return _Lowered(
-            None,
-            f"{pred.predicate_type} predicate is not supported in postcondition Psi",
-        )
-
-    if evidence.target_registry is None:
-        return _Lowered(None, "target registry unavailable for postcondition element predicate")
-    return _lower_predicate(pred, evidence.target_registry, declared_slots)
-
-
-def _lower_effect_requirements(
-    postcondition: TransitionPostcondition,
-    evidence: GuardEvidence,
-    declared_slots: set[str],
-) -> tuple[list[str], list[str], bool]:
-    surviving: list[str] = []
-    unsupported: list[str] = []
-    has_binding = False
-    for effect in postcondition.effect_requirements:
-        name = effect.name or "effect"
-        result = _lower_effect_requirement(effect, evidence, declared_slots)
-        if result.compiled is None:
-            reason = result.reason
-            effect.unsupported_reason = reason
-            unsupported.append(f"{name}: {reason}")
-            continue
-        effect.unsupported_reason = ""
-        surviving.append(result.compiled)
-        has_binding = has_binding or result.is_binding
-    return surviving, unsupported, has_binding
-
-
-def admit_postcondition_contract(
-    postcondition: TransitionPostcondition,
-    evidence: GuardEvidence,
-    grammar_path: str | None = None,
-) -> PostconditionAdmissionResult:
-    """Admit (or reject) a postcondition contract as executable target-side ``Psi``."""
-    declared = {slot.name for slot in postcondition.required_slots}
-
-    surviving: list[str] = []
-    rejected: list[str] = []
-    has_intent_effect = False
-    for pred in postcondition.predicates:
-        result = _lower_postcondition_predicate(pred, evidence, declared)
-        if result.compiled is None:
-            rejected.append(result.reason)
-        else:
-            surviving.append(result.compiled)
-            has_intent_effect = has_intent_effect or result.is_binding
-
-    effect_predicates, unsupported_effects, effect_has_binding = _lower_effect_requirements(
-        postcondition,
-        evidence,
-        declared,
-    )
-    surviving.extend(effect_predicates)
-    has_intent_effect = has_intent_effect or effect_has_binding
-
-    if rejected:
-        return PostconditionAdmissionResult(
-            admitted=False,
-            status=GuardAdmissionStatus.REJECTED,
-            postcondition=None,
-            reason="rejected non-executable postcondition predicate(s): " + "; ".join(rejected),
-            rejected_predicates=rejected,
-            unsupported_effects=unsupported_effects,
-            intent_effect_incomplete=postcondition.intent_effect_required,
-        )
-
-    if not surviving:
-        if not postcondition.required:
-            return PostconditionAdmissionResult(
-                admitted=True,
-                status=GuardAdmissionStatus.ADMITTED,
-                postcondition=None,
-                reason="optional postcondition; no executable Psi required",
-                unsupported_effects=unsupported_effects,
-                intent_effect_incomplete=postcondition.intent_effect_incomplete,
-            )
-        return PostconditionAdmissionResult(
-            admitted=False,
-            status=GuardAdmissionStatus.REJECTED,
-            postcondition=None,
-            reason="required postcondition has no runtime-executable predicate",
-            unsupported_effects=unsupported_effects,
-            intent_effect_incomplete=True,
-        )
-
-    psi = " && ".join(surviving)
-    try:
-        _parser(grammar_path).parse(psi)
-    except LarkError as exc:
-        return PostconditionAdmissionResult(
-            admitted=False,
-            status=GuardAdmissionStatus.REJECTED,
-            postcondition=None,
-            reason=f"parse error: {exc}",
-            unsupported_effects=unsupported_effects,
-            intent_effect_incomplete=postcondition.intent_effect_required,
-        )
-
-    intent_effect_incomplete = (not has_intent_effect) and (
-        postcondition.intent_effect_required or postcondition.intent_effect_incomplete
-    )
-    reason = (
-        "executable postcondition admitted; intent effect incomplete"
-        if intent_effect_incomplete
-        else f"admitted: {len(surviving)} executable postcondition predicate(s)"
-    )
-    return PostconditionAdmissionResult(
-        admitted=True,
-        status=GuardAdmissionStatus.ADMITTED,
-        postcondition=psi,
-        reason=reason,
-        unsupported_effects=unsupported_effects,
-        intent_effect_incomplete=intent_effect_incomplete,
+        reason=f"admitted: {len(surviving)} executable predicate(s)",
+        semantic_binding_incomplete=False,
     )

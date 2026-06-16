@@ -31,7 +31,6 @@ from vigil.models.guard import (
     GuardKind,
     IntentSlot,
     PredicateSpec,
-    RiskLevel,
     SlotType,
     ValueRef,
 )
@@ -46,10 +45,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # Deterministic vocabularies
 # ---------------------------------------------------------------------------
 
-# Side-effect / irreversible action words. cancel/dismiss/close are deliberately NOT here:
-# they are control words, kept separate so side-effect words route to semantic guard
-# obligations rather than navigation-only contracts.
-_RISK_WORDS: tuple[str, ...] = (
+# Side-effect / irreversible action words. These words classify the guard kind and
+# provenance only; they do not make a guard mandatory.
+_SIDE_EFFECT_WORDS: tuple[str, ...] = (
     "send",
     "pay",
     "transfer",
@@ -60,14 +58,14 @@ _RISK_WORDS: tuple[str, ...] = (
     "confirm",
 )
 
-# Risk words whose intent is destructive / permission-granting rather than a positive
-# commit. Used to pick SAFETY_CHECK vs CONFIRM_COMMIT.
+# Words whose intent is destructive / permission-granting rather than a positive commit.
+# Used to pick SAFETY_CHECK vs CONFIRM_COMMIT.
 _SAFETY_WORDS: frozenset[str] = frozenset({"delete", "remove", "allow", "grant"})
 
-# Semantic-required *commit* actions that are not in the side-effect/irreversible set but
-# still need a semantic (intent) binding, not an enabled-only guard. Matched on whole-word
-# tokens (not substrings) to avoid false positives. Generic UI verbs only — no package,
-# product, contact, or timer-label strings.
+# Commit-like actions that are not in the side-effect/irreversible set. Matched on
+# whole-word tokens (not substrings) to avoid false positives. Generic UI verbs only —
+# no package, product, contact, or timer-label strings. These tokens classify candidate
+# contracts; they are not a guard-admission gate.
 _COMMIT_WORDS: frozenset[str] = frozenset(
     {"checkout", "submit", "attach", "attachment", "lap", "buy", "purchase"}
 )
@@ -80,11 +78,7 @@ _COMMIT_PHRASES: tuple[str, ...] = (
     "set alarm",
     "edit alarm",
 )
-# Commit hits that are financial / high-stakes -> HIGH risk rather than MEDIUM.
-_HIGH_COMMIT_WORDS: frozenset[str] = frozenset({"checkout", "buy", "purchase"})
-_HIGH_COMMIT_PHRASES: frozenset[str] = frozenset({"place order"})
-
-# Cancel / dismiss control words -> low-risk navigation.
+# Cancel / dismiss control words -> ordinary navigation.
 _CANCEL_WORDS: frozenset[str] = frozenset({"cancel", "dismiss", "close", "back"})
 
 # Command-button words excluded from item binding (a row labeled with one of these is a
@@ -115,7 +109,7 @@ _COMMAND_WORDS: frozenset[str] = frozenset(
     }
 )
 
-# Generic static navigation / control text -> low-risk navigation.
+# Generic static navigation / control text -> ordinary navigation.
 _STATIC_NAV_WORDS: frozenset[str] = frozenset(
     {
         "open",
@@ -149,7 +143,8 @@ _NAV_ALIAS_HINTS: tuple[str, ...] = (
 )
 
 # Generic domain token sets. Fixed precedence: bank -> commerce -> chat -> clock.
-# Bare "pay"/"payment" is intentionally absent (too ambiguous; only a risk word).
+# Bare "pay"/"payment" is intentionally absent from domain tokens; it is an
+# action-obligation word instead.
 _DOMAIN_TOKENS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "bank",
@@ -318,16 +313,17 @@ def infer_commit_slots(evidence: GuardEvidence) -> list[IntentSlot]:
 # ---------------------------------------------------------------------------
 
 
-def _risk_hits(evidence: GuardEvidence) -> list[str]:
-    """High-risk keywords supporting this action, from the registry entry or text."""
+def _side_effect_hits(evidence: GuardEvidence) -> list[str]:
+    """Keywords indicating that this action has externally visible side-effect semantics."""
     entry = _resolved_entry(evidence)
-    if entry is not None and entry.risk_hints:
-        return [kw for kw in _RISK_WORDS if kw in entry.risk_hints]
-    haystack = " ".join(
-        _norm(str(evidence.action.get(field) or ""))
-        for field in ("target_text", "text", "target_content_desc")
-    )
-    return [kw for kw in _RISK_WORDS if kw in haystack]
+    parts = [
+        str(evidence.action.get(field) or "")
+        for field in ("target_text", "text", "target_content_desc", "resource_id")
+    ]
+    if entry is not None:
+        parts.extend([entry.text, entry.content_description, entry.resource_id, entry.alias])
+    haystack = _norm(" ".join(parts))
+    return [kw for kw in _SIDE_EFFECT_WORDS if kw in haystack]
 
 
 def _commit_haystack(evidence: GuardEvidence) -> str:
@@ -344,8 +340,8 @@ def _commit_haystack(evidence: GuardEvidence) -> str:
     return _norm(" ".join(parts))
 
 
-def _commit_hit(evidence: GuardEvidence) -> tuple[str | None, bool]:
-    """Return ``(matched_commit, is_high_stakes)`` for a semantic-required commit action.
+def _commit_hit(evidence: GuardEvidence) -> str | None:
+    """Return the matched token for a commit-like action.
 
     Single words match on whole-word tokens; phrases match as substrings of the normalized
     haystack. ``matched_commit`` is ``None`` when no commit signal is present.
@@ -354,11 +350,11 @@ def _commit_hit(evidence: GuardEvidence) -> tuple[str | None, bool]:
     tokens = {tok for tok in re.split(r"[^a-z0-9]+", haystack) if tok}
     for word in _COMMIT_WORDS:
         if word in tokens:
-            return word, word in _HIGH_COMMIT_WORDS
+            return word
     for phrase in _COMMIT_PHRASES:
         if phrase in haystack:
-            return phrase, phrase in _HIGH_COMMIT_PHRASES
-    return None, False
+            return phrase
+    return None
 
 
 def _is_command_text(text: str) -> bool:
@@ -426,7 +422,7 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
     """
     atype = _action_type(evidence)
     domain = _infer_domain(evidence)
-    risk_hits = _risk_hits(evidence)
+    side_effect_hits = _side_effect_hits(evidence)
     alias = _alias_in_registry(evidence)
 
     # 1. Global navigation actions.
@@ -434,7 +430,6 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
         return _contract(
             kind=GuardKind.NAVIGATION,
             required=False,
-            risk=RiskLevel.LOW,
             confidence=_STRONG_CONFIDENCE,
             provenance=["navigate_action"],
         )
@@ -444,14 +439,13 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
         return _contract(
             kind=GuardKind.NONE,
             required=False,
-            risk=RiskLevel.LOW,
             confidence=_STRONG_CONFIDENCE,
             provenance=["scroll_action"],
         )
 
-    # 3. Text entry. Classified before risk/commit so an amount/recipient field whose
-    #    widget carries an incidental risk hint still binds the typed value to an intent
-    #    slot (executable, semantic-complete) instead of an enabled-only commit guard.
+    # 3. Text entry. Classified before side-effect/commit handling so an
+    #    amount/recipient field still binds the typed value to an intent slot instead
+    #    of an enabled-only commit guard.
     if atype == "input_text":
         slot = infer_input_slot_name(evidence)
         predicate = PredicateSpec(
@@ -462,8 +456,7 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
         )
         return _contract(
             kind=GuardKind.INPUT_BINDING,
-            required=True,
-            risk=RiskLevel.MEDIUM,
+            required=False,
             required_slots=[IntentSlot(name=slot, slot_type=_input_slot_type(slot))],
             predicates=[predicate],
             confidence=_STRONG_CONFIDENCE,
@@ -474,26 +467,23 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
             ),
         )
 
-    # 4. Cancel / dismiss / close (only when not itself a risk word).
-    if not risk_hits and _is_cancel(evidence):
+    # 4. Cancel / dismiss / close (only when not itself a side-effect word).
+    if not side_effect_hits and _is_cancel(evidence):
         return _contract(
             kind=GuardKind.NAVIGATION,
             required=False,
-            risk=RiskLevel.LOW,
             confidence=_STRONG_CONFIDENCE,
             provenance=["cancel_action"],
         )
 
-    # 5. Side-effectful commit / safety action. The deterministic synthesizer can pin the
-    #    commit control's enabledness but cannot bind it to a frozen intent slot, so the
-    #    semantic binding is always incomplete here (a stronger semantic guard must come
-    #    from the LLM path or richer evidence).
-    if risk_hits:
-        is_safety = any(kw in _SAFETY_WORDS for kw in risk_hits)
+    # 5. Side-effectful commit / safety action. These tokens classify the guard
+    #    candidate and provenance; they do not create a guard-admission gate.
+    if side_effect_hits:
+        is_safety = any(kw in _SAFETY_WORDS for kw in side_effect_hits)
         predicates: list[PredicateSpec] = []
         provenance = [
-            "high_risk_commit",
-            *[f"risk_hint:{kw}" for kw in risk_hits],
+            "side_effect_action",
+            *[f"side_effect:{kw}" for kw in side_effect_hits],
             f"domain:{domain}",
         ]
         notes = ""
@@ -507,39 +497,37 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
             notes = "no resolved source-widget binding; only domain intent slots inferred"
         return _contract(
             kind=GuardKind.SAFETY_CHECK if is_safety else GuardKind.CONFIRM_COMMIT,
-            required=True,
-            risk=RiskLevel.HIGH,
+            required=False,
             required_slots=infer_commit_slots(evidence),
             predicates=predicates,
             confidence=confidence,
             provenance=provenance,
             notes=notes,
-            semantic_binding_required=True,
-            semantic_binding_incomplete=True,
+            semantic_binding_required=False,
+            semantic_binding_incomplete=False,
         )
 
-    # 6. Semantic-required commit (checkout / submit / attach / buy / add-to-cart / timer
-    #    start / alarm save / stopwatch lap). Not in the irreversible side-effect set, but it
-    #    still needs a semantic binding — never an enabled-only "complete" guard.
-    commit_word, commit_high = _commit_hit(evidence)
+    # 6. Commit-like actions (checkout / submit / attach / buy / add-to-cart / timer
+    #    start / alarm save / stopwatch lap). They classify the candidate but do not
+    #    create a mandatory semantic-completeness gate.
+    commit_word = _commit_hit(evidence)
     if atype in _CLICK_TYPES and commit_word is not None:
         predicates = []
         if alias is not None:
             predicates.append(_enabled_predicate(alias))
         return _contract(
             kind=GuardKind.CONFIRM_COMMIT,
-            required=True,
-            risk=RiskLevel.HIGH if commit_high else RiskLevel.MEDIUM,
+            required=False,
             required_slots=infer_commit_slots(evidence),
             predicates=predicates,
             confidence=_STRONG_CONFIDENCE if alias is not None else _WEAK_CONFIDENCE,
             provenance=["semantic_commit", f"commit:{commit_word}", f"domain:{domain}"],
             notes=(
-                "semantic-required commit; deterministic synthesis can only pin "
-                "enabledness, so the intent binding is incomplete"
+                "commit-like action; deterministic synthesis can pin enabledness "
+                "when the source widget is resolvable"
             ),
-            semantic_binding_required=True,
-            semantic_binding_incomplete=True,
+            semantic_binding_required=False,
+            semantic_binding_incomplete=False,
         )
 
     # 7. Toggle / checkable click.
@@ -554,8 +542,7 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
             predicates.append(_enabled_predicate(alias))
         return _contract(
             kind=GuardKind.TOGGLE_BINDING,
-            required=True,
-            risk=RiskLevel.MEDIUM,
+            required=False,
             required_slots=[IntentSlot(name="desired_state", slot_type=SlotType.BOOLEAN)],
             predicates=predicates,
             confidence=_STRONG_CONFIDENCE if alias is not None else _WEAK_CONFIDENCE,
@@ -590,8 +577,7 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
             row_source = "list_item_role" if role_is_item else "sibling_rows"
             return _contract(
                 kind=GuardKind.ITEM_BINDING,
-                required=True,
-                risk=RiskLevel.MEDIUM,
+                required=False,
                 required_slots=[IntentSlot(name=slot, slot_type=SlotType.STRING)],
                 predicates=[predicate],
                 confidence=_STRONG_CONFIDENCE,
@@ -607,7 +593,6 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
         return _contract(
             kind=GuardKind.NAVIGATION,
             required=False,
-            risk=RiskLevel.LOW,
             confidence=_STRONG_CONFIDENCE,
             provenance=["state_change_navigation", f"domain:{domain}"],
         )
@@ -616,7 +601,6 @@ def synthesize_guard_contract(evidence: GuardEvidence) -> GuardContract:
     return _contract(
         kind=GuardKind.UNKNOWN,
         required=False,
-        risk=RiskLevel.UNKNOWN,
         confidence=_WEAK_CONFIDENCE,
         provenance=["unclassified_click"],
     )
@@ -642,7 +626,6 @@ def _contract(
     *,
     kind: GuardKind,
     required: bool,
-    risk: RiskLevel,
     confidence: float,
     provenance: list[str],
     required_slots: list[IntentSlot] | None = None,
@@ -654,7 +637,6 @@ def _contract(
     return GuardContract(
         kind=kind,
         required=required,
-        risk_level=risk,
         required_slots=required_slots or [],
         predicates=predicates or [],
         admission_status=GuardAdmissionStatus.PENDING,

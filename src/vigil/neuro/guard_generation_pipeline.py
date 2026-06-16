@@ -14,8 +14,7 @@ Guard sources:
 - ``deterministic``: rule-based :func:`synthesize_guard_contract` only (no LLM).
 - ``llm``: an LLM-produced typed :class:`GuardContract` (never free-form DSL).
 - ``hybrid``: try the LLM first; fall back to deterministic synthesis when the LLM
-  candidate is invalid/rejected, rejected by admission, or admitted yet
-  ``semantic_binding_incomplete`` for a semantic-required transition.
+  candidate is invalid/rejected or rejected by admission.
 - ``audit``: replay previously persisted LLM audit candidates, then rerun deterministic
   admission/fallback without calling the model.
 """
@@ -29,17 +28,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from vigil.models.guard import (
-    GuardAdmissionStatus,
     GuardContract,
-    IntentSlot,
     LlmGuardContractCandidate,
-    TransitionPostcondition,
 )
 from vigil.neuro.guard_admission import (
     GuardAdmissionResult,
-    PostconditionAdmissionResult,
     admit_guard_contract,
-    admit_postcondition_contract,
 )
 from vigil.neuro.guard_contract_llm import (
     DEFAULT_GUARD_PROMPT,
@@ -65,8 +59,6 @@ class _ResolvedContract:
     fallback_reason: str
     precomputed_result: GuardAdmissionResult | None = None
     llm_audit_path: str = ""
-    postcondition: TransitionPostcondition | None = None
-    postcondition_incomplete: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,9 +71,10 @@ class _CachedLlmCandidate:
 def _prompt_schema_key(evidence: GuardEvidence) -> tuple[Any, ...]:
     """LLM amortization key for one source/action/target guard packet.
 
-    Gamma depends mostly on source/action evidence, while Psi depends on the target
-    state and source-to-target diff. Include the transition endpoints so a postcondition
-    generated for one target is never reused for a different target state.
+    Gamma depends mostly on source/action evidence, but the target state and
+    source-to-target diff are still background context for side-effect classification.
+    Include the transition endpoints so a target-specific guard candidate is never
+    reused for a different target state.
     """
     return (
         ("source", evidence.source_state_id),
@@ -146,71 +139,17 @@ def guard_action_schema_key(action: dict[str, Any]) -> tuple[tuple[str, str], ..
     )
 
 
-def _semantic_binding_required(contract: GuardContract) -> bool:
-    """Whether this contract explicitly requires a semantic ``$intent.*`` binding."""
-    return contract.semantic_binding_required or contract.semantic_binding_incomplete
-
-
-def _slot_map(slots: list[IntentSlot]) -> dict[str, IntentSlot]:
-    return {slot.name: slot for slot in slots if slot.name}
-
-
-def _postcondition_slot_consistency_errors(
-    contract: GuardContract,
-    postcondition: TransitionPostcondition | None,
-) -> list[str]:
-    """Check that Psi intent slots are declared consistently by Gamma."""
-    if postcondition is None:
-        return []
-    gamma_slots = _slot_map(contract.required_slots)
-    errors: list[str] = []
-    for name, psi_slot in _slot_map(postcondition.required_slots).items():
-        gamma_slot = gamma_slots.get(name)
-        if gamma_slot is None:
-            errors.append(f"postcondition slot '$intent.{name}' not declared by precondition")
-            continue
-        if (
-            psi_slot.slot_type != gamma_slot.slot_type
-            and psi_slot.slot_type.value != "unknown"
-            and gamma_slot.slot_type.value != "unknown"
-        ):
-            errors.append(
-                f"slot '$intent.{name}' type mismatch: "
-                f"precondition={gamma_slot.slot_type.value}, "
-                f"postcondition={psi_slot.slot_type.value}"
-            )
-    return errors
-
-
 def _candidate_from_audit(path: Path) -> LlmGuardContractCandidate:
     """Load a persisted LLM guard attempt without re-querying the model."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         contract_payload = payload.get("contract") or payload.get("precondition") or {}
         contract = GuardContract.model_validate(contract_payload)
-        postcondition_payload = payload.get("postcondition")
-        postcondition = (
-            TransitionPostcondition.model_validate(postcondition_payload)
-            if isinstance(postcondition_payload, dict)
-            else None
-        )
-        postcondition_incomplete = bool(
-            payload.get(
-                "postcondition_incomplete",
-                postcondition.intent_effect_incomplete if postcondition is not None else False,
-            )
-        )
-        if postcondition is not None:
-            postcondition.intent_effect_incomplete = (
-                postcondition.intent_effect_incomplete or postcondition_incomplete
-            )
         raw_responses = payload.get("raw_responses") or []
         parse_errors = payload.get("parse_errors") or []
         return LlmGuardContractCandidate(
             contract=contract,
-            postcondition=postcondition,
             semantic_binding_incomplete=contract.semantic_binding_incomplete,
-            postcondition_incomplete=postcondition_incomplete,
             rejection_reason=str(payload.get("rejection_reason") or ""),
             raw_responses=[str(item) for item in raw_responses],
             parse_errors=[str(item) for item in parse_errors],
@@ -258,14 +197,7 @@ def _write_llm_attempt_audit(
         "rejection_reason": candidate.rejection_reason,
         "parse_errors": candidate.parse_errors,
         "repair_attempted": candidate.repair_attempted,
-        "precondition": candidate.contract.model_dump(mode="json"),
         "contract": candidate.contract.model_dump(mode="json"),
-        "postcondition": (
-            candidate.postcondition.model_dump(mode="json")
-            if candidate.postcondition is not None
-            else None
-        ),
-        "postcondition_incomplete": candidate.postcondition_incomplete,
         "raw_responses": candidate.raw_responses
         or ([candidate.raw_response] if candidate.raw_response else []),
     }
@@ -284,8 +216,7 @@ def _try_llm_contract(
 
     Returns ``(contract, fallback_reason, admission_result)``. ``contract`` is ``None``
     (with a ``fallback_reason``) when the LLM candidate should be rejected in favor of the
-    deterministic fallback: invalid/unparseable, rejected by admission, or admitted yet
-    semantically incomplete for a semantic-required action.
+    deterministic fallback: invalid/unparseable or rejected by admission.
     """
     candidate = generate_llm_guard_candidate(
         evidence,
@@ -300,13 +231,6 @@ def _try_llm_contract(
     result = admit_guard_contract(contract, evidence)
     if not result.admitted:
         return None, f"llm contract rejected by admission: {result.reason}", None
-    if result.semantic_binding_incomplete and _semantic_binding_required(contract):
-        return (
-            None,
-            "llm contract admitted but semantic binding incomplete for a "
-            "semantic-required action",
-            None,
-        )
     return contract, "", result
 
 
@@ -346,8 +270,6 @@ def _resolve_contract(
             guard_origin="llm",
             fallback_reason=candidate.rejection_reason,
             llm_audit_path=audit_path,
-            postcondition=candidate.postcondition,
-            postcondition_incomplete=candidate.postcondition_incomplete,
         )
 
     # hybrid
@@ -368,24 +290,12 @@ def _resolve_contract(
             fallback_reason=f"llm contract rejected by admission: {result.reason}",
             llm_audit_path=audit_path,
         )
-    if result.semantic_binding_incomplete and _semantic_binding_required(contract):
-        return _ResolvedContract(
-            contract=synthesize_guard_contract(evidence),
-            guard_origin="fallback",
-            fallback_reason=(
-                "llm contract admitted but semantic binding incomplete for a "
-                "semantic-required action"
-            ),
-            llm_audit_path=audit_path,
-        )
     return _ResolvedContract(
         contract=contract,
         guard_origin="llm",
         fallback_reason="",
         precomputed_result=result,
         llm_audit_path=audit_path,
-        postcondition=candidate.postcondition,
-        postcondition_incomplete=candidate.postcondition_incomplete,
     )
 
 
@@ -410,8 +320,6 @@ def _resolve_contract_from_llm_candidate(
             guard_origin="llm",
             fallback_reason=candidate.rejection_reason,
             llm_audit_path=audit_path,
-            postcondition=candidate.postcondition,
-            postcondition_incomplete=candidate.postcondition_incomplete,
         )
 
     # hybrid / audit replay
@@ -431,24 +339,12 @@ def _resolve_contract_from_llm_candidate(
             fallback_reason=f"llm contract rejected by admission: {result.reason}",
             llm_audit_path=audit_path,
         )
-    if result.semantic_binding_incomplete and _semantic_binding_required(contract):
-        return _ResolvedContract(
-            contract=synthesize_guard_contract(evidence),
-            guard_origin="fallback",
-            fallback_reason=(
-                "llm contract admitted but semantic binding incomplete for a "
-                "semantic-required action"
-            ),
-            llm_audit_path=audit_path,
-        )
     return _ResolvedContract(
         contract=contract,
         guard_origin="llm",
         fallback_reason="",
         precomputed_result=result,
         llm_audit_path=audit_path,
-        postcondition=candidate.postcondition,
-        postcondition_incomplete=candidate.postcondition_incomplete,
     )
 
 
@@ -557,66 +453,18 @@ def generate_contract_guards(
         fallback_reason = resolved.fallback_reason
         precomputed = resolved.precomputed_result
         result = precomputed or admit_guard_contract(contract, evidence)
-        postcondition = (
-            resolved.postcondition.model_copy(deep=True)
-            if resolved.postcondition is not None
-            else None
-        )
-        postcondition_result: PostconditionAdmissionResult | None = None
-        if postcondition is not None:
-            postcondition_result = admit_postcondition_contract(postcondition, evidence)
-            slot_errors = _postcondition_slot_consistency_errors(contract, postcondition)
-            if slot_errors:
-                postcondition_result = PostconditionAdmissionResult(
-                    admitted=False,
-                    status=GuardAdmissionStatus.REJECTED,
-                    postcondition=None,
-                    reason="postcondition/precondition intent slot mismatch: "
-                    + "; ".join(slot_errors),
-                    rejected_predicates=list(postcondition_result.rejected_predicates),
-                    unsupported_effects=list(postcondition_result.unsupported_effects),
-                    intent_effect_incomplete=True,
-                )
-        postcondition_incomplete = bool(
-            resolved.postcondition_incomplete
-            or (postcondition.intent_effect_incomplete if postcondition is not None else False)
-            or (
-                postcondition_result.intent_effect_incomplete
-                if postcondition_result is not None
-                else False
-            )
-        )
 
         # Sync the deterministic admission outcome onto the contract so it survives
-        # serialize/deserialize alongside the transition-level metadata. Admission is the
-        # authority for semantic completeness; stale LLM self-assessments are audit input,
-        # not final metadata.
+        # serialize/deserialize alongside the transition-level metadata. Admission only
+        # validates runtime executability; semantic-completeness labels are legacy audit
+        # input and are cleared for newly generated metadata.
         contract.admission_status = result.status
         contract.admission_reason = result.reason
         contract.semantic_binding_incomplete = result.semantic_binding_incomplete
 
         # Attach metadata (no graph mutation).
         transition.guard_contract = contract
-        transition.postcondition_contract = postcondition
-        transition.postcondition_incomplete = postcondition_incomplete
-        transition.postcondition = None
-        transition.postcondition_admission_status = None
-        transition.postcondition_admission_reason = ""
-        transition.postcondition_rejected_predicates = []
-        transition.postcondition_unsupported_effects = []
-        if postcondition_result is not None:
-            transition.postcondition_admission_status = postcondition_result.status
-            transition.postcondition_admission_reason = postcondition_result.reason
-            transition.postcondition_rejected_predicates = list(
-                postcondition_result.rejected_predicates
-            )
-            transition.postcondition_unsupported_effects = list(
-                postcondition_result.unsupported_effects
-            )
-            if postcondition_result.admitted and postcondition_result.postcondition:
-                transition.postcondition = postcondition_result.postcondition
-        transition.requires_guard = contract.required
-        transition.risk_level = contract.risk_level
+        transition.requires_guard = False
         transition.guard_admission_status = result.status
         transition.guard_admission_reason = result.reason
         # Only attach an executable guard string; never clobber an existing guard with a
@@ -632,7 +480,6 @@ def generate_contract_guards(
                 "action": _action_summary(transition.action),
                 "action_schema_index": action_schema_index,
                 "kind": contract.kind.value,
-                "risk": contract.risk_level.value,
                 "required": contract.required,
                 "guard_origin": guard_origin,
                 "llm_audit_path": resolved.llm_audit_path,
@@ -641,32 +488,7 @@ def generate_contract_guards(
                 "reason": result.reason,
                 "semantic_binding_required": contract.semantic_binding_required,
                 "semantic_binding_incomplete": contract.semantic_binding_incomplete,
-                "precondition": contract.model_dump(mode="json"),
-                "postcondition": (
-                    postcondition.model_dump(mode="json") if postcondition is not None else None
-                ),
-                "postcondition_incomplete": postcondition_incomplete,
-                "postcondition_dsl": (
-                    postcondition_result.postcondition if postcondition_result is not None else None
-                ),
-                "postcondition_status": (
-                    postcondition_result.status.value
-                    if postcondition_result is not None
-                    else "none"
-                ),
-                "postcondition_reason": (
-                    postcondition_result.reason if postcondition_result is not None else ""
-                ),
-                "postcondition_rejected_predicates": (
-                    postcondition_result.rejected_predicates
-                    if postcondition_result is not None
-                    else []
-                ),
-                "postcondition_unsupported_effects": (
-                    postcondition_result.unsupported_effects
-                    if postcondition_result is not None
-                    else []
-                ),
+                "contract": contract.model_dump(mode="json"),
                 "rejected_predicates": result.rejected_predicates,
                 "guard": result.guard if (result.admitted and result.guard) else None,
             }

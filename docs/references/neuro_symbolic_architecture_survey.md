@@ -93,7 +93,7 @@ where each observation keeps the accessibility tree, screenshot, interactable el
 
 ### Stage 2: State Abstraction and Semantic Grounding
 
-**Technical challenge.** Raw screens are too fine-grained: two restaurant detail pages, WiFi lists, or chat threads may contain different text but share the same functional UI state. At the same time, visually similar pages may have different safety semantics, such as confirm-payment versus confirm-message. The core risk is choosing the wrong abstraction granularity: over-splitting causes state explosion; over-merging creates unsound verification.
+**Technical challenge.** Raw screens are too fine-grained: two restaurant detail pages, WiFi lists, or chat threads may contain different text but share the same functional UI state. At the same time, visually similar pages may have different safety semantics, such as confirm-payment versus confirm-message. The core challenge is choosing the wrong abstraction granularity: over-splitting causes state explosion; over-merging creates unsound verification.
 
 **Relevant literature.** Rico, Android in the Wild, Screen2Words, Widget Captioning, UIBert, SeeClick, OmniParser, and Ferret-UI show that UI understanding needs both structure and semantics: widget roles, screen purpose, icon meaning, text grounding, and action affordance matter. They motivate Vigil's separation between structural fingerprints for cacheable topology and semantic profiles for guard generation. See [Rico](https://experts.illinois.edu/en/publications/rico-a-mobile-app-dataset-for-building-data-driven-design-applica/), [Android in the Wild](https://arxiv.org/abs/2307.10088), [SeeClick](https://arxiv.org/abs/2401.10935), [OmniParser](https://arxiv.org/abs/2408.00203), and [Ferret-UI](https://arxiv.org/abs/2404.05719).
 
@@ -218,8 +218,8 @@ where `U` means unknown due to missing element, missing intent variable, invalid
 
 ```text
 D2 = DENY      if any guard/invariant evaluates F
-     UNCERTAIN if any required guard/invariant evaluates U
-     ALLOW     if all required guards/invariants evaluate T
+     UNCERTAIN if any attached guard/invariant evaluates U
+     ALLOW     if all attached guards/invariants evaluate T
 ```
 
 This tier covers wrong-field, wrong-value, wrong-contact, wrong-item, and unsafe side-effect errors.

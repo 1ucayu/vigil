@@ -1,5 +1,5 @@
 {
-  "$comment": "Ground-truth DSL guards for high-risk transitions. Evaluator-only.",
+  "$comment": "Ground-truth DSL guards for guard-required transitions. Evaluator-only.",
   "app_id": "com.vigil.bank",
   "guards": [
     {

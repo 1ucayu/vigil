@@ -1,7 +1,7 @@
 """State invariant checking (Daikon-style).
 
 Verifies that state-level invariants hold for the current screen.
-Called as post-arrival check after an agent reaches a new state.
+Called when a screen has been localized to an abstract state.
 Invariants are mined during offline FSM construction (Stage 2.5)
 and stored in AbstractState.invariant_specs.
 
@@ -92,7 +92,7 @@ class InvariantChecker:
             unknown_invariants=unknown_list,
         )
 
-    def check_arrival(
+    def all_state_invariants_pass(
         self,
         state_id: str,
         screen_ctx: ScreenContext,

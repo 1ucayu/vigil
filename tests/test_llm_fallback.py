@@ -109,7 +109,7 @@ class TestResolveBasics:
 
     def test_uncertain_to_deny(self, fallback_fsm: AppFSM) -> None:
         """UNCERTAIN + parseable LLM DENY → VerifyResult.DENY with LLM_FALLBACK reason."""
-        llm = _make_llm(['{"decision": "DENY", "reason": "unknown screen, risky"}'])
+        llm = _make_llm(['{"decision": "DENY", "reason": "unknown screen, off-task"}'])
         fallback = LlmFallback(llm, fallback_fsm)
         out = VerificationOutput(
             result=VerifyResult.UNCERTAIN,

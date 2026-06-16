@@ -70,7 +70,7 @@ Current verified snapshot after the AbstractState schema migration and behaviora
 - Run Python commands through `uv run`.
 - Static APK files are priors, not proof of transitions.
 - Trace/replay evidence is required before adding an edge to `delta`.
-- The LLM may add semantic labels, side-effect/semantic-binding obligations, DSL guard candidates, and provenance, but must not decide state equality, create static-only edges, assign replay confidence, or make runtime verdicts.
+- The LLM may add semantic labels, side-effect/semantic-binding metadata, DSL guard candidates, and provenance, but must not decide state equality, create static-only edges, assign replay confidence, or make runtime verdicts.
 - XML/runtime traces remain the deterministic source of truth for fingerprinting, replay, selectors, and transition evidence.
 - The compressed LLM view is only for prompting; never use it as the source of truth for localization or replay.
 - Low-confidence or incomplete evidence should route to `UNCERTAIN`, not high-trust `ALLOW`.
@@ -169,13 +169,13 @@ Do not rebuild or reshape the FSM graph just to add guards. Existing `S`, `Sigma
 Recommended model direction:
 
 - Keep `Transition.guard` as the executable DSL string used by `DSLEvaluator`.
-- Add non-breaking metadata such as typed guard contracts, required intent slots, side-effect/semantic-binding obligations, admission status/reason, and provenance when implementing this pass.
+- Add non-breaking metadata such as typed guard contracts, required intent slots, side-effect/semantic-binding metadata, admission status/reason, and provenance when implementing this pass.
 - Build a stable widget registry from source observations before asking for guard candidates. Prefer aliases backed by `resource_id`, `content_description`, stable text role, synthesized class alias, or template alias; never admit guards that depend on capture-local `e_XXXX` handles unless they are only temporary evidence.
 - Generate `GuardContract` objects first, then compile them to the current DSL grammar. The DSL grammar should not be expanded unless the typed contract cannot be expressed with existing predicates.
 - Admission must parse the DSL, resolve element aliases against the source-state registry, verify `$intent.*` variables against the contract slot schema, evaluate literal source predicates when possible, and record rejection reasons.
 - Side-effecting or irreversible actions (`send`, `pay`, `transfer`, `delete`, permission grants, irreversible confirms) require an admitted semantic/safety guard. If no guard can be admitted, runtime should return `UNCERTAIN`, not silently `ALLOW`.
 - `cancel`, `back`, ordinary navigation, and passive scroll/open actions may have no guard when topology and confidence are sufficient.
-- State invariants remain post-arrival checks in `AbstractState.invariant_specs`; transition guards are pre-action checks over the source screen, proposed action, and frozen intent.
+- State invariants remain state-level checks in `AbstractState.invariant_specs`; transition guards are pre-action checks over the source screen, proposed action, and frozen intent.
 
 APK static artifacts are useful guard-generation priors but never transition or verdict proof:
 
@@ -187,9 +187,9 @@ APK static artifacts are useful guard-generation priors but never transition or 
 When an LLM is used for guard generation, prompt it to produce typed guard-contract candidates, not free-form DSL as the primary artifact. The prompt should include:
 
 - strict task boundary: no new transitions, no state/action/confidence edits, no runtime verdicts;
-- output JSON schema for required slots, predicates, side-effect/semantic-binding obligations, confidence, evidence, and rejection/admission notes;
+- output JSON schema for required slots, predicates, side-effect/semantic-binding metadata, confidence, evidence, and rejection/admission notes;
 - supported predicate vocabulary (`read`, `value`, `action`, `contains`, `count`, `in_state`, `time_in`) and readable UI properties;
-- source state summary, target state summary, proposed canonical action, source widget registry, sibling outgoing transitions, source-to-target diff, static app prior/resource hints, and guard-obligation policy;
+- source state summary, target state summary, proposed canonical action, source widget registry, sibling outgoing transitions, source-to-target diff, and static app prior/resource hints;
 - explicit instruction that pre-action guards may reference only the source screen, proposed action, and frozen `$intent.*` variables, not target-only elements;
 - explicit fallback behavior: if evidence is insufficient, return a rejected/low-trust candidate with a reason instead of inventing selectors, slots, or literals.
 
@@ -272,4 +272,4 @@ cd fidelity_app/vigilclock && ./gradlew assembleDebug
 
 ## Working Habit
 
-Before making code changes, inspect the relevant module and nearby tests. Prefer `rg` / `rg --files` for discovery. Keep tests proportional to risk and run the narrowest useful test set first, then broaden when touching shared behavior.
+Before making code changes, inspect the relevant module and nearby tests. Prefer `rg` / `rg --files` for discovery. Keep tests proportional to impact and run the narrowest useful test set first, then broaden when touching shared behavior.

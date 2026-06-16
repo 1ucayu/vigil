@@ -51,18 +51,6 @@ class ScreenContext(BaseModel):
     current_state: str | None = None
 
 
-class PostconditionContext(BaseModel):
-    """Postcondition evaluation context.
-
-    The executable DSL now reads target-side facts only. ``source_screen`` remains in the
-    API so older callers can pass a before/after pair, but before/after effect predicates
-    are audit metadata and are not part of the executable grammar.
-    """
-
-    source_screen: ScreenContext = Field(default_factory=ScreenContext)
-    target_screen: ScreenContext = Field(default_factory=ScreenContext)
-
-
 class GuardStatus(StrEnum):
     """Three-valued evaluation result for a DSL guard or invariant."""
 
@@ -587,25 +575,6 @@ class DSLEvaluator:
             guard_expr,
             intent_ctx=intent_ctx,
             screen_ctx=screen_ctx,
-            action_ctx=action_ctx,
-        )
-
-    def evaluate_postcondition(
-        self,
-        postcondition_expr: str,
-        postcondition_ctx: PostconditionContext,
-        intent_ctx: IntentContext | None = None,
-        action_ctx: dict[str, Any] | None = None,
-    ) -> GuardResult:
-        """Evaluate executable Psi over the target screen.
-
-        Before/after effect checks are no longer executable DSL predicates; effect
-        requirements are retained as audit metadata by the guard-admission layer.
-        """
-        return self._evaluate_with_context(
-            postcondition_expr,
-            intent_ctx=intent_ctx,
-            screen_ctx=postcondition_ctx.target_screen,
             action_ctx=action_ctx,
         )
 

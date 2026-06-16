@@ -1,8 +1,8 @@
 """Tests for the deterministic widget registry (guard generation, step 2).
 
-Covers stable alias assignment, role inference, selector stability grading, the
-trace-only invariant for ``AppPrior`` (priors never create entries), and risk-hint
-detection. No LLM, DSL compilation, or admission logic is exercised here.
+Covers stable alias assignment, role inference, selector stability grading, and
+the trace-only invariant for ``AppPrior`` (priors never create entries). No LLM,
+DSL compilation, or admission logic is exercised here.
 """
 
 from __future__ import annotations
@@ -263,31 +263,6 @@ def test_registry_includes_runtime_readable_semantic_elements_with_interactables
     assert registry.resource_id_to_alias["payment.product_name"] == "payment_product_name"
 
 
-def test_risk_hints_detect_high_risk_labels():
-    screen = _screen(
-        _el("e_1", class_name="android.widget.Button", text="Send", is_clickable=True),
-        _el("e_2", class_name="android.widget.Button", text="Delete", is_clickable=True),
-        _el("e_3", class_name="android.widget.Button", text="Pay", is_clickable=True),
-        _el(
-            "e_4",
-            class_name="android.widget.Button",
-            text="Transfer",
-            is_clickable=True,
-        ),
-        _el("e_5", class_name="android.widget.Button", text="Allow", is_clickable=True),
-        _el("e_6", class_name="android.widget.Button", text="Save", is_clickable=True),
-    )
-    registry = build_widget_registry_from_screen("s1", screen)
-    by_eid = {e.element_id: e for e in registry.entries.values()}
-
-    assert "send" in by_eid["e_1"].risk_hints
-    assert "delete" in by_eid["e_2"].risk_hints
-    assert "pay" in by_eid["e_3"].risk_hints
-    assert "transfer" in by_eid["e_4"].risk_hints
-    assert "allow" in by_eid["e_5"].risk_hints
-    assert by_eid["e_6"].risk_hints == []
-
-
 def test_llm_widget_aliases_enrich_existing_entries_only():
     screen = _screen(
         _el("e_1", class_name="android.widget.ImageButton", is_clickable=True),
@@ -315,7 +290,6 @@ def test_llm_widget_aliases_enrich_existing_entries_only():
 
     assert len(registry.entries) == 2
     assert by_eid["e_1"].source == "trace+llm"
-    assert "delete" in by_eid["e_1"].risk_hints
     assert "e_missing" not in registry.element_id_to_alias
 
 

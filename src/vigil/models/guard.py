@@ -27,20 +27,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-class RiskLevel(StrEnum):
-    """Legacy report metadata kept for serialized FSM compatibility.
-
-    Runtime guard obligations are represented by ``required`` and
-    ``semantic_binding_required``; admission must not infer obligations from this
-    metadata.
-    """
-
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    UNKNOWN = "unknown"
-
-
 class GuardKind(StrEnum):
     """Category of guard a contract represents."""
 
@@ -115,9 +101,8 @@ class PredicateSpec(BaseModel):
     This is the contract-level analogue of one DSL predicate. ``predicate_type``
     mirrors the supported contract vocabulary; the compiler lowers executable
     ``PredicateSpec`` objects into concrete DSL syntax during the compilation pass.
-    The ``contains`` and before/after effect predicate types are compatibility IR:
-    containment lowers to ``value(element) contains ...``, while effect predicate types
-    are audit-only and do not compile to executable DSL.
+    The ``contains`` predicate type is compatibility IR that lowers to
+    ``value(element) contains ...``.
     """
 
     predicate_type: Literal[
@@ -128,9 +113,6 @@ class PredicateSpec(BaseModel):
         "count",
         "in_state",
         "time_in",
-        "appeared",
-        "disappeared",
-        "value_changed",
     ]
     element: str | None = None
     property: str | None = None
@@ -159,40 +141,17 @@ class BindingRequirement(BaseModel):
     source: str = "generated"
 
 
-class EffectRequirement(BaseModel):
-    """A typed, audit-side postcondition/effect requirement.
-
-    These records describe what should be checked after a transition arrives at its
-    target state, such as content appearing, an item disappearing, or a value
-    changing. The current executable DSL does not admit before/after effects; admission
-    records them as audit-only metadata unless a future evaluator can express them.
-    """
-
-    name: str
-    effect_kind: str = ""
-    description: str = ""
-    element: str | None = None
-    property: str | None = None
-    before: ValueRef | None = None
-    after: ValueRef | None = None
-    evidence: str = ""
-    source: str = "generated"
-    unsupported_reason: str = ""
-
-
 class GuardContract(BaseModel):
     """Typed, pre-compilation description of a transition's intended guard.
 
     A ``GuardContract`` is synthesis IR / metadata attached to a ``Transition``. It
-    captures the guard's kind, legacy report metadata, required intent slots,
-    and typed predicates, plus admission bookkeeping. It does not by itself determine
-    a runtime verdict — the executable guard remains the compiled ``Transition.guard``
-    DSL string.
+    captures the guard's kind, required intent slots, typed predicates, and admission
+    bookkeeping. It does not by itself determine a runtime verdict — the executable
+    guard remains the compiled ``Transition.guard`` DSL string.
     """
 
     kind: GuardKind = GuardKind.UNKNOWN
     required: bool = False
-    risk_level: RiskLevel = RiskLevel.UNKNOWN
     required_slots: list[IntentSlot] = Field(default_factory=list)
     predicates: list[PredicateSpec] = Field(default_factory=list)
     binding_requirements: list[BindingRequirement] = Field(default_factory=list)
@@ -201,52 +160,24 @@ class GuardContract(BaseModel):
     confidence: float = 0.0
     provenance: list[str] = Field(default_factory=list)
     notes: str = ""
-    # Whether the app/spec/task policy requires a semantic (intent-binding) guard.
+    # Legacy audit metadata from older guard-generation schemas; not a runtime gate.
     semantic_binding_required: bool = False
-    # Whether the admitted guard lacks a complete semantic binding (e.g. only
-    # enabledness / structural predicates survived, or the only binding is a
-    # non-executable ``$bind.*`` requirement). Always False unless deliberately set.
+    # Legacy audit metadata from older guard-generation schemas; admission no longer
+    # rejects or downgrades guards based on semantic-completeness labels.
     semantic_binding_incomplete: bool = False
-
-
-class TransitionPostcondition(BaseModel):
-    """Typed, pre-admission description of a transition's intended postcondition.
-
-    ``TransitionPostcondition`` is the target/effect-side sibling of
-    :class:`GuardContract`: it records candidate ``Psi`` predicates and effect
-    obligations proposed by the LLM. Executable predicates are admitted separately into
-    ``Transition.postcondition``; effect requirements remain audit-only metadata unless
-    a future evaluator can express them.
-    """
-
-    kind: str = "unknown"
-    required: bool = False
-    risk_level: RiskLevel = RiskLevel.UNKNOWN
-    required_slots: list[IntentSlot] = Field(default_factory=list)
-    predicates: list[PredicateSpec] = Field(default_factory=list)
-    effect_requirements: list[EffectRequirement] = Field(default_factory=list)
-    intent_effect_required: bool = False
-    intent_effect_incomplete: bool = False
-    confidence: float = 0.0
-    provenance: list[str] = Field(default_factory=list)
-    notes: str = ""
 
 
 class LlmGuardContractCandidate(BaseModel):
     """An LLM-produced guard-contract candidate, before admission.
 
-    The LLM emits a typed precondition :class:`GuardContract` (never free-form DSL)
-    and may also emit a target/effect-side :class:`TransitionPostcondition`. This
-    thin wrapper carries the parsed contract plus the model's self-reported
-    completeness / rejection signal. ``raw_response`` is audit-only and is attached
-    by the pipeline, never requested from the model; it is **not** serialized into
-    the FSM.
+    The LLM emits a typed transition :class:`GuardContract` (never free-form DSL).
+    This thin wrapper carries the parsed contract plus the model's self-reported
+    completeness / rejection signal. ``raw_response`` is audit-only and is attached by
+    the pipeline, never requested from the model; it is **not** serialized into the FSM.
     """
 
     contract: GuardContract = Field(default_factory=GuardContract)
-    postcondition: TransitionPostcondition | None = None
     semantic_binding_incomplete: bool = False
-    postcondition_incomplete: bool = False
     rejection_reason: str = ""
     raw_response: str = ""
     raw_responses: list[str] = Field(default_factory=list)

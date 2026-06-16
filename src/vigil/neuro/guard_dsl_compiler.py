@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from vigil.models.guard import EffectRequirement, GuardContract, PredicateSpec, ValueRef
+from vigil.models.guard import GuardContract, PredicateSpec, ValueRef
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     pass
@@ -121,9 +121,6 @@ def compile_predicate_spec(predicate: PredicateSpec) -> str | None:
             return None
         return f"time_in({start}, {end})"
 
-    if ptype in {"appeared", "disappeared", "value_changed"}:
-        return None
-
     return None
 
 
@@ -141,8 +138,3 @@ def compile_guard_contract(contract: GuardContract) -> str | None:
     if not compiled:
         return None
     return " && ".join(compiled)
-
-
-def compile_effect_requirement(effect: EffectRequirement) -> str | None:
-    """Return ``None`` because post-arrival effects are audit metadata, not DSL."""
-    return None

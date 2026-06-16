@@ -5,7 +5,7 @@ These files are **evaluator-only ground truth** for the Vigil pipeline. They are
 | File | Purpose |
 |------|---------|
 | `fsm.json`   | Ground-truth FSM `M_A = <S, s0, Sigma, delta, Gamma, I, rho>` for VigilClock. |
-| `guards.json`| DSL guards `Gamma(s, a)` and invariants `I(s, a)` for high-risk transitions.   |
+| `guards.json`| DSL guards `Gamma(s, a)` and invariants `I(s, a)` for guard-required transitions. |
 | `tasks.json` | Benchmark tasks with intent slots and per-step expected verifier verdicts.    |
 
 ## How an evaluator should use these

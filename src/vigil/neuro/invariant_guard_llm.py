@@ -106,8 +106,8 @@ def build_invariant_user_prompt(evidence: InvariantEvidence) -> str:
         "/* Contract-first invariant + guard synthesis */\n"
         "Generate the typed InvariantGuardCandidatePacket for this ALREADY-BUILT arrival "
         "state. Topology is fixed: do not invent states/transitions/actions/confidence.\n"
-        "Runtime state invariants are post-arrival checks evaluated with ScreenContext "
-        "only — they may use read/value/count over the arrival registry, including "
+        "Runtime state invariants are evaluated with ScreenContext only — they may use "
+        "read/value/count over the arrival registry, including "
         "contains/not_contains operators on readable text/list values, and must "
         "NOT use $intent.*, $bind.*, action(...), in_state(...), or time_in(...). Put "
         "intent/action-dependent facts in effect_invariant_hints; put pre-action safety "
@@ -138,19 +138,19 @@ def build_invariant_user_prompt(evidence: InvariantEvidence) -> str:
 
     sections.append(
         "[Incoming transitions]\n"
-        "Purpose: preservation evidence + post-arrival effect/side-effect classification.\n"
+        "Purpose: preservation evidence + state-consistency/side-effect classification.\n"
         + ("\n".join(_transition_lines(evidence.incoming)) if evidence.incoming else "- (none)")
     )
 
     sections.append(
         "[Outgoing transitions]\n"
-        "Purpose: pre-action guard obligations and sibling choices.\n"
+        "Purpose: pre-action guard candidates and sibling choices.\n"
         + ("\n".join(_transition_lines(evidence.outgoing)) if evidence.outgoing else "- (none)")
     )
 
     sections.append(
         "[Global Information / Static APK Priors]\n"
-        "Purpose: semantic role/domain/risk hints only; never runtime proof.\n"
+        "Purpose: semantic role/domain hints only; never runtime proof.\n"
         + (
             "\n".join(f"- {hint}" for hint in evidence.static_prior_hints)
             if evidence.static_prior_hints

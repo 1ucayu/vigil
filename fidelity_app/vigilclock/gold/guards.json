@@ -1,5 +1,5 @@
 {
-  "$comment": "Ground-truth DSL guards for high-risk transitions and state invariants. Evaluator-only.",
+  "$comment": "Ground-truth DSL guards for guard-required transitions and state invariants. Evaluator-only.",
   "app_id": "com.vigil.clock",
   "guards": [
     {

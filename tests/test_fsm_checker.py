@@ -206,13 +206,10 @@ class TestFsmChecker:
 
 
 class TestStructuralPurity:
-    """FsmChecker stays purely structural — guard-admission policy is not enforced here.
+    """FsmChecker stays purely structural."""
 
-    Guard policy lives at the DecisionEngine layer (see tests/test_guard_policy.py).
-    """
-
-    def test_high_risk_missing_guard_still_allows_when_confidence_passes(self) -> None:
-        from vigil.models.guard import GuardAdmissionStatus, RiskLevel
+    def test_missing_required_guard_still_allows_when_confidence_passes(self) -> None:
+        from vigil.models.guard import GuardAdmissionStatus
 
         fsm = AppFSM(app_package="com.test.app")
         for sid, name, fp in [("s1", "Source", "fp_s1"), ("s2", "Target", "fp_s2")]:
@@ -232,7 +229,6 @@ class TestStructuralPurity:
                 action={"type": "click", "target": "pay_button", "target_text": "Pay"},
                 confidence=0.95,
                 requires_guard=True,
-                risk_level=RiskLevel.HIGH,
                 guard=None,
                 guard_admission_status=GuardAdmissionStatus.ADMITTED,
             )
@@ -242,6 +238,6 @@ class TestStructuralPurity:
             "s1", {"type": "click", "target": "pay_button", "target_text": "Pay"}
         )
 
-        # Structurally valid + confident -> ALLOW. Policy gating is DecisionEngine's job.
+        # Structurally valid + confident -> ALLOW. Legacy guard metadata is ignored.
         assert out.result == VerifyResult.ALLOW
         assert out.reason == VerifyReason.TRANSITION_VALID

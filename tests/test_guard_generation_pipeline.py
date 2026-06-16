@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
-from vigil.models.guard import GuardAdmissionStatus, GuardKind, RiskLevel
+from vigil.models.guard import GuardAdmissionStatus, GuardKind
 from vigil.neuro.guard_evidence import GuardEvidence
 from vigil.neuro.guard_generation_pipeline import (
     _try_llm_contract,
@@ -97,7 +97,7 @@ def _build_fsm() -> tuple[AppFSM, dict[str, dict[str, Any]]]:
             resource_id=f"{PKG}:id/message_input",
             is_editable=True,
         ),
-        # High-risk control with NO resource_id -> not runtime-resolvable -> rejected.
+        # Side-effecting control with NO resource_id -> not runtime-resolvable -> rejected.
         _el(
             "e_delete",
             class_name="android.widget.Button",
@@ -125,7 +125,7 @@ def _build_fsm() -> tuple[AppFSM, dict[str, dict[str, Any]]]:
             confidence=0.9,
         )
     )
-    # T2: click Send (high risk).
+    # T2: click Send (commit-like guard candidate).
     fsm.add_transition(
         Transition(
             source="s2",
@@ -162,29 +162,27 @@ def test_list_item_transition_gets_guard_attached():
 
     t0 = fsm.transitions[0]
     assert t0.guard == "action(target_text) == $intent.contact_name"
-    assert t0.requires_guard is True
+    assert t0.requires_guard is False
     assert t0.guard_contract is not None
     assert t0.guard_contract.kind is GuardKind.ITEM_BINDING
     assert t0.guard_admission_status == GuardAdmissionStatus.ADMITTED.value
 
 
-def test_semantic_required_transition_attaches_executable_partial_guard():
+def test_commit_transition_attaches_executable_enabled_guard():
     fsm, raw_screens = _build_fsm()
     report = generate_contract_guards(fsm, raw_screens)
 
     t2 = fsm.transitions[2]
-    assert t2.requires_guard is True
-    assert t2.risk_level is RiskLevel.HIGH
-    # Enabled-only semantic-required guard is executable + evidence-backed -> attached,
-    # flagged partial.
+    assert t2.requires_guard is False
+    # Enabled-only guard is executable + evidence-backed -> attached normally.
     assert t2.guard == f"read({PKG}:id/send, is_enabled) == true"
     assert t2.guard_admission_status == GuardAdmissionStatus.ADMITTED.value
-    assert "semantic binding incomplete" in t2.guard_admission_reason
+    assert t2.guard_admission_reason == "admitted: 1 executable predicate(s)"
     # Contract metadata is synced too.
     assert t2.guard_contract is not None
     assert t2.guard_contract.admission_status is GuardAdmissionStatus.ADMITTED
-    assert "semantic binding incomplete" in t2.guard_contract.admission_reason
-    assert report[2]["semantic_binding_incomplete"] is True
+    assert t2.guard_contract.admission_reason == "admitted: 1 executable predicate(s)"
+    assert report[2]["semantic_binding_incomplete"] is False
 
 
 def test_input_text_transition_attaches_input_text_guard():
@@ -201,7 +199,7 @@ def test_rejected_result_does_not_overwrite_existing_guard():
     generate_contract_guards(fsm, raw_screens)
 
     t4 = fsm.transitions[4]
-    # High-risk Delete has no resolvable resource_id -> rejected -> guard untouched.
+    # Delete has no resolvable resource_id -> rejected -> guard untouched.
     assert t4.guard == "preexisting_guard"
     assert t4.guard_admission_status == GuardAdmissionStatus.REJECTED.value
 
@@ -213,15 +211,9 @@ def test_report_includes_status_and_reason():
     assert len(report) == len(fsm.transitions)
     for row in report:
         assert "status" in row and "reason" in row
-        assert "kind" in row and "risk" in row and "required" in row
+        assert "kind" in row and "required" in row
         assert "semantic_binding_incomplete" in row
-        assert "precondition" in row
-        assert "postcondition" in row
-        assert "postcondition_incomplete" in row
-        assert "postcondition_dsl" in row
-        assert "postcondition_status" in row
-        assert "postcondition_reason" in row
-        assert "postcondition_unsupported_effects" in row
+        assert "contract" in row
     assert report[0]["guard"] == "action(target_text) == $intent.contact_name"
 
 
@@ -244,19 +236,18 @@ def test_serialize_deserialize_preserves_guard_metadata(tmp_path):
 
     rt0 = restored.transitions[0]
     assert rt0.guard == "action(target_text) == $intent.contact_name"
-    assert rt0.requires_guard is True
+    assert rt0.requires_guard is False
     assert rt0.guard_contract is not None
     assert rt0.guard_contract.kind is GuardKind.ITEM_BINDING
     assert rt0.guard_admission_status is GuardAdmissionStatus.ADMITTED
 
     rt2 = restored.transitions[2]
-    assert rt2.risk_level is RiskLevel.HIGH
     assert rt2.guard == f"read({PKG}:id/send, is_enabled) == true"
     assert rt2.guard_admission_status is GuardAdmissionStatus.ADMITTED
     # Contract-level admission metadata survives the round-trip.
     assert rt2.guard_contract is not None
     assert rt2.guard_contract.admission_status is GuardAdmissionStatus.ADMITTED
-    assert "semantic binding incomplete" in rt2.guard_contract.admission_reason
+    assert rt2.guard_contract.admission_reason == "admitted: 1 executable predicate(s)"
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +270,6 @@ _VALID_ITEM_CONTRACT = json.dumps(
         "contract": {
             "kind": "item_binding",
             "required": True,
-            "risk_level": "medium",
             "required_slots": [{"name": "contact_name", "slot_type": "string"}],
             "predicates": [
                 {
@@ -289,62 +279,6 @@ _VALID_ITEM_CONTRACT = json.dumps(
                     "expected": {"kind": "intent", "slot": "contact_name"},
                 }
             ],
-        },
-        "postcondition": {
-            "kind": "content_effect",
-            "required": True,
-            "risk_level": "low",
-            "required_slots": [{"name": "contact_name", "slot_type": "string"}],
-            "predicates": [
-                {
-                    "predicate_type": "contains",
-                    "element": f"{PKG}:id/message_input",
-                    "expected": {"kind": "intent", "slot": "contact_name"},
-                }
-            ],
-            "effect_requirements": [
-                {
-                    "name": "thread_visible",
-                    "effect_kind": "appeared",
-                    "description": "Thread screen should be visible.",
-                    "element": f"{PKG}:id/message_input",
-                    "evidence": "target state is s2",
-                }
-            ],
-            "intent_effect_required": False,
-            "intent_effect_incomplete": False,
-        },
-    }
-)
-
-_ARRIVAL_ONLY_POSTCONDITION = json.dumps(
-    {
-        "contract": {
-            "kind": "navigation",
-            "required": False,
-            "risk_level": "low",
-            "predicates": [
-                {
-                    "predicate_type": "action",
-                    "property": "target_text",
-                    "operator": "==",
-                    "expected": {"kind": "literal", "value": "Alice"},
-                }
-            ],
-        },
-        "postcondition": {
-            "kind": "arrival_state",
-            "required": False,
-            "risk_level": "low",
-            "predicates": [
-                {
-                    "predicate_type": "in_state",
-                    "expected": {"kind": "literal", "value": "s2"},
-                    "args": {"state": "s2"},
-                }
-            ],
-            "intent_effect_required": False,
-            "intent_effect_incomplete": False,
         },
     }
 )
@@ -363,91 +297,8 @@ def test_hybrid_accepts_complete_llm_contract():
     )
     assert report[0]["guard_origin"] == "llm"
     assert report[0]["guard"] == "action(target_text) == $intent.contact_name"
-    assert report[0]["precondition"]["kind"] == "item_binding"
-    assert report[0]["postcondition"]["kind"] == "content_effect"
-    assert report[0]["postcondition_incomplete"] is False
-    assert (
-        report[0]["postcondition_dsl"]
-        == f"value({PKG}:id/message_input) contains $intent.contact_name"
-    )
-    assert report[0]["postcondition_status"] == "admitted"
-    assert report[0]["postcondition_unsupported_effects"] == [
-        "thread_visible: appeared effect is audit-only"
-    ]
+    assert report[0]["contract"]["kind"] == "item_binding"
     assert fsm.transitions[0].guard == "action(target_text) == $intent.contact_name"
-    assert (
-        fsm.transitions[0].postcondition
-        == f"value({PKG}:id/message_input) contains $intent.contact_name"
-    )
-    assert fsm.transitions[0].postcondition_admission_status is GuardAdmissionStatus.ADMITTED
-    assert fsm.transitions[0].postcondition_contract is not None
-    assert fsm.transitions[0].postcondition_contract.kind == "content_effect"
-    assert (
-        fsm.transitions[0].postcondition_contract.effect_requirements[0].unsupported_reason
-        == "appeared effect is audit-only"
-    )
-
-
-def test_hybrid_keeps_arrival_only_postcondition_on_transition():
-    fsm, raw_screens = _build_fsm()
-    report = generate_contract_guards(
-        fsm,
-        raw_screens,
-        guard_source="hybrid",
-        llm=_FakeLlm(_ARRIVAL_ONLY_POSTCONDITION),
-    )
-
-    assert report[0]["postcondition_status"] == "admitted"
-    assert report[0]["postcondition_dsl"] == "in_state(s2)"
-    assert report[0]["postcondition_reason"] == "admitted: 1 executable postcondition predicate(s)"
-    assert fsm.transitions[0].postcondition == "in_state(s2)"
-    assert fsm.transitions[0].postcondition_admission_status is GuardAdmissionStatus.ADMITTED
-
-
-def test_hybrid_rejects_postcondition_slot_missing_from_precondition():
-    missing_slot = json.dumps(
-        {
-            "contract": {
-                "kind": "navigation",
-                "required": False,
-                "risk_level": "low",
-                "predicates": [
-                    {
-                        "predicate_type": "action",
-                        "property": "target_text",
-                        "operator": "==",
-                        "expected": {"kind": "literal", "value": "Alice"},
-                    }
-                ],
-            },
-            "postcondition": {
-                "kind": "content_effect",
-                "required": True,
-                "risk_level": "low",
-                "required_slots": [{"name": "contact_name", "slot_type": "string"}],
-                "predicates": [
-                    {
-                        "predicate_type": "contains",
-                        "element": f"{PKG}:id/message_input",
-                        "expected": {"kind": "intent", "slot": "contact_name"},
-                    }
-                ],
-                "intent_effect_required": True,
-                "intent_effect_incomplete": False,
-            },
-        }
-    )
-    fsm, raw_screens = _build_fsm()
-    report = generate_contract_guards(
-        fsm,
-        raw_screens,
-        guard_source="hybrid",
-        llm=_FakeLlm(missing_slot),
-    )
-
-    assert report[0]["postcondition_status"] == "rejected"
-    assert "not declared by precondition" in report[0]["postcondition_reason"]
-    assert fsm.transitions[0].postcondition is None
 
 
 def test_hybrid_falls_back_to_deterministic_on_invalid_llm():
@@ -499,8 +350,7 @@ def test_hybrid_writes_llm_audit_for_invalid_candidate(tmp_path):
     assert payload["raw_responses"]
     assert "not valid JSON" in payload["parse_errors"][0]
     assert "prompt_hash" in payload
-    assert "precondition" in payload
-    assert "postcondition" in payload
+    assert "contract" in payload
     assert "guard_class_key" not in report[0]
 
 
@@ -517,7 +367,6 @@ def test_audit_source_replays_existing_candidate_without_llm(tmp_path):
                 "contract": {
                     "kind": "item_binding",
                     "required": True,
-                    "risk_level": "medium",
                     "semantic_binding_required": True,
                     "semantic_binding_incomplete": True,
                     "required_slots": [{"name": "contact_name", "slot_type": "string"}],
@@ -581,15 +430,13 @@ def _binding_evidence() -> GuardEvidence:
     )
 
 
-def test_try_llm_contract_rejects_incomplete_semantic_required():
-    # Semantic-required, enabled-only (no intent binding) on a resolvable element:
-    # admitted-but-incomplete -> hybrid must reject in favor of deterministic fallback.
+def test_try_llm_contract_accepts_enabled_only_with_legacy_semantic_flag():
+    # Legacy semantic_binding_required metadata no longer rejects an executable guard.
     enabled_only = json.dumps(
         {
             "contract": {
                 "kind": "confirm_commit",
                 "required": True,
-                "risk_level": "high",
                 "semantic_binding_required": True,
                 "predicates": [
                     {
@@ -606,18 +453,18 @@ def test_try_llm_contract_rejects_incomplete_semantic_required():
     contract, reason, result = _try_llm_contract(
         _binding_evidence(), _FakeLlm(enabled_only), "transition_guard_generation.spec"
     )
-    assert contract is None
-    assert result is None
-    assert "incomplete" in reason
+    assert contract is not None
+    assert reason == ""
+    assert result is not None and result.admitted is True
+    assert result.semantic_binding_incomplete is False
 
 
-def test_try_llm_contract_accepts_enabled_only_when_only_risk_metadata():
+def test_try_llm_contract_accepts_enabled_only_when_semantic_binding_not_required():
     enabled_only = json.dumps(
         {
             "contract": {
                 "kind": "confirm_commit",
                 "required": True,
-                "risk_level": "high",
                 "predicates": [
                     {
                         "predicate_type": "read",
@@ -645,7 +492,6 @@ def test_try_llm_contract_accepts_complete_binding():
             "contract": {
                 "kind": "confirm_commit",
                 "required": True,
-                "risk_level": "high",
                 "required_slots": [{"name": "recipient", "slot_type": "string"}],
                 "predicates": [
                     {

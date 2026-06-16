@@ -5,7 +5,6 @@ from __future__ import annotations
 from vigil.symbolic.dsl_evaluator import (
     DSLEvaluator,
     IntentContext,
-    PostconditionContext,
     ScreenContext,
 )
 
@@ -220,43 +219,6 @@ class TestLogicClauseParsing:
         assert parsed["status"] == "parse_error"
         assert parsed["clauses"] == []
         assert "error" in parsed
-
-
-class TestPostconditionDslScope:
-    def setup_method(self) -> None:
-        self.ev = DSLEvaluator()
-
-    def test_postcondition_reads_target_side_predicates(self) -> None:
-        ctx = PostconditionContext(
-            target_screen=ScreenContext(
-                elements={
-                    "title": {"text": "Thread"},
-                    "message_list": {"children": [{"text": "hello"}]},
-                },
-                current_state="s2",
-            ),
-        )
-
-        result = self.ev.evaluate_postcondition(
-            'read(title, text) == "Thread" && value(message_list) contains "hello" '
-            "&& in_state(s2)",
-            postcondition_ctx=ctx,
-        )
-
-        assert result.passed is True
-
-    def test_effect_predicate_is_not_executable_dsl(self) -> None:
-        result = self.ev.evaluate("appeared(new_panel)")
-
-        assert result.passed is False
-        assert result.status == "unknown"
-        assert "Parse error" in result.failure_reason
-
-    def test_parse_logic_clauses_rejects_effect_predicates(self) -> None:
-        parsed = self.ev.parse_logic_clauses("appeared(new_panel) && value_changed(counter)")
-
-        assert parsed["status"] == "parse_error"
-        assert parsed["clauses"] == []
 
 
 # ============================================================

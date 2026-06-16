@@ -2052,14 +2052,14 @@ class TestScopePolicyExplorer:
 
 
 # ============================================================
-# Section G — generic risk policy
+# Section G — policy-neutral action enumeration
 # ============================================================
 
 
-class TestRiskPolicyExplorer:
-    def test_destructive_element_skipped_by_default(self, explorer: AppExplorer) -> None:
-        risky = UIElement(
-            element_id="e_risk",
+class TestPolicyNeutralEnumeration:
+    def test_side_effect_label_is_enumerated(self, explorer: AppExplorer) -> None:
+        reset = UIElement(
+            element_id="e_reset",
             class_name="android.widget.Button",
             package="com.android.settings",
             resource_id="com.example:id/reset",
@@ -2082,7 +2082,7 @@ class TestRiskPolicyExplorer:
             screen_id="s",
             activity_name=".X",
             package_name="com.android.settings",
-            elements=[risky, safe],
+            elements=[reset, safe],
         )
         screens = iter([scr, scr])
         with (
@@ -2093,39 +2093,7 @@ class TestRiskPolicyExplorer:
             actions = explorer._enumerate_actions_for_state("sid", [])
         rids = {a.target_resource_id for a in actions}
         assert "com.example:id/wifi" in rids
-        assert "com.example:id/reset" not in rids
-
-
-# ============================================================
-# Clarification: severity tiers (hard-block vs low-trust)
-# ============================================================
-
-
-class TestRiskSeverityTiers:
-    def test_hard_block_categories_blocked_even_when_allow_risky(self) -> None:
-        from vigil.neuro.risk_policy import RiskPolicy, RiskSeverity
-
-        p = RiskPolicy.from_config()
-        # allow_risky=True still blocks hard-block categories.
-        p2 = RiskPolicy(categories=p.categories, severity=p.severity, allow_risky=True)
-        assert p.severity.get("destructive") == RiskSeverity.HARD_BLOCK
-        assert p.severity.get("payment") == RiskSeverity.HARD_BLOCK
-        assert p.severity.get("credential") == RiskSeverity.HARD_BLOCK
-        assert p.severity.get("irreversible") == RiskSeverity.HARD_BLOCK
-        assert p2.should_skip(p2.tag("Factory reset")) is True
-        assert p2.should_skip(p2.tag("Pay now")) is True
-
-    def test_low_trust_categories_unblocked_when_allow_risky(self) -> None:
-        from vigil.neuro.risk_policy import RiskPolicy, RiskSeverity
-
-        p = RiskPolicy.from_config()
-        assert p.severity.get("commit") == RiskSeverity.LOW_TRUST
-        assert p.severity.get("permission") == RiskSeverity.LOW_TRUST
-        assert p.severity.get("privacy") == RiskSeverity.LOW_TRUST
-        p_strict = RiskPolicy(categories=p.categories, severity=p.severity, allow_risky=False)
-        p_perm = RiskPolicy(categories=p.categories, severity=p.severity, allow_risky=True)
-        assert p_strict.should_skip(p_strict.tag("Submit")) is True
-        assert p_perm.should_skip(p_perm.tag("Submit")) is False
+        assert "com.example:id/reset" in rids
 
 
 # ============================================================
@@ -2260,16 +2228,16 @@ class TestAndroidSystemLowTrust:
 
 
 # ============================================================
-# Clarification: ActionAttempt for risky-skipped enumeration
+# Clarification: ActionAttempt for filtered enumeration
 # ============================================================
 
 
 class TestActionAttempts:
-    def test_risky_element_records_action_attempt(self, explorer: AppExplorer) -> None:
+    def test_side_effect_label_is_regular_action(self, explorer: AppExplorer) -> None:
         from vigil.neuro.explorer import ActionAttempt as _ActionAttempt
 
-        risky = UIElement(
-            element_id="e_risk",
+        reset = UIElement(
+            element_id="e_reset",
             class_name="android.widget.Button",
             package="com.android.settings",
             resource_id="com.example:id/reset",
@@ -2282,7 +2250,7 @@ class TestActionAttempts:
             screen_id="s",
             activity_name=".X",
             package_name="com.android.settings",
-            elements=[risky],
+            elements=[reset],
         )
         screens = iter([scr, scr])
         with (
@@ -2290,11 +2258,10 @@ class TestActionAttempts:
             patch.object(explorer, "_execute_action", return_value=True),
             patch.object(explorer, "_capture_screen", side_effect=lambda: next(screens)),
         ):
-            explorer._enumerate_actions_for_state("sid", [])
-        # Action was NOT added to the formal action list, but an
-        # ActionAttempt with status='skipped_risky' was recorded.
-        assert any(
-            isinstance(a, _ActionAttempt) and a.status == "skipped_risky"
+            actions = explorer._enumerate_actions_for_state("sid", [])
+        assert any(a.target_resource_id == "com.example:id/reset" for a in actions)
+        assert not any(
+            isinstance(a, _ActionAttempt) and a.status.startswith("skipped")
             for a in explorer._action_attempts
         )
 

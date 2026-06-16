@@ -10,7 +10,7 @@ joins:
 - every resolvable raw-screen observation of the state (repeated visits are stronger
   evidence than a single screenshot, and are what the admission layer replays against),
 - the existing ``invariant_specs`` already on the state,
-- incoming / outgoing transition summaries (for risk classification + guard candidates),
+- incoming / outgoing transition summaries (for side-effect classification + guard candidates),
 - static-prior hints (``priors only, never proof``).
 
 This module only *reads* the FSM and raw trace screens. It adds no edges, changes no

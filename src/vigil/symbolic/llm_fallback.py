@@ -49,7 +49,7 @@ Return ONLY a JSON object of the form:
 Guidance:
   - Prefer ALLOW for routine navigation (back, home, tapping menu items) \
 on known screens.
-  - Prefer DENY if the action looks destructive, risky, or clearly off-task.
+  - Prefer DENY if the action looks destructive or clearly off-task.
   - If the screen is unknown and the action is non-reversible (pay, send, \
 delete, confirm purchase), prefer DENY.
   - Do not explain outside the JSON. Do not use markdown or code fences."""

@@ -48,7 +48,6 @@ from vigil.core.ui_selectors import (
 from vigil.models.action import Action, ActionType
 from vigil.models.state import RawScreen, UIElement, _normalize_dynamic
 from vigil.neuro.app_prior import AppPrior
-from vigil.neuro.risk_policy import RiskPolicy
 from vigil.neuro.scope_policy import ScopeCategory, ScopePolicy
 from vigil.neuro.selector_resolution import (
     ResolutionStatus,
@@ -74,20 +73,6 @@ ACTION_TYPE_WEIGHT: dict[ActionType, float] = {
     ActionType.SCROLL_DOWN: 0.5,
     ActionType.SCROLL_UP: 0.5,
 }
-
-# Generic risk policy replaces the previous hardcoded keyword list. Risk
-# categories now live in ``configs/android_platform.yaml`` and are loaded
-# through :class:`vigil.neuro.risk_policy.RiskPolicy`. The constants below
-# remain as empty-set / no-op stubs so external imports do not break; new
-# code should use ``self._risk_policy.tag(...)`` instead.
-DANGEROUS_TEXT_PATTERNS: frozenset[str] = frozenset()
-
-
-def _is_dangerous_element(text: str | None, content_desc: str | None) -> str | None:
-    """Deprecated. Returns None; risk classification is now done via
-    :class:`vigil.neuro.risk_policy.RiskPolicy`."""
-    _ = (text, content_desc)
-    return None
 
 
 def action_key(action: Action) -> str:
@@ -299,14 +284,14 @@ class ExplorationTrace(BaseModel):
     """One observation record. Compatible with the previous trace schema;
     adds ``intended_source_state_id``, drops ``failure_reason``, and carries
     a free-form ``metadata`` dict for downstream diagnostics (drift,
-    selector resolution status, scope category, risk tags, INPUT_TEXT
-    bookkeeping, nav-path trust). Older traces without metadata
-    deserialize correctly because the field has a default factory.
+    selector resolution status, scope category, INPUT_TEXT bookkeeping, and nav-path
+    trust). Older traces without metadata deserialize correctly because the field has a
+    default factory.
 
     Invariant: a :class:`ExplorationTrace` represents an *executed*
     transition observation only. Actions that were refused before
-    execution (risk-blocked, ambiguous selector, out-of-scope element,
-    INPUT_TEXT that could not guarantee clear-before-set) are recorded
+    execution (ambiguous selector, out-of-scope element, INPUT_TEXT that could not
+    guarantee clear-before-set) are recorded
     as :class:`ActionAttempt` records and MUST NOT appear in this list,
     so the FSM builder never turns them into transitions.
     """
@@ -335,8 +320,8 @@ class ActionAttempt(BaseModel):
     source_state_id: str = ""
     source_screen_id: str = ""
     action: Action
-    # Status values: "skipped_risky" | "ambiguous_selector" |
-    # "skipped_unsafe_input" | "skipped_scope" | "missing_selector"
+    # Status values: "ambiguous_selector" | "skipped_unsafe_input" |
+    # "skipped_scope" | "missing_selector"
     status: str
     reason: str = ""
     timestamp: str = ""
@@ -461,12 +446,9 @@ class AppExplorer:
         # trace under "scroll_observations" for downstream analysis.
         self._scroll_observations: list[ScrollObservation] = []
 
-        # Generic single-app scope + risk policies. Loaded from
-        # configs/android_platform.yaml. No app-specific allowlists are
-        # introduced here — defaults are Android framework packages and
-        # platform-level risk keywords.
+        # Generic single-app scope policy. No app-specific allowlists are introduced
+        # here; defaults are Android framework packages.
         self._scope_policy: ScopePolicy = self._build_scope_policy()
-        self._risk_policy: RiskPolicy = RiskPolicy.from_config()
         # Action keys that were enumerated as formal SCROLL candidates per
         # source state. Used to attach metadata to traces so downstream
         # consumers can distinguish formal scroll affordances from
@@ -818,8 +800,7 @@ class AppExplorer:
 
         SYSTEM_UI elements are filtered out — they belong to status / nav
         bar overlays and must not contribute to app-level identity or
-        action enumeration. Risky elements (matched by RiskPolicy) are
-        skipped when ``allow_risky`` is false.
+        action enumeration.
         """
         if not self._cold_start_app():
             logger.warning(f"cold-start failed during enumerate of {state_id[:6]}")
@@ -829,7 +810,6 @@ class AppExplorer:
             time.sleep(self.POST_ACTION_WAIT)
 
         collected: dict[str, Action] = {}
-        skipped_risky = 0
         scroll_candidate_keys: set[str] = set()
         saw_source_screen = False
         last_anchors: frozenset[tuple[str, str]] | None = None
@@ -863,42 +843,10 @@ class AppExplorer:
                     # already filtered above.
                     if cat not in (ScopeCategory.IN_APP, ScopeCategory.ANDROID_SYSTEM):
                         continue
-                risk_tags = self._risk_policy.tag(e.text, e.content_description)
-                if risk_tags and self._risk_policy.should_skip(risk_tags):
-                    skipped_risky += 1
-                    severity = self._risk_policy.max_severity(risk_tags)
-                    self._action_attempts.append(
-                        ActionAttempt(
-                            step_number=0,
-                            source_state_id=state_id,
-                            source_screen_id=screen.screen_id,
-                            action=_build_interact_action(e, screen.elements)
-                            if interactable
-                            else Action(
-                                action_type=ActionType.CLICK,
-                                target_resource_id=e.resource_id,
-                                target_text=e.text,
-                            ),
-                            status="skipped_risky",
-                            reason=f"risk severity={severity}",
-                            timestamp=_now_iso(),
-                            metadata={
-                                "risk_tags": list(risk_tags),
-                                "severity": severity.value if severity else None,
-                            },
-                        )
-                    )
-                    logger.debug(
-                        f"Skipping risky element {e.element_id} "
-                        f"severity={severity} risk_tags={risk_tags}"
-                    )
-                    continue
                 if interactable:
                     action = _build_interact_action(e, screen.elements)
                     if not is_action_identifiable(action):
                         continue
-                    if risk_tags:
-                        action.metadata.setdefault("risk_tags", list(risk_tags))
                     collected.setdefault(action_key(action), action)
                 if scrollable_candidate:
                     # Emit formal SCROLL_DOWN / SCROLL_UP candidates per
@@ -960,10 +908,6 @@ class AppExplorer:
             self._swipe_scroll(ActionType.SCROLL_DOWN, scroll)
             time.sleep(self.POST_ACTION_WAIT)
 
-        if skipped_risky:
-            logger.info(
-                f"state={state_id[:6]} skipped {skipped_risky} risky element(s) during enumeration"
-            )
         if nav_path and saw_source_screen:
             back_action = Action(
                 action_type=ActionType.NAVIGATE_BACK,
@@ -1012,9 +956,6 @@ class AppExplorer:
                 intended_source_state_id, set()
             ):
                 md.setdefault("scroll_candidate", True)
-            # Risk tags carried on the action object propagate to trace md.
-            if action.metadata.get("risk_tags"):
-                md.setdefault("risk_tags", list(action.metadata["risk_tags"]))
             return ExplorationTrace(
                 step_number=step,
                 intended_source_state_id=intended_source_state_id,
@@ -1523,7 +1464,7 @@ class AppExplorer:
             self._last_execution_metadata["input_policy"] = "skipped_unsafe"
             logger.warning(
                 "INPUT_TEXT refused: cannot clear existing text without "
-                "risking append-on-existing-value"
+                "possibly appending to the existing value"
             )
             return False
 

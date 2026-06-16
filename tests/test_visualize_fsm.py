@@ -20,15 +20,6 @@ from vigil.models.fsm import (
     StateInvariant,
     Transition,
 )
-from vigil.models.guard import (
-    EffectRequirement,
-    GuardAdmissionStatus,
-    IntentSlot,
-    PredicateSpec,
-    SlotType,
-    TransitionPostcondition,
-    ValueRef,
-)
 from vigil.scripts.visualize_fsm import (
     _fsm_to_view_dict,
     default_output_path,
@@ -284,38 +275,6 @@ def test_render_fsm_compare_html_includes_gold_explored_details_and_screenshots(
 
     explored = _sensitive_fsm()
     explored.transitions[0].guard = _GUARD
-    explored.transitions[
-        0
-    ].postcondition = "in_state(s2) && value(detail.title) contains $intent.selected_item"
-    explored.transitions[0].postcondition_admission_status = GuardAdmissionStatus.ADMITTED
-    explored.transitions[0].postcondition_admission_reason = "admitted: 2 executable predicates"
-    explored.transitions[0].postcondition_contract = TransitionPostcondition(
-        kind="arrival_state",
-        required=True,
-        required_slots=[IntentSlot(name="selected_item", slot_type=SlotType.STRING)],
-        predicates=[
-            PredicateSpec(
-                predicate_type="in_state",
-                expected=ValueRef(kind="literal", value="s2"),
-                args={"state": "s2"},
-            ),
-            PredicateSpec(
-                predicate_type="contains",
-                element="detail.title",
-                expected=ValueRef(kind="intent", slot="selected_item"),
-            ),
-        ],
-        effect_requirements=[
-            EffectRequirement(
-                name="detail_visible",
-                effect_kind="appeared",
-                description="Detail screen should be visible after opening the item.",
-                evidence="target state is s2",
-                unsupported_reason="audit-only effect requirement",
-            )
-        ],
-        intent_effect_required=True,
-    )
     explored.states["s1"].invariant_specs[0].expr = 'read(screen_marker, text) == "screen:secret"'
     explored.serialize(explored_fsm_path)
     (screens_dir / "raw_screen_secret.png").write_bytes(b"not-a-real-png")
@@ -363,9 +322,7 @@ def test_render_fsm_compare_html_includes_gold_explored_details_and_screenshots(
     assert "layoutLinksFor" in html
     assert "foldLinks(rawLinks)" in html
     assert "folded identical actions" in html
-    assert "precondition Gamma DSL/Lark parsed clauses" in html
-    assert "postcondition Psi DSL/Lark parsed clauses" in html
-    assert "audit-only unsupported effect requirements" in html
+    assert "transition guard Gamma DSL/Lark parsed clauses" in html
     assert "invariant logic clauses" in html
     assert payload["golden"]["summary"]["num_states"] == 2
     assert payload["golden"]["summary"]["global_nav_edges"] == 1
@@ -385,21 +342,6 @@ def test_render_fsm_compare_html_includes_gold_explored_details_and_screenshots(
     assert (
         payload["explored"]["transitions"][0]["guard_logic"]["clauses"][0]["predicate_type"]
         == "read"
-    )
-    assert payload["explored"]["transitions"][0]["postcondition"] == (
-        "in_state(s2) && value(detail.title) contains $intent.selected_item"
-    )
-    assert payload["explored"]["transitions"][0]["postcondition_logic"]["status"] == "parsed"
-    assert (
-        payload["explored"]["transitions"][0]["postcondition_logic"]["clauses"][0]["text"]
-        == "in_state(s2)"
-    )
-    assert (
-        payload["explored"]["transitions"][0]["postcondition_logic"]["clauses"][1]["text"]
-        == "value(detail.title) contains $intent.selected_item"
-    )
-    assert payload["explored"]["transitions"][0]["postcondition_effects"][0]["text"].startswith(
-        "detail_visible:"
     )
     assert payload["explored"]["states"][0]["raw_screen_images"] == [
         {"screen_id": "raw_screen_secret", "src": "../screens/raw_screen_secret.png"}

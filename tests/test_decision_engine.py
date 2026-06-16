@@ -538,24 +538,24 @@ class TestInvariantIntegration:
         assert out.result == VerifyResult.ALLOW
         assert out.reason == VerifyReason.TRANSITION_VALID
 
-    def test_post_arrival_invariant_proven_false_denies(self) -> None:
+    def test_state_invariant_proven_false_denies(self) -> None:
         fsm = self._fsm_with_invariant("count(toolbar) == 1")
         engine = DecisionEngine(fsm)
-        out = engine.post_arrival_check("s2", self._toolbar_screen(child_count=2))
+        out = engine.check_state_invariants("s2", self._toolbar_screen(child_count=2))
         assert out.result == VerifyResult.DENY
         assert out.reason == VerifyReason.INVARIANT_FAILED
 
-    def test_post_arrival_invariant_unknown_routes_to_uncertain(self) -> None:
+    def test_state_invariant_unknown_routes_to_uncertain(self) -> None:
         fsm = self._fsm_with_invariant("count(toolbar) == 1")
         engine = DecisionEngine(fsm)
-        out = engine.post_arrival_check("s2", RawScreen(screen_id="target", elements=[]))
+        out = engine.check_state_invariants("s2", RawScreen(screen_id="target", elements=[]))
         assert out.result == VerifyResult.UNCERTAIN
         assert out.reason == VerifyReason.INVARIANT_INCONCLUSIVE
 
-    def test_post_arrival_invariant_pass_preserves_allow(self) -> None:
+    def test_state_invariant_pass_preserves_allow(self) -> None:
         fsm = self._fsm_with_invariant("count(toolbar) == 1")
         engine = DecisionEngine(fsm)
-        out = engine.post_arrival_check("s2", self._toolbar_screen(child_count=1))
+        out = engine.check_state_invariants("s2", self._toolbar_screen(child_count=1))
         assert out.result == VerifyResult.ALLOW
 
     def test_guard_inconclusive_routes_to_uncertain(self) -> None:
@@ -597,7 +597,7 @@ class TestInvariantIntegration:
 
 def test_verify_by_state_minimal_action_context_evaluates_input_text() -> None:
     """verify_by_state builds a minimal action context (no RawScreen) for action(input_text)."""
-    from vigil.models.guard import GuardAdmissionStatus, RiskLevel
+    from vigil.models.guard import GuardAdmissionStatus
 
     fsm = AppFSM(app_package="com.test.app")
     fsm.add_state(
@@ -625,7 +625,6 @@ def test_verify_by_state_minimal_action_context_evaluates_input_text() -> None:
             action=action,
             confidence=0.95,
             guard="action(input_text) == $intent.message_text",
-            risk_level=RiskLevel.MEDIUM,
             guard_admission_status=GuardAdmissionStatus.ADMITTED,
         )
     )

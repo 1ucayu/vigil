@@ -78,7 +78,7 @@ class TestInvariantChecker:
         assert result.all_passed
         assert result.total == 0
 
-    def test_check_arrival_true(self, fsm_with_invariants: AppFSM) -> None:
+    def test_all_state_invariants_pass_true(self, fsm_with_invariants: AppFSM) -> None:
         checker = InvariantChecker(fsm_with_invariants)
         ctx = ScreenContext(
             elements={
@@ -86,9 +86,9 @@ class TestInvariantChecker:
                 "fab_button": {"is_clickable": True},
             }
         )
-        assert checker.check_arrival("s1", ctx) is True
+        assert checker.all_state_invariants_pass("s1", ctx) is True
 
-    def test_check_arrival_false(self, fsm_with_invariants: AppFSM) -> None:
+    def test_all_state_invariants_pass_false(self, fsm_with_invariants: AppFSM) -> None:
         checker = InvariantChecker(fsm_with_invariants)
         ctx = ScreenContext(
             elements={
@@ -96,7 +96,7 @@ class TestInvariantChecker:
                 "fab_button": {"is_clickable": False},
             }
         )
-        assert checker.check_arrival("s1", ctx) is False
+        assert checker.all_state_invariants_pass("s1", ctx) is False
 
 
 # ── Three-valued invariants ─────────────────────────────────────

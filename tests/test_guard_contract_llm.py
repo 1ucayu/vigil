@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from vigil.models.guard import GuardKind, RiskLevel
+from vigil.models.guard import GuardKind
 from vigil.neuro.guard_contract_llm import (
     build_guard_user_prompt,
     generate_llm_guard_candidate,
@@ -51,7 +51,6 @@ def _evidence() -> GuardEvidence:
         resource_id="com.test:id/send",
         text="Send",
         role=WidgetRole.BUTTON,
-        risk_hints=["send"],
         readable_props=["text", "is_enabled"],
     )
     return GuardEvidence(
@@ -98,7 +97,6 @@ def _contract_json(**overrides: Any) -> dict[str, Any]:
     contract = {
         "kind": "confirm_commit",
         "required": True,
-        "risk_level": "high",
         "required_slots": [
             {"name": "contact_name", "slot_type": "string", "description": "", "required": True}
         ],
@@ -126,17 +124,13 @@ def _contract_json(**overrides: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_user_prompt_includes_evidence_and_generation_order():
+def test_user_prompt_includes_transition_guard_scope():
     prompt = build_guard_user_prompt(_evidence())
     assert "s1" in prompt and "s2" in prompt
     assert "Send" in prompt
-    assert "transition pre/post contract" in prompt
-    assert "precondition" in prompt
-    assert "postcondition" in prompt
-    assert "compatibility contract" in prompt
+    assert "transition guard contract" in prompt
+    assert "contract" in prompt
     assert "background evidence" in prompt
-    assert "Generation order" in prompt
-    assert "I(Q) first, Psi second, Gamma last" in prompt
     assert "[Target-state invariants I(Q)]" in prompt
     assert 'read(com.test:id/banner, text) == "Sent"' in prompt
     assert "messaging/thread" in prompt
@@ -184,7 +178,6 @@ def test_parses_wrapper_json():
     candidate = parse_llm_guard_candidate(raw)
     assert candidate.rejection_reason == ""
     assert candidate.contract.kind is GuardKind.CONFIRM_COMMIT
-    assert candidate.contract.risk_level is RiskLevel.HIGH
     assert candidate.raw_response == raw
 
 
@@ -192,25 +185,13 @@ def test_parses_precondition_from_transition_contract_wrapper():
     raw = json.dumps(
         {
             "precondition": _contract_json(),
-            "postcondition": {
-                "kind": "message_sent",
-                "required": True,
-                "predicates": [],
-                "intent_effect_required": True,
-                "intent_effect_incomplete": True,
-            },
             "semantic_binding_incomplete": False,
-            "postcondition_incomplete": True,
         }
     )
     candidate = parse_llm_guard_candidate(raw)
     assert candidate.rejection_reason == ""
     assert candidate.contract.kind is GuardKind.CONFIRM_COMMIT
     assert candidate.contract.required is True
-    assert candidate.postcondition is not None
-    assert candidate.postcondition.kind == "message_sent"
-    assert candidate.postcondition.intent_effect_required is True
-    assert candidate.postcondition_incomplete is True
 
 
 def test_parses_bare_contract_object():
@@ -258,27 +239,6 @@ def test_disallowed_predicate_expected_kind_is_rejected():
     candidate = parse_llm_guard_candidate(json.dumps({"contract": bad}))
     assert candidate.rejection_reason
     assert "not allowed" in candidate.rejection_reason
-
-
-def test_disallowed_postcondition_expected_kind_is_rejected():
-    postcondition = {
-        "kind": "arrival_state",
-        "required": True,
-        "predicates": [
-            {
-                "predicate_type": "read",
-                "element": "banner",
-                "property": "text",
-                "operator": "==",
-                "expected": {"kind": "read", "element": "other", "property": "text"},
-            }
-        ],
-    }
-    candidate = parse_llm_guard_candidate(
-        json.dumps({"contract": _contract_json(), "postcondition": postcondition})
-    )
-    assert candidate.rejection_reason
-    assert "postcondition predicate" in candidate.rejection_reason
 
 
 def test_binding_requirements_preserved_as_metadata():

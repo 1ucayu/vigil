@@ -370,7 +370,7 @@ def admit_state_invariant_candidate(
         return _reject("not a single parseable DSL predicate")
 
     if parsed.kind == "action":
-        return _hint("depends_on_action", "action(...) is not a post-arrival state fact")
+        return _hint("depends_on_action", "action(...) is not a state-invariant fact")
     if parsed.kind in ("in_state", "time_in"):
         return _hint(
             "unsupported_predicate",

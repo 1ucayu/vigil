@@ -55,24 +55,7 @@ def get_error_patterns() -> list[str]:
     return _load_config().get("error_patterns", [])
 
 
-def get_risk_categories() -> dict[str, list[str]]:
-    """Get generic risk categories mapping (category -> keyword list).
-
-    Keywords are matched case-insensitively as substrings against an
-    element's text or content-description. Categories are platform-level
-    (destructive / credential / payment / permission / privacy / irreversible /
-    commit) — NOT app-specific.
-    """
-    raw = _load_config().get("risk_categories", {})
-    return {k: list(v) for k, v in raw.items()}
-
-
 def get_scope_defaults() -> dict[str, Any]:
     """Get scope policy defaults (android_system_packages / system_ui_packages
     / launcher_patterns / allow_android_system)."""
     return _load_config().get("scope", {})
-
-
-def get_exploration_policy() -> dict[str, Any]:
-    """Get exploration policy toggles (e.g., ``allow_risky``)."""
-    return _load_config().get("exploration", {})

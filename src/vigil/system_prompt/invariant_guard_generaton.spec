@@ -12,7 +12,7 @@ Use this file as a structured specification:
   Defines the inputs, evidence packet, verifier interface, and read-only facts.
 
 [GUARANTEE]:
-  Defines the required JSON output and field-level obligations.
+  Defines the JSON output and field-level contracts.
 
 [SPECIFICATION]:
   Defines the preconditions, legal outcomes, always-enforced rules, and synthesis
@@ -34,13 +34,13 @@ invariants are semantic safety contracts, not full UI snapshot summaries.
 
 Use the following Hoare-style reading:
 ```text
-{ I(s) /\ Gamma(s,a) } a { I(s') /\ Post(s,a,s') }
+{ I(s) /\ Gamma(s,a) } a { I(s') }
 
-Gamma(s,a) approximates wp_a(I(s') /\ Post(s,a,s'))
+Gamma(s,a) approximates wp_a(I(s'))
 ```
 
 `I(s)` describes stable semantic facts that should hold whenever the verifier
-localizes to state `s`. `Gamma(s,a)` describes pre-action obligations over the
+localizes to state `s`. `Gamma(s,a)` describes pre-action predicates over the
 source screen, known action, and frozen `$intent.*` slots. Target-state facts may
 motivate guards through the approximate weakest-precondition reading, but an
 executable guard must be evaluated only on the source screen.
@@ -48,7 +48,7 @@ executable guard must be evaluated only on the source screen.
 The LLM is a candidate generator, not a proof oracle. Generate typed candidates
 over the allowed abstract domains and predicate vocabulary; the admission layer
 will verify alias resolution, evidence support, preservation, DSL executability,
-and guard-obligation policy.
+and candidate consistency.
 
 ## Primary Prompt
 [RELY]
@@ -75,14 +75,14 @@ READ_ONLY_BOUNDARY:
 LOGIC_MODEL:
   state_invariant_meaning:
     I(s) is the set of stable, runtime-evaluable semantic facts needed for state
-    localization, action interpretation, intent binding, or post-arrival safety
+    localization, action interpretation, intent binding, or state-consistency safety
     checks. It is not a dump of all observed UI properties.
-  hoare_obligation:
+  hoare_contract_view:
     for an existing transition t = (s, a, s'), candidate generation is guided by
-    { I(s) /\ Gamma(s,a) } a { I(s') /\ Post(s,a,s') }
+    { I(s) /\ Gamma(s,a) } a { I(s') }
   wp_reading:
-    target invariant facts and post-arrival effects may induce source guard
-    obligations, but only when those obligations can be expressed over source
+    target invariant facts may suggest source guard candidates, but only when
+    those candidates can be expressed over source
     evidence, the known action, and declared intent slots.
   action_logic_reading:
     a guard for action a should make the relevant target obligation hold after
@@ -144,7 +144,7 @@ INVARIANT_GUARD_EVIDENCE_PACKET:
         examples: destructive confirmation present, permission scope shown,
                   success receipt/status appears after commit
         note: side-effecting safety facts usually require a transition guard; a
-              post-arrival invariant is only an audit check.
+              state invariant is only a consistency check.
 
   [Arrival-state widget registry]:
     entries: map<alias, WidgetRegistryEntry>
@@ -159,11 +159,11 @@ INVARIANT_GUARD_EVIDENCE_PACKET:
 
   [Incoming transitions]:
     transitions: list<TransitionEvidence>
-    role: classify post-arrival effect checks and side-effect hints
+    role: classify state-consistency and side-effect hints
 
   [Outgoing transitions]:
     transitions: list<TransitionEvidence>
-    role: classify pre-action guard obligations and sibling choices
+    role: classify pre-action guard candidates and sibling choices
 
   [Global Information / Static APK Priors]:
     manifest_activity_labels?: list<string>
@@ -180,7 +180,7 @@ INVARIANT_GUARD_EVIDENCE_PACKET:
     readable_action_properties: set<Property>
     output_schema: InvariantGuardCandidatePacket
 
-  [Risk and Effect Taxonomy]:
+  [Effect and Verification-Obligation Taxonomy]:
     role: classify why a guard or invariant is needed without hardcoding
           app-specific labels.
     dimensions:
@@ -191,14 +191,14 @@ INVARIANT_GUARD_EVIDENCE_PACKET:
         meaning: intended item/person/account/address/file/value/content is selected,
                  shown, or about to be acted on
         usual_obligation: transition guard when pre-action source can prove intent;
-                          effect hint when only post-arrival target shows it
+                          metadata hint when only successor evidence shows it
       local_reversible_state:
         meaning: editable local state that can be corrected before final commit
-        usual_obligation: low/medium guard or invariant depending on evidence
+        usual_obligation: guard or invariant depending on executable evidence
       irreversible_or_costly_state:
         meaning: destructive, paid, externally visible, security-sensitive,
                  privacy-sensitive, permission-granting, or hard to undo
-        usual_obligation: semantic guard before commit; post-arrival invariant may
+        usual_obligation: semantic guard before commit; state invariant may
                           audit success/error state but cannot replace the guard
       external_side_effect:
         meaning: communication, publication, order placement, transfer, payment,
@@ -253,7 +253,6 @@ WidgetRegistryEntry:
          error_text | success_text | permission_scope | unknown
   semantic_role?: string
   readable_props: set<Property>
-  risk_hints: set<string>
   provenance?: runtime | runtime+apk_prior | runtime+llm | runtime+apk_prior+llm
 ```
 
@@ -286,7 +285,7 @@ ReadableActionProperty:
     {
       "kind": "structural|container_shape|stable_label|semantic_binding|action_affordance|form_status|selection_status|status|error_absence|success_presence|value_domain|safety_summary|side_effect_audit|unknown",
       "expr": "read(com.app:id/title, text) == \"Checkout\"",
-      "scope": "post_arrival_state",
+      "scope": "state",
       "admission_target": "runtime_state_invariant|metadata_only|reject",
       "confidence": 0.0,
       "evidence_count": 0,
@@ -304,7 +303,7 @@ ReadableActionProperty:
       "canonical_action_key": "<tau,q,v>",
       "contract": {
         "kind": "none|navigation|item_binding|input_binding|toggle_binding|form_check|confirm_commit|safety_check|invariant_hint|unknown",
-        "required": true,
+        "required": false,
         "required_slots": [
           {
             "name": "amount",
@@ -336,7 +335,7 @@ ReadableActionProperty:
             "value_domain": []
           }
         ],
-        "semantic_binding_required": true,
+        "semantic_binding_required": false,
         "semantic_binding_incomplete": false,
         "confidence": 0.0,
         "provenance": ["llm"],
@@ -351,7 +350,7 @@ ReadableActionProperty:
       "incoming_source_state_id": "s0",
       "target_state_id": "s1",
       "canonical_action_key": "<tau,q,v>",
-      "description": "Post-arrival fact that would be useful if conditional/action-aware invariants are supported.",
+      "description": "Transition-specific fact that would be useful if conditional/action-aware invariants are supported.",
       "desired_expr": "read(com.app:id/status, text) == \"Sent\"",
       "why_not_runtime_state_invariant": "depends_on_action|depends_on_intent|target_only_single_visit|unsupported_predicate|volatile|unknown",
       "provenance": ["llm"]
@@ -369,21 +368,21 @@ ReadableActionProperty:
 ```
 
 [SPECIFICATION]
-**Pre-Condition**:
+**Given**:
   * The FSM already exists. The LLM is not constructing `S`, `Sigma`, `delta`, or
     `rho`.
   * State observations and registries are runtime evidence. Static APK artifacts
     are priors only.
   * Candidate generation follows the Hoare-style obligation:
-    `{ I(s) /\ Gamma(s,a) } a { I(s') /\ Post(s,a,s') }`.
-  * `I(s')` is the target-state semantic postcondition. `Gamma(s,a)` is the
-    source-state precondition candidate induced by the approximate
-    weakest-precondition reading of `I(s')` and `Post(s,a,s')`.
+    `{ I(s) /\ Gamma(s,a) } a { I(s') }`.
+  * `I(s')` is the successor-state invariant set. `Gamma(s,a)` is the
+    source-state guard candidate induced by the approximate weakest-precondition
+    reading of `I(s')`.
   * `Gamma` candidates are pre-action guards over a source screen, a known action,
     and frozen `$intent.*` variables.
-  * Runtime-admitted `I` candidates are post-arrival checks over the current state
-    screen. In the current implementation they are evaluated with `ScreenContext`
-    only, so they must not require `$intent.*` or `action(...)`.
+  * Runtime-admitted `I` candidates are state checks over the current screen. In
+    the current implementation they are evaluated with `ScreenContext` only, so
+    they must not require `$intent.*` or `action(...)`.
   * LLM candidates are not admitted verifier state. They are proposed contracts
     that must later pass deterministic admission checks.
   * `effect_invariant_hints` are metadata for future conditional/action-aware
@@ -418,7 +417,7 @@ ReadableActionProperty:
   semantic binding check:
     * Emit a `transition_guard_candidates` item using the `GuardContract` shape.
     * Derive the guard obligation from source evidence and, when useful, from the
-      target-state invariant/postcondition through the approximate wp reading.
+      target-state invariant through the approximate wp reading.
     * The guard may reference only source guard registry aliases, known-action
       properties, literals supported by source/action evidence, and declared
       `$intent.*` slots.
@@ -440,15 +439,15 @@ ReadableActionProperty:
     safety; they are not complete UI summaries.
   * Generate candidates only inside the typed abstract domains in
     `[Invariant Abstract Domains]`.
-  * Runtime state invariants are post-arrival checks in `AbstractState.invariant_specs`.
+  * Runtime state invariants are stored in `AbstractState.invariant_specs`.
   * Transition guards are pre-action checks in `Transition.guard` /
     `Transition.guard_contract`.
   * The approximate wp reading may justify why a guard is needed, but it does not
     permit target-only UI in executable guard predicates.
   * Incoming preservation evidence may support a runtime invariant, but the LLM must
     not claim a proof beyond the replay observations provided.
-  * A post-arrival invariant never replaces a required pre-action guard for a
-    side-effecting commit.
+  * A state invariant and a transition guard are separate candidate types; do not
+    use one to fabricate evidence for the other.
   * A guard never uses target-only UI as executable evidence.
   * A runtime state invariant never uses source-only UI from a predecessor state.
   * Static APK priors never prove current UI values, current element presence,
@@ -482,9 +481,10 @@ ReadableActionProperty:
   5. Convert executable state facts into one-predicate DSL expressions over the
      arrival-state widget registry; keep non-executable semantic facts as
      metadata-only or rejected candidates.
-  6. Classify incoming/outgoing transitions by the Risk and Effect Taxonomy.
+  6. Classify incoming/outgoing transitions by the Effect and
+     Verification-Obligation Taxonomy.
   7. For transitions that need pre-action checking, derive `GuardContract`
-     candidates from source evidence plus target invariant/postcondition
+     candidates from source evidence plus target invariant
      obligations under the approximate wp reading.
   8. For useful but currently non-executable conditional facts, produce
      `effect_invariant_hints` instead of executable invariants.
@@ -492,10 +492,10 @@ ReadableActionProperty:
 
 ## Refine Prompt
 [SPECIFICATION of State Invariant Scope]
-**Pre-Condition**:
+**Given**:
   * A candidate is considered for `state_invariant_candidates`.
 
-**Post-Condition**:
+**Requirement**:
   * The candidate describes a fact that should hold whenever the verifier localizes
     to the target state after arrival.
   * The candidate does not depend on which predecessor transition was taken unless
@@ -509,10 +509,10 @@ ReadableActionProperty:
     they are present in the screenshot.
 
 [SPECIFICATION of Contract Layers]
-**Pre-Condition**:
+**Given**:
   * A state invariant candidate is assigned a semantic purpose.
 
-**Post-Condition**:
+**Requirement**:
   * Use `structural`, `container_shape`, or `stable_label` for `I_struct` facts:
     activity/window/dialog boundaries, stable chrome labels, and required
     structural presence/count facts.
@@ -526,32 +526,32 @@ ReadableActionProperty:
     runtime-confirmed value domains.
   * Use `safety_summary` or `side_effect_audit` for `I_safe` facts: irreversible,
     costly, externally visible, privacy/security-sensitive, or permission-related
-    UI facts. These facts explain guard obligations; they do not by themselves
+    UI facts. These facts explain candidate guard context; they do not by themselves
     authorize side-effecting actions.
 
 [SPECIFICATION of Hoare / wp Coupling]
-**Pre-Condition**:
-  * A target-state invariant, source-to-target diff, or post-arrival effect suggests
-    a guard obligation for an existing transition `(s, a, s')`.
+**Given**:
+  * A target-state invariant or source-to-target diff suggests
+    a guard candidate for an existing transition `(s, a, s')`.
 
-**Post-Condition**:
+**Requirement**:
   * Read the transition as:
-    `{ I(s) /\ Gamma(s,a) } a { I(s') /\ Post(s,a,s') }`.
+    `{ I(s) /\ Gamma(s,a) } a { I(s') }`.
   * Use target facts only to infer what the source guard should protect, then
     express executable guard predicates over the source guard registry, known
     action properties, literals supported in the source, and declared `$intent.*`
     slots.
   * If the target fact depends on an intent value but the source screen does not
     expose a runtime-readable predicate that can check it, emit an
-    `effect_invariant_hints` item or mark the guard incomplete.
+    `effect_invariant_hints` item or reject the guard candidate with a clear reason.
   * Do not treat the approximate wp reading as proof. It is a synthesis heuristic
     whose output must pass deterministic admission.
 
 [SPECIFICATION of Incoming Preservation]
-**Pre-Condition**:
+**Given**:
   * A candidate state invariant is evaluated against incoming transitions.
 
-**Post-Condition**:
+**Requirement**:
   * High-trust incoming replay arrivals into the target state should support the
     invariant on the arrival observation.
   * If an invariant holds only for one predecessor, action, or intent value, emit it
@@ -562,23 +562,22 @@ ReadableActionProperty:
     metadata-only; it does not authorize invention.
 
 [SPECIFICATION of Guard Scope]
-**Pre-Condition**:
+**Given**:
   * A candidate is considered for `transition_guard_candidates`.
 
-**Post-Condition**:
+**Requirement**:
   * The candidate describes `Gamma(source screen P, known_action, frozen $intent.*)`.
-  * The candidate may use target evidence only for classification, notes, or risk
-    metadata.
-  * The candidate should be linked in `notes` to the invariant/postcondition or
-    risk fact that induced it when such a link is available.
+  * The candidate may use target evidence only for classification or notes.
+  * The candidate should be linked in `notes` to the invariant or
+    transition fact that induced it when such a link is available.
   * The candidate must follow the same executable-soundness rules as
     `transition_guard_generation_readable_registry.spec`.
 
 [SPECIFICATION of Effect Invariant Hints]
-**Pre-Condition**:
+**Given**:
   * A fact is meaningful only after a specific transition, action, or intent value.
 
-**Post-Condition**:
+**Requirement**:
   * Emit it as `effect_invariant_hints`, not as a runtime state invariant.
   * Examples include "after send, status is Sent", "after selecting recipient,
     summary shows $intent.recipient", and "after payment, total equals
@@ -587,10 +586,10 @@ ReadableActionProperty:
     evidence supports one.
 
 [SPECIFICATION of Executable DSL]
-**Pre-Condition**:
+**Given**:
   * A candidate contains an executable expression or predicate list.
 
-**Post-Condition**:
+**Requirement**:
   * Use only `read`, `value`, `count`, `in_state`, `time_in`, and `action` as
     allowed by the candidate scope.
   * Express containment as the `contains` or `not_contains` operator over `read`
@@ -606,10 +605,10 @@ ReadableActionProperty:
     independently executable and admission can parse the full DSL expression.
 
 [SPECIFICATION of Stable Aliases]
-**Pre-Condition**:
+**Given**:
   * A candidate references an element.
 
-**Post-Condition**:
+**Requirement**:
   * Prefer `resource_id` aliases from runtime evidence.
   * Use content description, stable semantic role, or template alias only when the
     admission layer can resolve it to a runtime element.
@@ -618,10 +617,10 @@ ReadableActionProperty:
   * Never invent an alias.
 
 [SPECIFICATION of Evidence Strength]
-**Pre-Condition**:
+**Given**:
   * A confidence score is assigned to a candidate.
 
-**Post-Condition**:
+**Requirement**:
   * Multi-visit runtime evidence with the same resolved alias and property supports
     higher confidence.
   * One observation can support only low or medium confidence unless static priors
@@ -632,13 +631,13 @@ ReadableActionProperty:
   * A screenshot-only visual impression without XML/registry support is annotation
     evidence, not executable invariant proof.
   * Confidence is evidence strength, not semantic importance. Side-effecting facts may
-    be important while still having low confidence or incomplete admission.
+    be important while still having low confidence or no admitted executable predicate.
 
 [SPECIFICATION of Candidate Admission Style]
-**Pre-Condition**:
+**Given**:
   * The LLM is deciding whether to emit, downgrade, or reject a candidate.
 
-**Post-Condition**:
+**Requirement**:
   * Prefer over-generation as typed candidates plus explicit rejection reasons over
     silently omitting safety-relevant concerns.
   * A candidate is not admitted merely because it is plausible. Admission requires
@@ -649,10 +648,10 @@ ReadableActionProperty:
   * If a candidate would mislead runtime verification, reject it.
 
 [SPECIFICATION of Volatility]
-**Pre-Condition**:
+**Given**:
   * A candidate reads text, value, count, selectedness, checkedness, or enabledness.
 
-**Post-Condition**:
+**Requirement**:
   * Mark volatile facts as rejected or metadata-only.
   * Exact literal text is acceptable for stable chrome labels, button labels,
     dialog titles, permission scopes, status labels, and error/success messages.
@@ -662,26 +661,27 @@ ReadableActionProperty:
   * Boolean facts such as enabled/checked/selected may be invariants only when they
     are stable state facts, not transient interaction artifacts.
 
-[SPECIFICATION of High-Risk Actions]
-**Pre-Condition**:
+[SPECIFICATION of Side-Effecting Transition Guards]
+**Given**:
   * Evidence suggests an outgoing transition commits an irreversible/costly or
     external side effect.
 
-**Post-Condition**:
-  * Prefer a required transition guard with semantic binding to `$intent.*`.
-  * A post-arrival success/status invariant may be emitted as an audit check, but
-    it does not make the side-effecting transition safe by itself.
-  * If source evidence cannot support a semantic guard, mark the guard incomplete
-    so runtime can route to `UNCERTAIN`.
+**Requirement**:
+  * Prefer a transition guard candidate with executable source-side predicates when
+    evidence supports one.
+  * A success/status invariant may be emitted as a consistency check, but
+    it does not prove the pre-action guard.
+  * If source evidence cannot support an executable guard, omit the guard candidate
+    or return it with a clear `rejection_reason`; do not mark it as mandatory.
 
 [SPECIFICATION of Invalid Output]
-**Pre-Condition**:
+**Given**:
   * A candidate would require unsupported vocabulary, invented aliases, target-only
     evidence in a guard, predecessor-only evidence in a state invariant, static-only
     proof, volatile facts, undeclared intent slots, or runtime contexts that the
     checker does not supply.
 
-**Post-Condition**:
+**Requirement**:
   * Omit the invalid executable candidate.
   * If the idea is still useful for future work, move it to `effect_invariant_hints`
     with `why_not_runtime_state_invariant`.

@@ -502,14 +502,6 @@ def _attach_parsed_logic_clauses(explored_view: dict[str, Any]) -> None:
         guard = transition.get("guard")
         if isinstance(guard, str) and guard:
             transition["guard_logic"] = evaluator.parse_logic_clauses(guard)
-        postcondition_expr = transition.get("postcondition")
-        if isinstance(postcondition_expr, str) and postcondition_expr:
-            transition["postcondition_logic"] = evaluator.parse_logic_clauses(postcondition_expr)
-        postcondition = transition.get("postcondition_contract")
-        if isinstance(postcondition, dict):
-            effects = _effect_requirements_view(postcondition)
-            if effects:
-                transition["postcondition_effects"] = effects
 
 
 def _typed_contract_logic(contract: dict[str, Any]) -> dict[str, Any]:
@@ -532,37 +524,6 @@ def _typed_contract_logic(contract: dict[str, Any]) -> dict[str, Any]:
         "root": {"operator": "and" if len(clauses) > 1 else "atom"},
         "clauses": clauses,
     }
-
-
-def _effect_requirements_view(contract: dict[str, Any]) -> list[dict[str, str]]:
-    effects = contract.get("effect_requirements")
-    if not isinstance(effects, list):
-        return []
-
-    rows: list[dict[str, str]] = []
-    for effect in effects:
-        if not isinstance(effect, dict):
-            continue
-        name = str(effect.get("name") or "effect")
-        kind = str(effect.get("effect_kind") or "effect")
-        description = str(effect.get("description") or "").strip()
-        evidence = str(effect.get("evidence") or "").strip()
-        unsupported_reason = str(effect.get("unsupported_reason") or "").strip()
-        if not unsupported_reason:
-            continue
-        text = f"{name}: {description}" if description else name
-        if evidence:
-            text = f"{text} | evidence: {evidence}"
-        text = f"{text} | unsupported: {unsupported_reason}"
-        rows.append(
-            {
-                "text": text,
-                "effect_kind": kind,
-                "source": str(effect.get("source") or ""),
-                "unsupported_reason": unsupported_reason,
-            }
-        )
-    return rows
 
 
 def _format_predicate_clause(predicate: dict[str, Any]) -> str:
@@ -2020,7 +1981,6 @@ const COMPARE_DATA = __COMPARE_DATA__;
       const g = document.createElementNS(SVG_NS, 'g');
       const classes = ['edge'];
       if (link.data.guard) classes.push('guard');
-      if (hasPostcondition(link.data)) classes.push('post');
       g.setAttribute('class', classes.join(' '));
       const hit = document.createElementNS(SVG_NS, 'path');
       hit.setAttribute('class', 'edge-hit');
@@ -2290,36 +2250,8 @@ const COMPARE_DATA = __COMPARE_DATA__;
     }
     if (transition.guard_admission_status) appendKV('admission', transition.guard_admission_status);
     if (transition.guard || transition.guard_logic) {
-      inspector.appendChild(section('precondition Gamma DSL/Lark parsed clauses'));
+      inspector.appendChild(section('transition guard Gamma DSL/Lark parsed clauses'));
       appendLogic(transition.guard_logic, transition.guard, 'G');
-    }
-    const post = transition.postcondition_contract || null;
-    if (post || transition.postcondition || transition.postcondition_logic) {
-      inspector.appendChild(section('postcondition Psi DSL/Lark parsed clauses'));
-      if (post) {
-        appendKV('post kind', post.kind);
-        appendKV('post required', post.required);
-        appendKV('post risk', post.risk_level);
-        appendKV(
-          'post incomplete',
-          transition.postcondition_incomplete || post.intent_effect_incomplete
-        );
-        appendKV('intent effect', post.intent_effect_required);
-      }
-      if (transition.postcondition_admission_status) {
-        appendKV('post admission', transition.postcondition_admission_status);
-      }
-      if (transition.postcondition_admission_reason) {
-        appendKV('post reason', transition.postcondition_admission_reason);
-      }
-      if (transition.postcondition || transition.postcondition_logic) {
-        appendLogic(transition.postcondition_logic, transition.postcondition, 'P');
-      } else {
-        const pre = el('pre');
-        pre.textContent = '(no admitted executable Psi DSL)';
-        inspector.appendChild(pre);
-      }
-      appendEffects(transition.postcondition_effects || []);
     }
     const action = transition.action || {};
     appendKV('resource', action.target_resource_id || action.resource_id || action.target);
@@ -2470,7 +2402,6 @@ const COMPARE_DATA = __COMPARE_DATA__;
     let label = actionNameOf(transition);
     if (label === 'navigate_back' || label === 'system.back') label = 'back';
     if (transition.guard) label += ' [G]';
-    if (hasPostcondition(transition)) label += ' [P]';
     return label;
   }
 
@@ -2483,14 +2414,8 @@ const COMPARE_DATA = __COMPARE_DATA__;
       action.value || '',
       action.input_text || '',
       action.target_text || '',
-      transition.guard || '',
-      transition.postcondition || '',
-      hasPostcondition(transition) ? 'P' : ''
+      transition.guard || ''
     ]);
-  }
-
-  function hasPostcondition(transition) {
-    return !!(transition && (transition.postcondition || transition.postcondition_logic));
   }
 
   function colorId(color) { return String(color).replace('#', ''); }

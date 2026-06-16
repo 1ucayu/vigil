@@ -1,19 +1,17 @@
 """LLM-backed, contract-first guard generation (Stage 4).
 
-This module asks an LLM to produce a typed precondition
-:class:`~vigil.models.guard.GuardContract` (the Hoare precondition ``Gamma``) for a
-*single, already-known* transition, then parses and validates that JSON into a
-:class:`~vigil.models.guard.LlmGuardContractCandidate`. The system prompt may also ask
-the model to propose a target-side postcondition ``Psi`` for audit/future admission;
-the current parser consumes the compatibility ``contract`` / precondition field.
+This module asks an LLM to produce a typed transition
+:class:`~vigil.models.guard.GuardContract` for a *single, already-known* transition,
+then parses and validates that JSON into a
+:class:`~vigil.models.guard.LlmGuardContractCandidate`.
 
 Design constraints (CLAUDE.md → "DSL Guard Generation Direction"; plan):
 
 - The LLM never emits free-form DSL as its primary artifact — it emits typed contract
   JSON. Compilation/admission to executable DSL is a later deterministic step.
 - The LLM may not create/modify FSM states, actions, transitions, replay confidence, or
-  runtime verdicts. Target-state evidence is the read scope for postcondition ``Psi``
-  and background evidence for precondition ``Gamma``.
+  runtime verdicts. Target-state evidence is background context only; executable guard
+  predicates may read only the source screen, proposed action, and frozen intent.
 - ``$bind.*`` is metadata only: it appears in ``contract.binding_requirements`` /
   ``precondition.binding_requirements``, never as a predicate /
   :class:`~vigil.models.guard.ValueRef`. A predicate's ``expected.kind`` may only be
@@ -35,8 +33,6 @@ from pydantic import ValidationError
 from vigil.models.guard import (
     GuardContract,
     LlmGuardContractCandidate,
-    RiskLevel,
-    TransitionPostcondition,
 )
 from vigil.system_prompt import load_system_prompt
 
@@ -130,8 +126,6 @@ def _registry_lines(registry: WidgetRegistry) -> list[str]:
         if entry.content_description:
             parts.append(f"content_desc={entry.content_description!r}")
         parts.append(f"role={entry.role.value}")
-        if entry.risk_hints:
-            parts.append(f"risk_hints={','.join(entry.risk_hints)}")
         if props:
             parts.append(f"readable=[{props}]")
         lines.append(" ".join(parts))
@@ -164,12 +158,11 @@ def _screen_section(title: str, screen: ScreenEvidence, *, source_readable: bool
         image_status = "attached as image if the file exists"
 
     purpose = (
-        "This is P/source: the ONLY UI state that precondition Gamma may read."
+        "This is P/source: the ONLY UI state that transition guard Gamma may read."
         if source_readable
         else (
-            "This is Q/target: postcondition Psi read scope and background evidence "
-            "for precondition Gamma. Do NOT reference target-only elements in "
-            "precondition predicates."
+            "This is Q/target: background evidence for classifying the transition. "
+            "Do NOT reference target-only elements in guard predicates."
         )
     )
 
@@ -214,7 +207,7 @@ def guard_image_paths(evidence: GuardEvidence) -> tuple[list[Path], list[str]]:
         (
             "TARGET",
             evidence.target_screen,
-            "TARGET screenshot: post-state Q. Use for Psi; background evidence for Gamma.",
+            "TARGET screenshot: successor Q. Background evidence only for Gamma.",
         ),
     ):
         path = _existing_image_path(screen.screenshot_path)
@@ -230,7 +223,7 @@ def guard_image_paths(evidence: GuardEvidence) -> tuple[list[Path], list[str]]:
 
 
 def build_guard_user_prompt(evidence: GuardEvidence) -> str:
-    """Build the Hoare-style user prompt for one transition's pre/post contract."""
+    """Build the user prompt for one transition guard contract."""
     reg_lines = _registry_lines(evidence.source_registry)
     sib_lines = _sibling_lines(evidence.sibling_actions)
     invariant_lines = _invariant_lines(evidence.target_invariants)
@@ -238,17 +231,13 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
 
     sections: list[str] = []
     sections.append(
-        "/* Hoare-style Transition Evidence */\n"
-        "Generate a transition pre/post contract for this transition:\n"
-        "{ Gamma(source screen P, known_action properties, frozen $intent.*) } "
-        "known_action { I(target state Q) AND "
-        "Psi(source, known_action, target, frozen $intent.*) }.\n"
-        "The top-level `contract` field must be an exact compatibility alias of "
-        "`precondition` for the current parser.\n"
-        "$bind.* needs are metadata in binding_requirements, not executable Gamma/Psi predicates.\n"
-        "Generation order: first use the target invariants I(Q) as reusable background, "
-        "then generate edge-local postcondition Psi from P/a/Q, and only then generate "
-        "source-side precondition Gamma needed to make that edge meaningful."
+        "/* Transition Guard Evidence */\n"
+        "Generate a transition guard contract Gamma for this already-known transition.\n"
+        "Gamma may reference only source screen P, known_action properties, and frozen "
+        "$intent.* variables.\n"
+        "The top-level `contract` field is the canonical output object. The parser also "
+        "accepts a legacy `precondition` wrapper for compatibility.\n"
+        "$bind.* needs are metadata in binding_requirements, not executable Gamma predicates."
     )
 
     sections.append(
@@ -287,7 +276,7 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
 
     sections.append(
         _screen_section(
-            "Post-state Evidence: Q / target (Psi read scope; background for Gamma)",
+            "Post-state Evidence: Q / target (background only)",
             evidence.target_screen,
             source_readable=False,
         )
@@ -296,16 +285,15 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
     sections.append(
         "[Target-state invariants I(Q)]\n"
         "Purpose: reusable target-state facts already admitted before this transition "
-        "contract pass. Use them as background context for Psi, but do not remove "
-        "edge-local arrival/effect facts from Psi just because I(Q) also contains "
-        "related target facts.\n"
+        "guard pass. Use them only as background context for deciding whether the "
+        "source-side guard needs semantic or safety bindings.\n"
         + ("\n".join(invariant_lines) if invariant_lines else "- (none admitted)")
     )
 
     sections.append(
         "[Source-to-target semantic/evidence diff]\n"
-        "Purpose: Postcondition/effect disambiguation; do not predicate on target-only UI "
-        "in precondition Gamma.\n"
+        "Purpose: Transition classification context; do not predicate on target-only UI "
+        "in Gamma.\n"
         f"- target_state_name: {evidence.target_state_name!r}\n"
         f"- target_page_function: {evidence.target_page_function!r}\n"
         f"- target_screen_ids: {evidence.target_screen_ids}\n"
@@ -321,35 +309,25 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
     sections.append(
         "[Global Information / Static APK Priors]\n"
         "Purpose: Hints only; never transition proof, runtime proof, or proof of "
-        "postcondition effects.\n" + ("\n".join(f"- {h}" for h in hints) if hints else "- (none)")
+        "guard satisfaction.\n" + ("\n".join(f"- {h}" for h in hints) if hints else "- (none)")
     )
 
     sections.append(
         "[Verifier Basis]\n"
-        "- Output typed TransitionPrePostContract JSON with precondition, postcondition, "
-        "and compatibility contract.\n"
-        "- `contract` must be an exact alias of `precondition`; current admission consumes "
-        "that precondition path.\n"
+        "- Output typed transition guard JSON in the top-level `contract` object.\n"
+        "- A legacy `precondition` object is accepted only as a compatibility wrapper.\n"
         "- Predicates compile to conjunctions over: read, value, action, count, "
         "in_state, and time_in, with contains/not_contains as comparison operators.\n"
-        "- Before/after effects are audit metadata only and are not executable DSL "
-        "predicates.\n"
-        "- Generation order is I(Q) first, Psi second, Gamma last. Runtime checks Gamma "
-        "before the action and Psi/I after the action; generation follows information "
-        "dependencies instead.\n"
-        "- Precondition predicates may reference only source widget aliases, proposed action "
+        "- Guard predicates may reference only source widget aliases, proposed action "
         "properties, literal values, and declared frozen $intent.* slots.\n"
-        "- Postcondition predicates may reference only target-side facts, literal values, "
-        "and declared frozen $intent.* slots supported by Q evidence.\n"
         "- Put UI/action-side $bind.* needs in binding_requirements metadata only; never "
         "inside executable predicates."
     )
 
     sections.append(
         "[Output]\n"
-        "Return JSON only, using the TransitionPrePostContract object described in the "
+        "Return JSON only, using the transition guard contract object described in the "
         "system prompt.\n"
-        "Repeat precondition exactly in the compatibility contract field.\n"
         "Put any $bind.* UI-side binding in binding_requirements, never in predicates."
     )
 
@@ -369,8 +347,8 @@ def _coerce_candidate(parsed: Any) -> tuple[LlmGuardContractCandidate | None, st
     if not isinstance(parsed, dict):
         return None, "LLM output is not a JSON object"
 
-    # Accept the legacy wrapper {contract: {...}}, the new transition wrapper
-    # {precondition: {...}, postcondition: {...}}, or a bare contract object.
+    # Accept the canonical wrapper {contract: {...}}, a legacy {precondition: {...}}
+    # wrapper, or a bare contract object.
     if isinstance(parsed.get("contract"), dict):
         contract_payload = parsed["contract"]
     elif isinstance(parsed.get("precondition"), dict):
@@ -389,16 +367,7 @@ def _coerce_candidate(parsed: Any) -> tuple[LlmGuardContractCandidate | None, st
     except ValidationError as exc:
         return None, f"contract schema validation failed: {exc.error_count()} error(s)"
 
-    postcondition = None
     parse_warnings: list[str] = []
-    postcondition_payload = parsed.get("postcondition")
-    if isinstance(postcondition_payload, dict):
-        try:
-            postcondition = TransitionPostcondition.model_validate(postcondition_payload)
-        except ValidationError as exc:
-            parse_warnings.append(
-                f"postcondition schema validation failed: {exc.error_count()} error(s)"
-            )
 
     # Boundary enforcement: predicates may only compare against literal / intent values.
     # Anything else (action/read RHS, or a smuggled $bind reference) is not allowed on the
@@ -410,37 +379,15 @@ def _coerce_candidate(parsed: Any) -> tuple[LlmGuardContractCandidate | None, st
                 f"predicate expected.kind={kind!r} not allowed on the LLM path "
                 "($bind.* / action / read RHS must be metadata, not a predicate)"
             )
-    if postcondition is not None:
-        for pred in postcondition.predicates:
-            kind = pred.expected.kind if pred.expected is not None else None
-            if kind is not None and kind not in _ALLOWED_EXPECTED_KINDS:
-                return None, (
-                    f"postcondition predicate expected.kind={kind!r} not allowed on "
-                    "the LLM path ($bind.* / action / read RHS must be metadata, "
-                    "not a predicate)"
-                )
-
     incomplete = bool(
         parsed.get("semantic_binding_incomplete", contract.semantic_binding_incomplete)
     )
     contract.semantic_binding_incomplete = contract.semantic_binding_incomplete or incomplete
-    postcondition_incomplete = bool(
-        parsed.get(
-            "postcondition_incomplete",
-            postcondition.intent_effect_incomplete if postcondition is not None else False,
-        )
-    )
-    if postcondition is not None:
-        postcondition.intent_effect_incomplete = (
-            postcondition.intent_effect_incomplete or postcondition_incomplete
-        )
     rejection_reason = str(parsed.get("rejection_reason") or "")
     return (
         LlmGuardContractCandidate(
             contract=contract,
-            postcondition=postcondition,
             semantic_binding_incomplete=contract.semantic_binding_incomplete,
-            postcondition_incomplete=postcondition_incomplete,
             rejection_reason=rejection_reason,
             parse_errors=parse_warnings,
         ),
@@ -496,12 +443,12 @@ def _merge_candidates(
 
 
 def _repair_prompt(user_prompt: str, candidate: LlmGuardContractCandidate) -> str:
-    """Ask the model to repair only its JSON pre/post contract output."""
+    """Ask the model to repair only its JSON transition guard contract output."""
     raw = candidate.raw_response or ""
-    reason = candidate.rejection_reason or "invalid transition pre/post contract JSON"
+    reason = candidate.rejection_reason or "invalid transition guard contract JSON"
     return (
         "Your previous guard-contract response could not be admitted because it was not "
-        f"valid transition pre/post contract JSON: {reason}.\n\n"
+        f"valid transition guard contract JSON: {reason}.\n\n"
         "Return JSON only. Do not use markdown, prose, comments, or multiple JSON objects.\n\n"
         "[Original transition evidence]\n"
         f"{user_prompt}\n\n"
@@ -545,7 +492,7 @@ def generate_llm_guard_candidate(
         )
         return LlmGuardContractCandidate(
             rejection_reason=f"llm call failed: {exc}",
-            contract=GuardContract(risk_level=RiskLevel.UNKNOWN),
+            contract=GuardContract(),
             parse_errors=[f"llm call failed: {exc}"],
         )
     candidate = parse_llm_guard_candidate(raw)

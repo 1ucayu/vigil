@@ -22,7 +22,7 @@
 
 ## 2. One-Paragraph Summary
 
-Vigil is a **neuro-symbolic runtime verification system** for mobile GUI agents. Its paper narrative is organized around three mobile GUI error families: **GUI state and transition errors** (wrong screen, illegal action, dead end, loop), **GUI semantic binding errors** (wrong field, value, item, contact, address, or intent slot), and **GUI safety and side-effect errors** (structurally legal actions that violate user constraints or cause harmful irreversible effects). In the **offline construction phase**, Vigil consumes two evidence sources: APK static files (manifest, layout XML, strings/resources, permissions) and exploration trace files (runtime UI XML, screenshots, action logs). Deterministic XML/static/trace processing constructs a **per-app hierarchical Finite State Machine (FSM)**, while offline LLM calls add semantic labels, side-effect/semantic-binding obligations, invariants, and grammar-checked **DSL guards**. The FSM is verified by test-case generation and on-device replay. In the **online symbolic phase**, a lightweight engine checks every proposed GUI action before execution using FSM structure, DSL guards, task-state progress, invariants, and confidence thresholds, returning **ALLOW / DENY / UNCERTAIN** without a runtime LLM in the common path. Vigil is also **self-evolving**: unseen but structurally similar UI states inherit parameterized templates, while truly novel states trigger asynchronous micro-evolution and are cached back into the FSM bundle after validation.
+Vigil is a **neuro-symbolic runtime verification system** for mobile GUI agents. Its paper narrative is organized around three mobile GUI error families: **GUI state and transition errors** (wrong screen, illegal action, dead end, loop), **GUI semantic binding errors** (wrong field, value, item, contact, address, or intent slot), and **GUI safety and side-effect errors** (structurally legal actions that violate user constraints or cause harmful irreversible effects). In the **offline construction phase**, Vigil consumes two evidence sources: APK static files (manifest, layout XML, strings/resources, permissions) and exploration trace files (runtime UI XML, screenshots, action logs). Deterministic XML/static/trace processing constructs a **per-app hierarchical Finite State Machine (FSM)**, while offline LLM calls add semantic labels, side-effect/semantic-binding metadata, invariants, and grammar-checked **DSL guards**. The FSM is verified by test-case generation and on-device replay. In the **online symbolic phase**, a lightweight engine checks every proposed GUI action before execution using FSM structure, DSL guards, task-state progress, invariants, and confidence thresholds, returning **ALLOW / DENY / UNCERTAIN** without a runtime LLM in the common path. Vigil is also **self-evolving**: unseen but structurally similar UI states inherit parameterized templates, while truly novel states trigger asynchronous micro-evolution and are cached back into the FSM bundle after validation.
 
 ---
 
@@ -85,7 +85,7 @@ This contract interpretation is the paper bridge between FSM topology, DSL seman
 The offline FSM builder must separate **graph truth** from **semantic annotation**.
 
 - **Graph truth is evidence-driven.** State identity, action identity, and transition existence come from APK static priors plus runtime trace XML/action logs/replay. The LLM must not decide state equality, create static-only edges, assign replay confidence, or make runtime verdicts.
-- **Semantic annotation is LLM-assisted.** Because Android apps rarely provide official task APIs or docs, an offline LLM may summarize static files into an App Prior Card, label screen function and icon-only widgets, detect parameterized templates, generate DSL guard candidates, and identify side-effect/semantic-binding obligations. All generated guards must be grammar-checked and stored with provenance.
+- **Semantic annotation is LLM-assisted.** Because Android apps rarely provide official task APIs or docs, an offline LLM may summarize static files into an App Prior Card, label screen function and icon-only widgets, detect parameterized templates, generate DSL guard candidates, and identify side-effect/semantic-binding metadata. All generated guards must be grammar-checked and stored with provenance.
 - **Static files are priors, not proofs.** Manifest activities, parent activities, launcher intent-filters, permissions, strings, and layout XML provide activity names, initial-state hints, widget-type ground truth, hierarchy skeletons, and capability boundaries. They guide abstraction and guards, but transitions require trace or replay evidence.
 - **Trace files are behavioral evidence.** Runtime UI XML and screenshots determine observed states, canonical actions, and edges. Screenshots fill visual semantics missing from XML; XML remains the primary source for deterministic matching.
 
@@ -127,8 +127,8 @@ Keep the root implementation skeleton concise. The deeper literature survey, des
 
 **Stage 4: Semantic Grounding + DSL Guard Generation** (`vigil.neuro.semantic_grounder`, `vigil.neuro.dsl_generator`, `vigil.neuro.widget_templates`, `models.dsl`)
 - Technical challenge: topology alone cannot prove semantic correctness; the verifier must know which recipient, amount, field, contact, item, or constraint the action binds.
-- Implementation role: use offline LLM calls over the App Prior Card, compressed XML, screenshots, and widget templates to label page function, icon-only widgets, parameterized templates, required intent variables, side-effecting/irreversible action obligations, and grammar-valid DSL predicates. Parse every guard with `output_docs/dsl_grammar.lark` before admitting it to the bundle.
-- Artifact: transition guard map `Gamma: S x Sigma -> guard`, required `$intent.*` bindings, guard provenance, semantic profiles, side-effect/semantic-binding obligations, and candidate state/action invariants.
+- Implementation role: use offline LLM calls over the App Prior Card, compressed XML, screenshots, and widget templates to label page function, icon-only widgets, parameterized templates, required intent variables, side-effecting/irreversible action metadata, and grammar-valid DSL predicates. Parse every guard with `output_docs/dsl_grammar.lark` before admitting it to the bundle.
+- Artifact: transition guard map `Gamma: S x Sigma -> guard`, required `$intent.*` bindings, guard provenance, semantic profiles, side-effect/semantic-binding metadata, and candidate state/action invariants.
 
 **Stage 5: Replay Verification + Confidence Scoring** (`vigil.neuro.replay_verifier`, `symbolic.trajectory_verifier`)
 - Technical challenge: explored GUI transitions may be flaky because of timing, permissions, network state, animation, or hidden app state.
@@ -306,7 +306,7 @@ Recommended subsection spine:
 
 **AndroidArena / Understanding the Weakness of LLM Agents within a Complex Android Environment** — useful for XML compression and action grounding: remove redundant hierarchy information before LLM prompting, keep compact component handles, and map handles back to XPath/selector-like identities. Vigil should use this only for the LLM view, not for deterministic fingerprinting or replay.
 
-**Static Android GUI analysis (GATOR / WTG / ProMal-style work)** — supports using manifest, layout XML, resources, activities, and permissions as static priors. These analyses can over-approximate possible windows/transitions, so Vigil treats static information as naming, hierarchy, widget, and risk prior rather than edge proof.
+**Static Android GUI analysis (GATOR / WTG / ProMal-style work)** — supports using manifest, layout XML, resources, activities, and permissions as static priors. These analyses can over-approximate possible windows/transitions, so Vigil treats static information as naming, hierarchy, widget, and semantic/side-effect prior rather than edge proof.
 
 **Agent-SAMA** — useful contrast: it builds and updates a natural-language FSM online for planning and recovery with multiple LLM agents. Vigil instead builds an offline, replay-checked FSM+DSL bundle and keeps the common runtime path symbolic.
 
@@ -425,7 +425,7 @@ vigil/
 │       │   ├── fsm_builder.py      # Stage 3: Hierarchical FSM Construction
 │       │   ├── dsl_generator.py    # Stage 4: DSL Semantic Guard Generation
 │       │   ├── widget_templates.py # Widget guard template lookup (from YAML)
-│       │   ├── risk_policy.py      # Permission/action risk classification
+│       │   ├── guard_contract_synthesizer.py # Deterministic guard contract synthesis
 │       │   ├── scope_policy.py     # Exploration and verification scoping
 │       │   ├── selector_resolution.py # Robust selector/action target mapping
 │       │   ├── replay_verifier.py  # Stage 5: FSM Verification via Replay
@@ -918,7 +918,7 @@ Create files in this sequence:
 10. **Never commit `data/` or `models/bundles/`** — large generated artifacts.
 11. **All LLM calls are offline only** — runtime symbolic layer must NEVER call an LLM in the common path; Tier 3 is async and infrequent.
 12. **uv is the only package manager** — no pip, no requirements.txt.
-13. **Graph truth vs semantic annotation:** XML/static/trace/replay decide states, actions, and edges; LLMs label semantics, generate guards, and identify side-effect/semantic-binding obligations.
+13. **Graph truth vs semantic annotation:** XML/static/trace/replay decide states, actions, and edges; LLMs label semantics, generate guards, and identify side-effect/semantic-binding metadata.
 14. **Reference code and papers to borrow:**
     - DroidBot: screenshot + UIAutomator hierarchy -> observed state transition graph.
     - Stoat: static event identification, weighted exploration, and stochastic model-testing intuition.
@@ -985,16 +985,16 @@ Design goals:
 
 ---
 
-## 20. Risk Awareness
+## 20. Project Watchpoints
 
-| Risk | Severity | Mitigation |
-|------|----------|------------|
+| Concern | Impact | Mitigation |
+|---------|--------|------------|
 | State abstraction granularity wrong | High | Start with ActionEngine's atom-based approach, iterate |
 | FSM replay pass rate low | High | Analyze failure causes (timing? non-determinism?) → retry + relaxed matching |
 | Insufficient differentiation from ActionEngine/Agent-SAMA | Medium | Emphasize: offline vs online, verification vs planning, symbolic vs neuro |
 | Value-level semantics incomplete | Medium | Paper positions structural verification as core, value-level as extension |
 | State localization inaccurate | Medium-Low | Fingerprint + multi-feature similarity matching |
 | WebView/mini-program poor Accessibility support | Low-Medium | Acknowledge scope limitation, focus on native UI |
-| Google Play Accessibility policy risk | Low | Our system is deterministic rule-based, not autonomous agent |
+| Google Play Accessibility policy concern | Low | Our system is deterministic rule-based, not autonomous agent |
 | Taxonomy and implementation drift apart | Medium | Keep `docs/error_taxonomy.md`, Section 4.0 module mapping, and evaluation metrics aligned |
 | Safety layer becomes a loose prompt policy | High | Express side-effect and semantic-binding constraints as DSL guards/invariants whenever possible; use LLM fallback only after UNCERTAIN |

@@ -187,55 +187,6 @@ error_patterns:
 
 
 # ──────────────────────────────────────────────────────────
-# Generic risk categories for native exploration.
-# Keywords are substrings (case-insensitive). All categories are
-# platform-level — NOT app-specific. Apps may tune per-deployment
-# through configs/apps/<name>.yaml overrides.
-# ──────────────────────────────────────────────────────────
-risk_categories:
-  destructive:
-    - "factory reset"
-    - "erase all data"
-    - "wipe"
-    - "reset phone"
-    - "remove account"
-    - "delete account"
-  credential:
-    - "confirm your pin"
-    - "confirm your pattern"
-    - "confirm your password"
-    - "enter your password"
-    - "set up screen lock"
-    - "screen lock"
-  payment:
-    - "pay now"
-    - "place order"
-    - "checkout"
-    - "purchase"
-    - "buy now"
-  permission:
-    - "allow"
-    - "grant access"
-    - "deny"
-    - "while using the app"
-    - "only this time"
-  privacy:
-    - "face unlock"
-    - "fingerprint"
-    - "set up face"
-    - "face & fingerprint"
-    - "enroll face"
-  irreversible:
-    - "deactivate"
-    - "close account"
-    - "permanently delete"
-  commit:
-    - "submit"
-    - "send"
-    - "post"
-
-
-# ──────────────────────────────────────────────────────────
 # Scope policy defaults. Generic Android framework / launcher
 # packages — never an app-specific allowlist.
 # ──────────────────────────────────────────────────────────
@@ -260,19 +211,3 @@ scope:
     - "com.huawei.android.launcher"
     - "com.oneplus.launcher"
   allow_android_system: true
-
-
-# ──────────────────────────────────────────────────────────
-# Exploration policy toggles
-# ──────────────────────────────────────────────────────────
-exploration:
-  # If false (default), low-trust risk categories are blocked. Hard-block
-  # categories (destructive / payment / irreversible / credential) are
-  # ALWAYS blocked regardless of this flag — set them to low_trust below
-  # only if you intentionally want to allow them under allow_risky.
-  allow_risky: false
-  # Optional per-category severity override. Keys are category names from
-  # risk_categories; values are "hard_block" or "low_trust". Defaults:
-  # destructive / payment / irreversible / credential -> hard_block;
-  # permission / commit / privacy -> low_trust.
-  risk_severity: {}

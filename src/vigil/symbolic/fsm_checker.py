@@ -6,11 +6,6 @@ Pure symbolic checks against the FSM graph:
 - Confidence check: is this transition well-tested?
 
 Returns ALLOW / DENY / UNCERTAIN with zero LLM calls.
-
-Guard-admission *policy* is intentionally NOT enforced here — it lives in
-:mod:`vigil.symbolic.guard_policy` and is applied by
-:class:`~vigil.symbolic.decision_engine.DecisionEngine`. This keeps Tier 1 a pure
-structural layer.
 """
 
 from __future__ import annotations
@@ -46,7 +41,6 @@ class VerifyReason(StrEnum):
     STATE_SIMILAR = "state_similar_fuzzy_match"
     GUARD_FAILED = "guard_failed"
     GUARD_INCONCLUSIVE = "guard_inconclusive"
-    GUARD_POLICY_UNSATISFIED = "guard_policy_unsatisfied"
     INVARIANT_FAILED = "invariant_failed"
     INVARIANT_INCONCLUSIVE = "invariant_inconclusive"
     LLM_FALLBACK = "llm_fallback"
@@ -186,8 +180,7 @@ class FsmChecker:
                 details=(f"Goal state {goal_state} is not reachable from target state {target_id}"),
             )
 
-        # 4. Confidence check (guard-admission policy is enforced by DecisionEngine,
-        #    not here — Tier 1 stays purely structural).
+        # 4. Confidence check.
         transition = lookup.transition
         confidence = transition.confidence if transition else 0.0
         if confidence < self._confidence_threshold:

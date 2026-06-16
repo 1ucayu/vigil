@@ -20,26 +20,25 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from vigil.models.guard import GuardContract, RiskLevel
+from vigil.models.guard import GuardContract
 
 
 class StateInvariantCandidate(BaseModel):
-    """A proposed state invariant ``phi`` for the target (arrival) state.
+    """A proposed state invariant ``phi`` for the target state.
 
-    ``expr`` is a single DSL predicate string over the arrival-state widget registry.
+    ``expr`` is a single DSL predicate string over the target-state widget registry.
     ``admission_target`` is the LLM's intent (``runtime_state_invariant`` |
     ``metadata_only`` | ``reject``); deterministic admission still has the final say.
     """
 
     kind: str = "unknown"
     expr: str = ""
-    scope: str = "post_arrival_state"
+    scope: str = "state"
     admission_target: str = "runtime_state_invariant"
     confidence: float = 0.0
     evidence_count: int = 0
     source: str = "llm"
     volatility: str = "unknown"
-    risk_level: RiskLevel = RiskLevel.UNKNOWN
     provenance: list[str] = Field(default_factory=list)
     notes: str = ""
     rejection_reason: str = ""
@@ -61,10 +60,10 @@ class TransitionGuardCandidate(BaseModel):
 
 
 class EffectInvariantHint(BaseModel):
-    """A post-arrival fact that is useful but not a current runtime state invariant.
+    """A transition-specific fact that is useful but not a current runtime state invariant.
 
-    These are conditional/action-aware/intent-aware facts (e.g. "after send, status is
-    Sent"). They are metadata only and must never be written into
+    These are conditional/action-aware/intent-aware facts. They are metadata only and
+    must never be written into
     ``AbstractState.invariant_specs`` under the current ``ScreenContext``-only checker.
     """
 
@@ -74,7 +73,6 @@ class EffectInvariantHint(BaseModel):
     description: str = ""
     desired_expr: str = ""
     why_not_runtime_state_invariant: str = "unknown"
-    risk_level: RiskLevel = RiskLevel.UNKNOWN
     provenance: list[str] = Field(default_factory=list)
 
 

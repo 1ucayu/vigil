@@ -379,7 +379,7 @@ def run_one_app(
     if not skip_invariants:
         logger.info(
             f"[{spec.name}] contract invariant generation ({invariant_source}) "
-            f"over {len(fsm.states)} states before postcondition/precondition generation"
+            f"over {len(fsm.states)} states before transition guard generation"
         )
         invariant_audit_replay = None
         if invariant_source == "audit":
@@ -417,7 +417,7 @@ def run_one_app(
     if not skip_guards:
         action_schema_count = len({guard_action_schema_key(t.action) for t in fsm.transitions})
         logger.info(
-            f"[{spec.name}] contract postcondition/precondition generation ({guard_source}) "
+            f"[{spec.name}] transition guard generation ({guard_source}) "
             f"{action_schema_count} guard action schemas over "
             f"{len(fsm.transitions)} edge transitions"
         )
@@ -469,17 +469,8 @@ def run_one_app(
         "guard_source": guard_source,
         "guard_use_images": guard_use_images,
         "guards_attached": sum(1 for t in fsm.transitions if t.guard),
-        "guards_required": sum(1 for t in fsm.transitions if t.requires_guard),
-        "guards_semantic_incomplete": sum(
-            1 for row in guard_report if row.get("semantic_binding_incomplete")
-        ),
         "guard_origin_counts": _count_field(guard_report, "guard_origin"),
         "guard_status_counts": _guard_status_counts(fsm),
-        "postcondition_status_counts": _postcondition_status_counts(fsm),
-        "postconditions_attached": sum(1 for t in fsm.transitions if t.postcondition),
-        "postconditions_unsupported_effects": sum(
-            len(t.postcondition_unsupported_effects) for t in fsm.transitions
-        ),
         "invariant_source": invariant_source,
         "invariants_attached": sum(len(s.invariant_specs) for s in fsm.states.values()),
         "invariant_states": sum(1 for s in fsm.states.values() if s.invariant_specs),
@@ -521,15 +512,6 @@ def _guard_status_counts(fsm: AppFSM) -> dict[str, int]:
     counts: dict[str, int] = {}
     for transition in fsm.transitions:
         status = transition.guard_admission_status
-        key = str(getattr(status, "value", status or "none"))
-        counts[key] = counts.get(key, 0) + 1
-    return dict(sorted(counts.items()))
-
-
-def _postcondition_status_counts(fsm: AppFSM) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for transition in fsm.transitions:
-        status = transition.postcondition_admission_status
         key = str(getattr(status, "value", status or "none"))
         counts[key] = counts.get(key, 0) + 1
     return dict(sorted(counts.items()))

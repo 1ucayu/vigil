@@ -11,11 +11,10 @@ DSL guard generation, or runtime symbolic verification:
   - scroll transition count
   - meaningful self-loop count (scroll/toggle/input)
   - ambiguous selector count
-  - skipped risky action count
   - input side-effect warnings (``cleared=False``)
   - untrusted target count
   - repeated action ratio using ``N(s, a)`` visit counts
-  - state merge risk groups (same name, different structural fingerprint)
+  - state merge conflict groups (same name, different structural fingerprint)
 
 The validator is generic — it does not know anything about specific apps,
 only the trace schema. Synthetic traces in unit tests exercise every metric.
@@ -72,25 +71,17 @@ def validate_trace(data: dict[str, Any]) -> dict[str, Any]:
     scroll_transitions = 0
     meaningful_self_loops = 0
     ambiguous_selectors = 0
-    skipped_risky = 0
     skipped_unsafe_input = 0
     input_side_effect_warnings = 0
     action_failed = 0
     action_count: Counter[tuple[str, str]] = Counter()
     attempt_status_counter: Counter[str] = Counter()
-    risk_severity_counter: Counter[str] = Counter()
 
     # ActionAttempt records — never FSM transitions, but informative.
     for a in action_attempts:
         status = (a.get("status") or "").strip()
         attempt_status_counter[status] += 1
-        meta = a.get("metadata") or {}
-        sev = meta.get("severity")
-        if sev:
-            risk_severity_counter[str(sev)] += 1
-        if status == "skipped_risky":
-            skipped_risky += 1
-        elif status == "ambiguous_selector":
+        if status == "ambiguous_selector":
             ambiguous_selectors += 1
         elif status == "skipped_unsafe_input":
             skipped_unsafe_input += 1
@@ -121,10 +112,6 @@ def validate_trace(data: dict[str, Any]) -> dict[str, Any]:
             meaningful_self_loops += 1
         if md.get("selector_resolution") == "ambiguous":
             ambiguous_selectors += 1
-        if md.get("risk_tags"):
-            # An entry with risk_tags AND no execution means the explorer
-            # decided to skip; trust the explorer's decision and count it.
-            skipped_risky += 1
         if md.get("cleared") is False:
             input_side_effect_warnings += 1
         action_count[(src, _action_key(action))] += 1
@@ -132,7 +119,7 @@ def validate_trace(data: dict[str, Any]) -> dict[str, Any]:
     repeated_pairs = sum(1 for n in action_count.values() if n > 1)
     repeated_action_ratio = (repeated_pairs / len(action_count)) if action_count else 0.0
 
-    # State merge risk groups: same ``state.name`` but distinct structural
+    # State merge conflict groups: same ``state.name`` but distinct structural
     # fingerprints across raw screens. Derived purely from the screens dict.
     name_to_fps: dict[str, set[str]] = defaultdict(set)
     for _sid, scr in screens.items():
@@ -140,7 +127,7 @@ def validate_trace(data: dict[str, Any]) -> dict[str, Any]:
         struct_fp = scr.get("structural_fingerprint") or scr.get("fingerprint") or ""
         if page_title and struct_fp:
             name_to_fps[page_title].add(struct_fp)
-    merge_risk_groups = {
+    merge_conflict_groups = {
         name: sorted(list(fps)) for name, fps in name_to_fps.items() if len(fps) > 1
     }
 
@@ -158,14 +145,12 @@ def validate_trace(data: dict[str, Any]) -> dict[str, Any]:
         "scroll_transition_count": scroll_transitions,
         "meaningful_self_loop_count": meaningful_self_loops,
         "ambiguous_selector_count": ambiguous_selectors,
-        "skipped_risky_count": skipped_risky,
         "skipped_unsafe_input_count": skipped_unsafe_input,
         "input_side_effect_warnings": input_side_effect_warnings,
         "untrusted_target_count": untrusted_targets,
         "repeated_action_ratio": round(repeated_action_ratio, 4),
-        "state_merge_risk_groups": merge_risk_groups,
+        "state_merge_conflict_groups": merge_conflict_groups,
         "action_attempt_status_breakdown": dict(attempt_status_counter),
-        "action_attempt_severity_breakdown": dict(risk_severity_counter),
         "nav_stats": nav_stats,
     }
 
@@ -195,17 +180,11 @@ def validate_trace(data: dict[str, Any]) -> dict[str, Any]:
             f"{summary['input_side_effect_warnings']} INPUT_TEXT step(s) "
             "did not clear original text before setting"
         )
-    if summary["state_merge_risk_groups"]:
+    if summary["state_merge_conflict_groups"]:
         warnings.append(
-            f"{len(summary['state_merge_risk_groups'])} state name(s) span "
+            f"{len(summary['state_merge_conflict_groups'])} state name(s) span "
             "multiple structural fingerprints — FSM builder may either drop "
-            "merges or risk false merges"
-        )
-    if summary["action_attempt_severity_breakdown"].get("hard_block"):
-        warnings.append(
-            f"{summary['action_attempt_severity_breakdown']['hard_block']} "
-            "hard-block risk attempt(s) were refused — review for app-level "
-            "safety surface coverage"
+            "merges or produce false merges"
         )
     if summary["skipped_unsafe_input_count"]:
         warnings.append(
@@ -232,13 +211,12 @@ def _render_text(summary: dict[str, Any]) -> str:
     lines.append(f"scroll_transition_count:    {summary['scroll_transition_count']}")
     lines.append(f"meaningful_self_loop_count: {summary['meaningful_self_loop_count']}")
     lines.append(f"ambiguous_selector_count:   {summary['ambiguous_selector_count']}")
-    lines.append(f"skipped_risky_count:        {summary['skipped_risky_count']}")
     lines.append(f"input_side_effect_warnings: {summary['input_side_effect_warnings']}")
     lines.append(f"untrusted_target_count:     {summary['untrusted_target_count']}")
     lines.append(f"repeated_action_ratio:      {summary['repeated_action_ratio']:.3f}")
-    if summary["state_merge_risk_groups"]:
-        lines.append("state_merge_risk_groups:")
-        for name, fps in summary["state_merge_risk_groups"].items():
+    if summary["state_merge_conflict_groups"]:
+        lines.append("state_merge_conflict_groups:")
+        for name, fps in summary["state_merge_conflict_groups"].items():
             lines.append(f"  {name}: {len(fps)} fingerprints")
     if summary["warnings"]:
         lines.append("")

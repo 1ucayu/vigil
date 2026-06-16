@@ -1,7 +1,7 @@
 """Tests for the deterministic rule-based GuardContract synthesizer (step 3).
 
 These cover the classification rules over ``GuardEvidence``: navigation/scroll/cancel,
-high-risk commits (with and without executable evidence), input binding, toggle binding,
+side-effect commits (with and without executable evidence), input binding, toggle binding,
 item binding (and its exclusions), unknown fallback, generic domain inference, and the
 no-invented-aliases / confidence invariants. No LLM, DSL compilation, or admission logic.
 """
@@ -13,7 +13,6 @@ from typing import Any
 from vigil.models.guard import (
     GuardAdmissionStatus,
     GuardKind,
-    RiskLevel,
     SlotType,
 )
 from vigil.neuro.guard_contract_synthesizer import (
@@ -35,7 +34,6 @@ def _entry(
     resource_id: str = "",
     text: str = "",
     role: WidgetRole = WidgetRole.UNKNOWN,
-    risk_hints: list[str] | None = None,
 ) -> WidgetRegistryEntry:
     return WidgetRegistryEntry(
         alias=alias,
@@ -43,7 +41,6 @@ def _entry(
         resource_id=resource_id,
         text=text,
         role=role,
-        risk_hints=risk_hints or [],
     )
 
 
@@ -87,41 +84,38 @@ def _evidence(
 # ---------------------------------------------------------------------------
 
 
-def test_navigate_back_is_low_risk_navigation():
+def test_navigate_back_is_navigation():
     contract = synthesize_guard_contract(_evidence({"type": "navigate_back"}))
     assert contract.kind is GuardKind.NAVIGATION
     assert contract.required is False
-    assert contract.risk_level is RiskLevel.LOW
 
 
-def test_scroll_is_low_risk_none():
+def test_scroll_is_none_guard():
     contract = synthesize_guard_contract(_evidence({"type": "scroll_down"}))
     assert contract.kind is GuardKind.NONE
     assert contract.required is False
-    assert contract.risk_level is RiskLevel.LOW
 
 
-def test_cancel_button_is_low_risk_navigation():
+def test_cancel_button_is_navigation():
     contract = synthesize_guard_contract(_evidence({"type": "click", "target_text": "Cancel"}))
     assert contract.required is False
-    assert contract.risk_level is RiskLevel.LOW
     assert contract.kind is GuardKind.NAVIGATION
 
 
-def test_risk_word_is_not_downgraded_to_navigation():
-    # A "Delete" control must route to high-risk, never low-risk navigation.
+def test_side_effect_word_is_not_downgraded_to_navigation():
+    # A "Delete" control is classified as a safety-check candidate, not navigation.
     contract = synthesize_guard_contract(_evidence({"type": "click", "target_text": "Delete"}))
-    assert contract.risk_level is RiskLevel.HIGH
+    assert contract.required is False
     assert contract.kind is GuardKind.SAFETY_CHECK
 
 
 # ---------------------------------------------------------------------------
-# High-risk commits
+# Side-effect commits
 # ---------------------------------------------------------------------------
 
 
-def test_high_risk_send_with_resolved_alias_has_enabled_predicate_strong_conf():
-    reg = _registry(_entry("send", element_id="e_send", text="Send", risk_hints=["send"]))
+def test_send_with_resolved_alias_has_enabled_predicate_strong_conf():
+    reg = _registry(_entry("send", element_id="e_send", text="Send"))
     ev = _evidence(
         {"type": "click", "target": "e_send", "target_text": "Send"},
         source_registry=reg,
@@ -131,8 +125,7 @@ def test_high_risk_send_with_resolved_alias_has_enabled_predicate_strong_conf():
     contract = synthesize_guard_contract(ev)
 
     assert contract.kind is GuardKind.CONFIRM_COMMIT
-    assert contract.required is True
-    assert contract.risk_level is RiskLevel.HIGH
+    assert contract.required is False
     assert contract.confidence == 0.8
     # Enabled predicate references the resolved alias.
     reads = [p for p in contract.predicates if p.predicate_type == "read"]
@@ -144,7 +137,7 @@ def test_high_risk_send_with_resolved_alias_has_enabled_predicate_strong_conf():
     assert slot_names == {"contact_name", "message_text"}
 
 
-def test_high_risk_without_resolved_alias_is_weak_and_invents_no_predicate():
+def test_side_effect_without_resolved_alias_is_weak_and_invents_no_predicate():
     # No registry entry, no resolved alias -> only intent slots, weak confidence.
     ev = _evidence(
         {"type": "click", "target_text": "Send"},
@@ -152,8 +145,7 @@ def test_high_risk_without_resolved_alias_is_weak_and_invents_no_predicate():
     )
     contract = synthesize_guard_contract(ev)
 
-    assert contract.required is True
-    assert contract.risk_level is RiskLevel.HIGH
+    assert contract.required is False
     assert contract.confidence == 0.5
     assert contract.admission_status is GuardAdmissionStatus.PENDING
     assert contract.notes  # explains the missing binding
@@ -161,8 +153,8 @@ def test_high_risk_without_resolved_alias_is_weak_and_invents_no_predicate():
     assert all(p.predicate_type not in ("read", "value") for p in contract.predicates)
 
 
-def test_high_risk_delete_is_safety_check():
-    reg = _registry(_entry("del", text="Delete", risk_hints=["delete"]))
+def test_delete_is_safety_check():
+    reg = _registry(_entry("del", text="Delete"))
     ev = _evidence(
         {"type": "click", "target_text": "Delete"},
         source_registry=reg,
@@ -170,11 +162,11 @@ def test_high_risk_delete_is_safety_check():
     )
     contract = synthesize_guard_contract(ev)
     assert contract.kind is GuardKind.SAFETY_CHECK
-    assert contract.risk_level is RiskLevel.HIGH
+    assert contract.required is False
 
 
-def test_high_risk_bank_transfer_has_amount_and_recipient_slots():
-    reg = _registry(_entry("transfer", text="Transfer", risk_hints=["transfer"]))
+def test_bank_transfer_has_amount_and_recipient_slots():
+    reg = _registry(_entry("transfer", text="Transfer"))
     ev = _evidence(
         {"type": "click", "target_text": "Transfer"},
         source_registry=reg,
@@ -183,6 +175,7 @@ def test_high_risk_bank_transfer_has_amount_and_recipient_slots():
     )
     contract = synthesize_guard_contract(ev)
     assert contract.kind is GuardKind.CONFIRM_COMMIT
+    assert contract.required is False
     slot_names = {s.name for s in contract.required_slots}
     assert slot_names == {"amount", "recipient"}
     # amount is numeric.
@@ -206,8 +199,7 @@ def test_input_text_amount_binds_action_text_property():
     contract = synthesize_guard_contract(ev)
 
     assert contract.kind is GuardKind.INPUT_BINDING
-    assert contract.required is True
-    assert contract.risk_level is RiskLevel.MEDIUM
+    assert contract.required is False
     assert len(contract.predicates) == 1
     pred = contract.predicates[0]
     assert pred.predicate_type == "action"
@@ -230,16 +222,14 @@ def test_input_text_chat_message_slot():
     assert {s.name for s in contract.required_slots} == {"message_text"}
 
 
-def test_input_text_classified_before_risk_even_with_risk_hint_widget():
-    # An amount field whose widget carries an incidental "transfer" risk hint must still
-    # bind the typed value to an intent slot, NOT collapse to an enabled-only high-risk
-    # guard. This is the input_text-before-risk ordering regression.
+def test_input_text_classified_before_side_effect_word_in_resource_id():
+    # An amount field whose resource id contains "transfer" must still bind the typed
+    # value to an intent slot, NOT collapse to an enabled-only commit guard.
     reg = _registry(
         _entry(
             "amount_input",
             resource_id="x:id/transfer_amount",
             role=WidgetRole.TEXT_FIELD,
-            risk_hints=["transfer"],
         )
     )
     ev = _evidence(
@@ -251,7 +241,6 @@ def test_input_text_classified_before_risk_even_with_risk_hint_widget():
     contract = synthesize_guard_contract(ev)
 
     assert contract.kind is GuardKind.INPUT_BINDING
-    assert contract.risk_level is RiskLevel.MEDIUM
     assert len(contract.predicates) == 1
     pred = contract.predicates[0]
     assert pred.predicate_type == "action"
@@ -262,12 +251,12 @@ def test_input_text_classified_before_risk_even_with_risk_hint_widget():
 
 
 # ---------------------------------------------------------------------------
-# Semantic-required commits + completeness flags
+# Commit classification remains policy-free
 # ---------------------------------------------------------------------------
 
 
-def test_high_risk_commit_marks_semantic_binding_required_and_incomplete():
-    reg = _registry(_entry("send", text="Send", risk_hints=["send"]))
+def test_side_effect_commit_does_not_mark_semantic_binding_required():
+    reg = _registry(_entry("send", text="Send"))
     ev = _evidence(
         {"type": "click", "target_text": "Send"},
         source_registry=reg,
@@ -275,12 +264,11 @@ def test_high_risk_commit_marks_semantic_binding_required_and_incomplete():
         source_page_function="messaging/thread",
     )
     contract = synthesize_guard_contract(ev)
-    # Enabled-only is never semantic-complete.
-    assert contract.semantic_binding_required is True
-    assert contract.semantic_binding_incomplete is True
+    assert contract.semantic_binding_required is False
+    assert contract.semantic_binding_incomplete is False
 
 
-def test_checkout_click_is_semantic_required_commit():
+def test_checkout_click_is_commit_candidate_without_required_binding():
     reg = _registry(_entry("checkout_btn", resource_id="x:id/checkout", text="Checkout"))
     ev = _evidence(
         {"type": "click", "target_text": "Checkout"},
@@ -290,13 +278,12 @@ def test_checkout_click_is_semantic_required_commit():
     )
     contract = synthesize_guard_contract(ev)
     assert contract.kind is GuardKind.CONFIRM_COMMIT
-    assert contract.required is True
-    assert contract.risk_level is RiskLevel.HIGH  # checkout is financial
-    assert contract.semantic_binding_required is True
-    assert contract.semantic_binding_incomplete is True
+    assert contract.required is False
+    assert contract.semantic_binding_required is False
+    assert contract.semantic_binding_incomplete is False
 
 
-def test_stopwatch_lap_is_semantic_required_commit_medium():
+def test_stopwatch_lap_is_commit_candidate_without_required_binding():
     reg = _registry(_entry("lap_btn", resource_id="x:id/lap", text="Lap"))
     ev = _evidence(
         {"type": "click", "target_text": "Lap"},
@@ -306,8 +293,9 @@ def test_stopwatch_lap_is_semantic_required_commit_medium():
     )
     contract = synthesize_guard_contract(ev)
     assert contract.kind is GuardKind.CONFIRM_COMMIT
-    assert contract.risk_level is RiskLevel.MEDIUM
-    assert contract.semantic_binding_required is True
+    assert contract.required is False
+    assert contract.semantic_binding_required is False
+    assert contract.semantic_binding_incomplete is False
 
 
 def test_plain_navigation_is_not_a_commit():
@@ -337,7 +325,7 @@ def test_toggle_role_yields_toggle_binding_with_enabled_predicate():
     contract = synthesize_guard_contract(ev)
 
     assert contract.kind is GuardKind.TOGGLE_BINDING
-    assert contract.required is True
+    assert contract.required is False
     assert {s.name for s in contract.required_slots} == {"desired_state"}
     desired = contract.required_slots[0]
     assert desired.slot_type is SlotType.BOOLEAN
@@ -366,7 +354,7 @@ def test_item_binding_fires_with_similar_dynamic_sibling_rows():
     contract = synthesize_guard_contract(ev)
 
     assert contract.kind is GuardKind.ITEM_BINDING
-    assert contract.required is True
+    assert contract.required is False
     assert len(contract.predicates) == 1
     pred = contract.predicates[0]
     assert pred.predicate_type == "action"
@@ -389,7 +377,7 @@ def test_command_button_siblings_do_not_trigger_item_binding():
 
 
 def test_no_dynamic_text_aliases_are_invented():
-    # High-risk action, empty registry: no predicate may reference an element alias.
+    # Side-effect action, empty registry: no predicate may reference an element alias.
     ev = _evidence(
         {"type": "click", "target_text": "Pay"},
         source_page_function="commerce/checkout",
@@ -414,7 +402,6 @@ def test_static_nav_text_state_change_is_navigation():
     )
     assert contract.kind is GuardKind.NAVIGATION
     assert contract.required is False
-    assert contract.risk_level is RiskLevel.LOW
 
 
 def test_dynamic_click_without_item_evidence_is_unknown():
@@ -427,7 +414,6 @@ def test_dynamic_click_without_item_evidence_is_unknown():
     )
     assert contract.kind is GuardKind.UNKNOWN
     assert contract.required is False
-    assert contract.risk_level is RiskLevel.UNKNOWN
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +423,7 @@ def test_dynamic_click_without_item_evidence_is_unknown():
 
 def test_domain_inference_is_generic_token_based():
     # A generic "messaging" token (no benchmark/package/fixture string) yields chat slots.
-    reg = _registry(_entry("send", text="Send", risk_hints=["send"]))
+    reg = _registry(_entry("send", text="Send"))
     ev = _evidence(
         {"type": "click", "target_text": "Send"},
         source_registry=reg,

@@ -4,18 +4,17 @@ This module builds a *deterministic, LLM-free* widget registry from runtime trac
 evidence. A ``WidgetRegistry`` assigns each guard-relevant element on a source screen a
 stable alias (backed by ``resource_id`` / ``content_description`` / stable text role /
 class alias) plus a coarse role, selector-stability grade, readable DSL property list,
-and risk hints. Guard-relevant elements include both actionable widgets and
-runtime-readable semantic widgets (for example amount, recipient, address, selected
-item, status, or dialog text labels).
+and runtime-readable semantic widgets (for example amount, recipient, address,
+selected item, status, or dialog text labels).
 
 It is one of the two inputs the later typed-``GuardContract`` synthesis pass consumes
 (the other being :mod:`vigil.neuro.guard_evidence`). Per project rules:
 
 - XML/runtime traces are the source of truth: only elements actually present on the
   representative screen become registry entries.
-- ``AppPrior`` (APK static artifacts) is a *prior only*. It may enrich the role or risk
-  hints of an already-present entry, but must never create an entry for an element that
-  is absent from the runtime screen.
+- ``AppPrior`` (APK static artifacts) is a *prior only*. It may enrich the role of an
+  already-present entry, but must never create an entry for an element that is absent
+  from the runtime screen.
 - Raw capture-local ``e_XXXX`` handles are never exposed as a primary alias unless no
   better signal exists; they are kept in ``element_id_to_alias`` so later stages can map
   an action target handle back to its stable alias.
@@ -73,7 +72,6 @@ class WidgetRegistryEntry(BaseModel):
     role: WidgetRole = WidgetRole.UNKNOWN
     readable_props: list[str] = Field(default_factory=list)
     selector_stability: SelectorStability = SelectorStability.LOW
-    risk_hints: list[str] = Field(default_factory=list)
     source: str = "trace"
 
 
@@ -90,19 +88,6 @@ class WidgetRegistry(BaseModel):
 # ---------------------------------------------------------------------------
 # Deterministic vocabularies
 # ---------------------------------------------------------------------------
-
-# Risk/audit keywords for side-effectful / irreversible actions. Order is fixed so risk_hints
-# is deterministic.
-_RISK_KEYWORDS: tuple[str, ...] = (
-    "send",
-    "pay",
-    "transfer",
-    "delete",
-    "remove",
-    "allow",
-    "grant",
-    "confirm",
-)
 
 # Dialog-action labels that suggest a confirm/cancel style control.
 _DIALOG_WORDS: tuple[str, ...] = (
@@ -288,14 +273,6 @@ def _readable_props(el: dict[str, Any]) -> list[str]:
     return props
 
 
-def _risk_hints(el: dict[str, Any], semantic_label: str = "") -> list[str]:
-    text = str(el.get("text") or "").lower()
-    cdesc = str(el.get("content_description") or "").lower()
-    rid = str(el.get("resource_id") or "").lower()
-    label = f"{text} {cdesc} {rid} {semantic_label.lower()}"
-    return [kw for kw in _RISK_KEYWORDS if kw in label]
-
-
 def _alias_candidate(el: dict[str, Any], role: WidgetRole) -> str:
     """Best stable alias signal for an element, ``""`` if only the raw id is available."""
     resource_id = str(el.get("resource_id") or "").strip()
@@ -368,7 +345,6 @@ def build_widget_registry_from_screen(
             role=role,
             readable_props=_readable_props(el),
             selector_stability=_infer_stability(el),
-            risk_hints=_risk_hints(el, semantic_label),
             source="trace+llm" if semantic_label else "trace",
         )
         registry.entries[alias] = entry
@@ -450,8 +426,8 @@ def build_widget_registry_from_screen_ids(
 def _semantic_label_map(widget_aliases: list[dict[str, Any]] | None) -> dict[str, str]:
     """Return LLM-derived element_id -> label hints from state annotations.
 
-    These labels are non-authoritative: they may enrich risk hints, but they do not create
-    elements and admission still requires runtime-resolvable selectors.
+    These labels are non-authoritative: they do not create elements and admission
+    still requires runtime-resolvable selectors.
     """
     out: dict[str, str] = {}
     for item in widget_aliases or []:
@@ -467,31 +443,16 @@ def _semantic_label_map(widget_aliases: list[dict[str, Any]] | None) -> dict[str
 def _enrich_with_prior(registry: WidgetRegistry, app_prior: AppPrior) -> None:
     """Enrich *existing* entries with static-prior hints. Never creates new entries.
 
-    Static APK artifacts are priors only: we may strengthen risk hints or mark a
-    static-prior corroboration, but element presence still comes from the runtime
+    Static APK artifacts are priors only: we may strengthen widget role metadata or mark
+    a static-prior corroboration, but element presence still comes from the runtime
     screen.
     """
-    # High-risk string-constant values (e.g. a "Transfer" / "Delete" label resource).
-    risky_constants: set[str] = set()
-    for value in app_prior.string_constants.values():
-        low = str(value).lower()
-        if any(kw in low for kw in _RISK_KEYWORDS):
-            risky_constants.add(low)
-
     # Widget declarations indexed by short id for cheap lookup.
     decl_classes: dict[str, str] = {}
     for decl in app_prior.widget_declarations:
         decl_classes[_slug(decl.widget_id)] = decl.widget_class
 
     for entry in registry.entries.values():
-        text_low = entry.text.lower().strip()
-        if text_low and text_low in risky_constants:
-            for kw in _RISK_KEYWORDS:
-                if kw in text_low and kw not in entry.risk_hints:
-                    entry.risk_hints.append(kw)
-            if "prior" not in entry.source:
-                entry.source = "trace+prior"
-
         if entry.resource_id:
             short = _resource_short(entry.resource_id)
             decl_class = decl_classes.get(short)
