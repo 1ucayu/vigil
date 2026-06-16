@@ -1,37 +1,65 @@
-"""Tests for the LLM invariant/guard candidate-packet path (parsing + prompt)."""
+"""Tests for the structured-output LLM invariant/guard candidate-packet path."""
 
 from __future__ import annotations
 
-import json
+from typing import Any
 
+from vigil.core.structured import StructuredResult
+from vigil.models.llm_structured import LlmInvariantGuardResponse
 from vigil.neuro.guard_registry import build_widget_registry_from_screen
 from vigil.neuro.invariant_evidence import InvariantEvidence
 from vigil.neuro.invariant_guard_llm import (
     build_invariant_user_prompt,
+    candidate_from_structured_result,
     generate_llm_invariant_guard_candidate,
-    parse_invariant_guard_packet,
 )
+from vigil.neuro.prompt_redaction import PromptRedactor
 
 
-class FakeLlmClient:
-    """Minimal stand-in for LlmClient that records calls and returns a fixed response."""
+class FakeStructuredLlm:
+    """Stand-in exposing only the structured interface."""
 
-    def __init__(self, response: str = "", *, raise_exc: Exception | None = None) -> None:
-        self.response = response
-        self.raise_exc = raise_exc
-        self.calls: list[tuple[str, str]] = []
+    def __init__(
+        self,
+        parsed: LlmInvariantGuardResponse | None,
+        *,
+        schema_constraint_mode: str = "native_schema",
+        validation_errors: list[str] | None = None,
+        raise_exc: Exception | None = None,
+    ) -> None:
+        self._parsed = parsed
+        self._mode = schema_constraint_mode
+        self._validation_errors = validation_errors or []
+        self._raise = raise_exc
+        self.structured_calls = 0
 
-    def generate(self, system_prompt: str, user_prompt: str) -> str:
-        self.calls.append((system_prompt, user_prompt))
-        if self.raise_exc:
-            raise self.raise_exc
-        return self.response
+    def _result(self, schema_name: str) -> StructuredResult:
+        if self._raise is not None:
+            raise self._raise
+        return StructuredResult(
+            parsed=self._parsed,
+            raw_text="{}" if self._parsed is not None else "",
+            provider="proxy",
+            model="fake-model",
+            schema_name=schema_name,
+            schema_hash="deadbeef",
+            schema_constraint_mode=self._mode,
+            validation_errors=list(self._validation_errors),
+        )
 
-    def generate_with_images(self, system_prompt, text_prompt, images, image_labels=None) -> str:
-        self.calls.append((system_prompt, text_prompt))
-        if self.raise_exc:
-            raise self.raise_exc
-        return self.response
+    def generate_structured(self, system_prompt, user_prompt, response_model, schema_name, **_kw):
+        self.structured_calls += 1
+        return self._result(schema_name)
+
+    def generate_structured_with_images(self, *a, schema_name="x", **k):
+        self.structured_calls += 1
+        return self._result(schema_name)
+
+    def generate(self, *a, **k):  # pragma: no cover - must never be called
+        raise AssertionError("structured path must not call plain generate()")
+
+    def generate_with_images(self, *a, **k):  # pragma: no cover - must never be called
+        raise AssertionError("structured path must not call plain generate_with_images()")
 
 
 def _evidence() -> InvariantEvidence:
@@ -45,69 +73,93 @@ def _evidence() -> InvariantEvidence:
     return InvariantEvidence(
         target_state_id="s1",
         target_state_name="State1",
+        raw_screen_ids=["scr_0001"],
         arrival_registry=registry,
         observations=[screen],
         observation_count=1,
     )
 
 
-_PACKET_JSON = json.dumps(
-    {
-        "state_invariant_candidates": [
-            {
-                "kind": "success_presence",
-                "expr": 'value(title) contains "Done"',
-                "admission_target": "runtime_state_invariant",
-                "source": "llm",
-            }
-        ],
-        "transition_guard_candidates": [],
-        "effect_invariant_hints": [
-            {
-                "target_state_id": "s1",
-                "description": "after send, status is Sent",
-                "desired_expr": 'read(status, text) == "Sent"',
-                "why_not_runtime_state_invariant": "depends_on_action",
-            }
-        ],
-        "rejected_candidates": [],
-        "notes": "ok",
-    }
-)
+def _packet_response() -> LlmInvariantGuardResponse:
+    return LlmInvariantGuardResponse.model_validate(
+        {
+            "state_invariant_candidates": [
+                {
+                    "kind": "success_presence",
+                    "expr": 'value(title) contains "Done"',
+                    "admission_target": "runtime_state_invariant",
+                    "source": "llm",
+                }
+            ],
+            "effect_invariant_hints": [
+                {
+                    "target_state_id": "s1",
+                    "description": "after send, status is Sent",
+                    "desired_expr": 'read(status, text) == "<success_status_literal>"',
+                    "why_not_runtime_state_invariant": "depends_on_action",
+                }
+            ],
+            "notes": "ok",
+        }
+    )
 
 
-def test_parse_packet_success() -> None:
-    candidate = parse_invariant_guard_packet(_PACKET_JSON)
-    assert candidate.rejection_reason == ""
-    assert len(candidate.packet.state_invariant_candidates) == 1
+# ---------------------------------------------------------------------------
+# Structured-result conversion
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_from_parsed_packet() -> None:
+    result = StructuredResult(
+        parsed=_packet_response(),
+        raw_text="{}",
+        provider="proxy",
+        model="m",
+        schema_name="LlmInvariantGuardResponse",
+        schema_hash="h",
+        schema_constraint_mode="native_schema",
+    )
+    candidate = candidate_from_structured_result(result, spec_hash="abc")
+    assert candidate.parsed_ok is True
     assert candidate.packet.state_invariant_candidates[0].expr == 'value(title) contains "Done"'
-    assert len(candidate.packet.effect_invariant_hints) == 1
+    assert candidate.packet.effect_invariant_hints
+    assert candidate.spec_hash == "abc"
 
 
-def test_parse_packet_handles_fenced_json() -> None:
-    fenced = f"```json\n{_PACKET_JSON}\n```"
-    candidate = parse_invariant_guard_packet(fenced)
-    assert candidate.rejection_reason == ""
-    assert candidate.packet.state_invariant_candidates
-
-
-def test_parse_packet_invalid_json_degrades() -> None:
-    candidate = parse_invariant_guard_packet("not json at all")
-    assert candidate.rejection_reason
+def test_candidate_from_unavailable_packet() -> None:
+    result = StructuredResult(
+        parsed=None,
+        raw_text="",
+        provider="proxy",
+        model="m",
+        schema_name="LlmInvariantGuardResponse",
+        schema_hash="h",
+        schema_constraint_mode="prompt_only_unavailable",
+        validation_errors=["unsupported"],
+    )
+    candidate = candidate_from_structured_result(result, spec_hash="abc")
+    assert candidate.parsed_ok is False
     assert candidate.packet.state_invariant_candidates == []
+    assert "structured output unavailable" in candidate.rejection_reason
 
 
-def test_generate_uses_llm_and_returns_packet() -> None:
-    llm = FakeLlmClient(_PACKET_JSON)
-    candidate = generate_llm_invariant_guard_candidate(_evidence(), llm)
-    assert candidate.rejection_reason == ""
+# ---------------------------------------------------------------------------
+# End-to-end with a fake structured client
+# ---------------------------------------------------------------------------
+
+
+def test_generate_uses_structured_interface() -> None:
+    llm = FakeStructuredLlm(_packet_response())
+    candidate = generate_llm_invariant_guard_candidate(_evidence(), llm, use_images=False)
+    assert candidate.parsed_ok is True
     assert candidate.packet.state_invariant_candidates
-    assert len(llm.calls) == 1
+    assert llm.structured_calls == 1
 
 
 def test_generate_llm_failure_degrades_to_empty_packet() -> None:
-    llm = FakeLlmClient(raise_exc=RuntimeError("boom"))
-    candidate = generate_llm_invariant_guard_candidate(_evidence(), llm)
+    llm = FakeStructuredLlm(None, raise_exc=RuntimeError("boom"))
+    candidate = generate_llm_invariant_guard_candidate(_evidence(), llm, use_images=False)
+    assert candidate.parsed_ok is False
     assert "llm call failed" in candidate.rejection_reason
     assert candidate.packet.state_invariant_candidates == []
 
@@ -122,5 +174,29 @@ def test_user_prompt_has_key_sections() -> None:
         "[Outgoing transitions]",
     ):
         assert marker in prompt
-    # No screenshots on disk -> plain text generate path is used.
-    assert "$intent" in prompt  # boundary instruction is present
+    assert "$intent" in prompt
+    assert "[Transition Guard Candidate Checklist]" in prompt
+
+
+def test_user_prompt_redacts_identifiers_when_redactor_supplied() -> None:
+    redactor = PromptRedactor(packages=["com.app"], screen_ids=["scr_0001"])
+    prompt = build_invariant_user_prompt(_evidence(), redactor=redactor)
+    assert "com.app:" not in prompt
+    assert "scr_0001" not in prompt
+    # Sanitized resource hint suffix survives.
+    assert "<app>:id/title" in prompt
+
+
+def test_generate_passes_redactor_to_prompt(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_build(evidence, *, redactor=None):
+        captured["redactor"] = redactor
+        return "PROMPT"
+
+    monkeypatch.setattr("vigil.neuro.invariant_guard_llm.build_invariant_user_prompt", _fake_build)
+    redactor = PromptRedactor(packages=["com.app"])
+    generate_llm_invariant_guard_candidate(
+        _evidence(), FakeStructuredLlm(_packet_response()), use_images=False, redactor=redactor
+    )
+    assert captured["redactor"] is redactor

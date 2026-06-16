@@ -170,10 +170,18 @@ class GuardContract(BaseModel):
 class LlmGuardContractCandidate(BaseModel):
     """An LLM-produced guard-contract candidate, before admission.
 
-    The LLM emits a typed transition :class:`GuardContract` (never free-form DSL).
-    This thin wrapper carries the parsed contract plus the model's self-reported
-    completeness / rejection signal. ``raw_response`` is audit-only and is attached by
-    the pipeline, never requested from the model; it is **not** serialized into the FSM.
+    The LLM emits a typed transition :class:`GuardContract` (never free-form DSL) under
+    provider structured output. This thin wrapper carries the parsed contract plus the
+    model's self-reported completeness / rejection signal and structured-output provenance.
+
+    ``parsed_ok`` is the authoritative success flag: ``True`` only when the provider returned
+    a schema-valid object. When ``False`` (structured output unavailable, refusal, or
+    validation failure) the pipeline must treat this as a clear rejection — it must NOT run
+    admission on the empty placeholder ``contract`` or attach guard metadata as if admission
+    succeeded.
+
+    ``raw_response`` and the structured-output metadata are audit-only; they are attached by
+    the generator/pipeline and are **not** serialized into the FSM.
     """
 
     contract: GuardContract = Field(default_factory=GuardContract)
@@ -183,3 +191,15 @@ class LlmGuardContractCandidate(BaseModel):
     raw_responses: list[str] = Field(default_factory=list)
     parse_errors: list[str] = Field(default_factory=list)
     repair_attempted: bool = False
+    # Structured-output provenance (audit only).
+    parsed_ok: bool = False
+    schema_name: str = ""
+    schema_hash: str = ""
+    schema_constraint_mode: str = ""
+    provider: str = ""
+    model: str = ""
+    refusal: str = ""
+    validation_errors: list[str] = Field(default_factory=list)
+    spec_hash: str = ""
+    # Populated only by the opt-in legacy audit migration utility.
+    normalization_warnings: list[str] = Field(default_factory=list)

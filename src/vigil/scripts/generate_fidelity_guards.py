@@ -141,11 +141,11 @@ def main() -> None:
     parser.add_argument(
         "--guard-source",
         choices=["deterministic", "llm", "hybrid", "audit"],
-        default="deterministic",
+        default="llm",
         help=(
-            "Guard contract source: deterministic rules, LLM contract, hybrid "
-            "(LLM first, deterministic fallback), or audit replay (reuse prior LLM "
-            "audit artifacts with no model calls)."
+            "Guard contract source: LLM contract, deterministic rules for ablation, "
+            "hybrid (LLM first, deterministic fallback), or audit replay (reuse "
+            "prior LLM audit artifacts with no model calls)."
         ),
     )
     parser.add_argument(
@@ -175,11 +175,11 @@ def main() -> None:
     parser.add_argument(
         "--invariant-source",
         choices=["deterministic", "llm", "hybrid", "audit"],
-        default="deterministic",
+        default="llm",
         help=(
-            "State-invariant candidate source: deterministic rules, LLM packet, hybrid "
-            "(LLM first, deterministic fallback), or audit replay (reuse prior packet "
-            "audits with no model calls)."
+            "State-invariant candidate source: LLM packet, deterministic rules for "
+            "ablation, hybrid (LLM first, deterministic fallback), or audit replay "
+            "(reuse prior packet audits with no model calls)."
         ),
     )
     parser.add_argument(
@@ -206,6 +206,15 @@ def main() -> None:
         type=int,
         default=2,
         help="Minimum replay observations required before attaching a runtime state invariant.",
+    )
+    parser.add_argument(
+        "--allow-provider-fallback",
+        action="store_true",
+        help=(
+            "Opt in to the explicitly-recorded fallback_validate mode when a provider/proxy "
+            "cannot honor native structured output. Off by default: the llm path then fails "
+            "clearly (prompt_only_unavailable) instead of silently degrading to prompt-only JSON."
+        ),
     )
     parser.add_argument(
         "--force-visual",
@@ -269,6 +278,7 @@ def main() -> None:
                 invariant_use_images=not args.invariant_no_images,
                 invariant_audit_root=args.invariant_audit_root,
                 min_invariant_observations=args.min_invariant_observations,
+                allow_provider_fallback=args.allow_provider_fallback,
             )
         )
 
@@ -326,16 +336,17 @@ def run_one_app(
     max_states: int | None,
     output_docs_layout: bool = False,
     clean_output: bool = False,
-    guard_source: str = "deterministic",
+    guard_source: str = "llm",
     guard_prompt: str = DEFAULT_GUARD_PROMPT,
     guard_use_images: bool = True,
     guard_audit_root: Path | None = None,
     skip_invariants: bool = False,
-    invariant_source: str = "deterministic",
+    invariant_source: str = "llm",
     invariant_prompt: str = DEFAULT_INVARIANT_PROMPT,
     invariant_use_images: bool = True,
     invariant_audit_root: Path | None = None,
     min_invariant_observations: int = 2,
+    allow_provider_fallback: bool = False,
 ) -> dict[str, Any]:
     if output_docs_layout:
         app_data_dir = data_root / spec.trace_package
@@ -357,6 +368,9 @@ def run_one_app(
 
     prior = _load_prior(app_data_dir)
     fsm = AppFSM.deserialize(fsm_path)
+    # Identifiers the prompt redactor must mask (config/evidence-driven, not a hardcoded
+    # blacklist): the bundle package, the trace package, and the output slug for this app.
+    redact_identifiers = [spec.package, spec.trace_package, spec.output_slug, spec.name]
     if clean_output and app_report_dir.exists():
         shutil.rmtree(app_report_dir)
     app_report_dir.mkdir(parents=True, exist_ok=True)
@@ -408,6 +422,8 @@ def run_one_app(
             ),
             llm_audit_report=invariant_audit_replay,
             min_runtime_observations=min_invariant_observations,
+            redact_identifiers=redact_identifiers,
+            allow_provider_fallback=allow_provider_fallback,
         )
         write_invariant_generation_report(
             invariant_report, app_report_dir / "invariant_generation.json"
@@ -443,6 +459,8 @@ def run_one_app(
                 app_report_dir / "llm_guard_attempts" if guard_source in ("llm", "hybrid") else None
             ),
             llm_audit_report=llm_audit_report,
+            redact_identifiers=redact_identifiers,
+            allow_provider_fallback=allow_provider_fallback,
         )
         write_guard_generation_report(guard_report, app_report_dir / "guard_generation.json")
 

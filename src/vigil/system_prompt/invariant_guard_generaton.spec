@@ -12,7 +12,8 @@ Use this file as a structured specification:
   Defines the inputs, evidence packet, verifier interface, and read-only facts.
 
 [GUARANTEE]:
-  Defines the JSON output and field-level contracts.
+  Defines the field-level semantics of the output packet. The object shape itself is
+  enforced by the provider's structured-output schema, not by this spec.
 
 [SPECIFICATION]:
   Defines the preconditions, legal outcomes, always-enforced rules, and synthesis
@@ -26,7 +27,8 @@ If [RELY] provides evidence that cannot be used under [SPECIFICATION], follow
 [SPECIFICATION] and return rejected or metadata-only candidates instead of using
 that evidence unsafely.
 
-Return JSON only.
+The output object shape is fixed and enforced by the provider's structured-output schema; this
+spec is a semantic policy, not the schema authority. Emit a single candidate packet object.
 
 ## Logical Model
 This prompt follows a contract-first invariant/guard synthesis model. State
@@ -123,14 +125,15 @@ INVARIANT_GUARD_EVIDENCE_PACKET:
       I_struct:
         meaning: screen identity, activity/window/dialog boundary, container
                  type, stable chrome, and structural presence facts.
-        examples: in_state("checkout"), read(title, text) == "Checkout",
-                  count(form_fields) >= 2
+        examples: read(<stable_title_alias>, text) == "<stable_screen_label>",
+                  count(<stable_container_alias>) >= 1
       I_bind:
         meaning: widget alias to semantic role/action role bindings needed to
                  interpret future actions or intent slots.
-        examples: role(amount_field) is amount input metadata, pay_button is
-                  submit/payment action metadata, recipient_label binds a
-                  recipient summary
+        examples: <value_field_alias> is value-input metadata,
+                  <commit_control_alias> is commit/action metadata,
+                  <summary_label_alias> binds a selected-entity summary,
+                  <scope_label_alias> binds a permission/capability scope
         note: executable expressions must still use supported predicates such as
               read/value/contains/count; semantic role claims are metadata unless
               admission can compile them.
@@ -173,6 +176,13 @@ INVARIANT_GUARD_EVIDENCE_PACKET:
     layout_widget_declarations?: list<string>
     menu_navigation_resources?: list<string>
     role: semantic role/domain/value-domain/side-effect hints only; not runtime proof
+    anti_leakage:
+      - package names, app slugs, bundle names, raw screen ids, file paths, and
+        benchmark/evaluator labels are provenance only
+      - do not infer app domain, guard kind, slot names, or literal values from
+        package names or fixture identifiers
+      - if a package/static identifier looks benchmark-specific or hidden-task-like,
+        ignore the identifier text except as provenance
 
   [Verifier Basis]:
     predicate_vocabulary: PredicateBasis
@@ -248,9 +258,9 @@ WidgetRegistryEntry:
   content_description?: string
   role?: button | text_field | toggle | checkbox | radio | list_container |
          list_item | title | menu_item | toolbar_action | dialog_action |
-         semantic_label | amount_label | address_label | recipient_label |
-         account_label | item_label | message_preview | status_text |
-         error_text | success_text | permission_scope | unknown
+         semantic_label | value_label | destination_label | entity_label |
+         source_label | item_label | content_preview | status_text |
+         error_text | success_text | permission_scope | capability_scope | unknown
   semantic_role?: string
   readable_props: set<Property>
   provenance?: runtime | runtime+apk_prior | runtime+llm | runtime+apk_prior+llm
@@ -279,93 +289,30 @@ ReadableActionProperty:
 ```
 
 [GUARANTEE]
-```json
-{
-  "state_invariant_candidates": [
-    {
-      "kind": "structural|container_shape|stable_label|semantic_binding|action_affordance|form_status|selection_status|status|error_absence|success_presence|value_domain|safety_summary|side_effect_audit|unknown",
-      "expr": "read(com.app:id/title, text) == \"Checkout\"",
-      "scope": "state",
-      "admission_target": "runtime_state_invariant|metadata_only|reject",
-      "confidence": 0.0,
-      "evidence_count": 0,
-      "source": "llm|llm+cross_visit|llm+apk_prior|llm+cross_visit+apk_prior",
-      "volatility": "stable|likely_stable|volatile|unknown",
-      "provenance": ["llm"],
-      "notes": "",
-      "rejection_reason": ""
-    }
-  ],
-  "transition_guard_candidates": [
-    {
-      "source_state_id": "s0",
-      "target_state_id": "s1",
-      "canonical_action_key": "<tau,q,v>",
-      "contract": {
-        "kind": "none|navigation|item_binding|input_binding|toggle_binding|form_check|confirm_commit|safety_check|invariant_hint|unknown",
-        "required": false,
-        "required_slots": [
-          {
-            "name": "amount",
-            "slot_type": "string|number|boolean|enum|unknown",
-            "description": "",
-            "required": true,
-            "value_domain": []
-          }
-        ],
-        "predicates": [
-          {
-            "predicate_type": "read|value|action|contains|count|in_state|time_in",
-            "element": "<source guard registry alias or null>",
-            "property": "<readable property or null>",
-            "operator": "==|!=|>|<|>=|<=|null",
-            "expected": {
-              "kind": "literal|intent",
-              "value": "<literal value or null>",
-              "slot": "<intent slot name or null>"
-            },
-            "args": {}
-          }
-        ],
-        "binding_requirements": [
-          {
-            "name": "selected_payee",
-            "bind_kind": "row|selector|action|element",
-            "description": "",
-            "value_domain": []
-          }
-        ],
-        "semantic_binding_required": false,
-        "semantic_binding_incomplete": false,
-        "confidence": 0.0,
-        "provenance": ["llm"],
-        "notes": ""
-      },
-      "semantic_binding_incomplete": false,
-      "rejection_reason": ""
-    }
-  ],
-  "effect_invariant_hints": [
-    {
-      "incoming_source_state_id": "s0",
-      "target_state_id": "s1",
-      "canonical_action_key": "<tau,q,v>",
-      "description": "Transition-specific fact that would be useful if conditional/action-aware invariants are supported.",
-      "desired_expr": "read(com.app:id/status, text) == \"Sent\"",
-      "why_not_runtime_state_invariant": "depends_on_action|depends_on_intent|target_only_single_visit|unsupported_predicate|volatile|unknown",
-      "provenance": ["llm"]
-    }
-  ],
-  "rejected_candidates": [
-    {
-      "candidate_type": "state_invariant|transition_guard|effect_invariant_hint",
-      "expr_or_summary": "",
-      "reason": ""
-    }
-  ],
-  "notes": ""
-}
-```
+The output object shape (the `InvariantGuardCandidatePacket`) is fixed and enforced by the
+provider's structured-output schema — do not restate or invent JSON shape here. This section
+describes only the *meaning* of each field so candidates are well-formed semantically:
+
+  * `state_invariant_candidates`: proposed state facts `I(s)`. Each has a single executable
+    `expr` over the arrival registry, a semantic `kind`, an `admission_target`
+    (`runtime_state_invariant` | `metadata_only` | `reject`), an evidence-based `confidence`
+    and `evidence_count`, a `volatility` classification, `provenance`, `notes`, and an optional
+    `rejection_reason`.
+  * `transition_guard_candidates`: proposed pre-action guards `Gamma(s,a)` for existing
+    transitions, addressed by `source_state_id`, `target_state_id`, and the verbatim
+    `canonical_action_key`. Each carries a typed guard `contract` (kind, required,
+    required_slots, predicates, binding_requirements, confidence, provenance, notes).
+  * `effect_invariant_hints`: useful conditional/action/intent-dependent facts that are NOT
+    runtime state invariants, each with a `why_not_runtime_state_invariant` reason.
+  * `rejected_candidates`: candidates deliberately not emitted as executable, with reasons.
+  * `notes`: free-form synthesis reasoning.
+
+Slot names, expressions, and literals must be generic and evidence-derived. Use neutral
+role-based placeholders (e.g. `<typed_value_slot>`, `<selected_entity_slot>`,
+`<target_control_slot>`, `<scope_label_alias>`, `<success_status_literal>`,
+`<source_summary_alias>`, `<option_label_alias>`, `<commit_summary_alias>`) rather than copying
+any concrete app's strings. Never derive content from package names, app slugs, raw screen ids,
+file paths, or evaluator/gold labels.
 
 [SPECIFICATION]
 **Given**:
@@ -421,6 +368,14 @@ ReadableActionProperty:
     * The guard may reference only source guard registry aliases, known-action
       properties, literals supported by source/action evidence, and declared
       `$intent.*` slots.
+    * `required_slots` is the candidate contract's declared intent interface for
+      this transition. Declare a slot only when it is grounded in source/action
+      evidence, or when an external task intent-slot interface is explicitly present
+      in the input packet.
+    * For input, row/item selection, option selection, form submission, and
+      commit-like transitions, first try executable semantic binding predicates.
+      A guard whose only executable predicate is enabledness/clickability is
+      incomplete when source/action evidence can bind a declared intent slot.
     * Do not use target-only UI in executable guard predicates.
     * Do not modify the transition or canonical action identity.
 
@@ -460,12 +415,13 @@ ReadableActionProperty:
   * Do not create exact count invariants for dynamic lists unless repeated evidence
     proves a stable structural count. Prefer range/shape facts only when executable
     and supported.
-  * Do not create literal text invariants for user-specific item names, contacts,
-    addresses, amounts, or messages unless the text is a stable UI label or status.
+  * Do not create literal text invariants for user-specific entity names, item
+    names, destinations, typed values, or authored content unless the text is a
+    stable UI label or status.
   * Use intent binding in guards, not state invariants, when the fact depends on the
     user's requested value.
   * Every executable expression must parse under `PredicateBasis`.
-  * Return JSON only.
+  * The output object shape is enforced by the structured-output schema.
 
 **System Algorithm**:
   1. Build the target-state evidence view from runtime observations, the
@@ -517,9 +473,10 @@ ReadableActionProperty:
     activity/window/dialog boundaries, stable chrome labels, and required
     structural presence/count facts.
   * Use `semantic_binding` or `action_affordance` for `I_bind` facts: widget
-    aliases that identify roles such as recipient/account/item/amount fields or
-    submit/cancel/confirm controls. If the role cannot be expressed in the
-    executable DSL, emit it as metadata-only.
+    aliases that identify roles such as entity, source, destination, item,
+    content, option, scope, or typed-value fields and submit/cancel/confirm
+    controls. If the role cannot be expressed in the executable DSL, emit it as
+    metadata-only.
   * Use `form_status`, `selection_status`, `status`, `error_absence`,
     `success_presence`, or `value_domain` for `I_value` facts: coarse form state,
     enabledness, checked/selected state, visible error/success messages, or
@@ -572,6 +529,20 @@ ReadableActionProperty:
     transition fact that induced it when such a link is available.
   * The candidate must follow the same executable-soundness rules as
     `transition_guard_generation_readable_registry.spec`.
+  * Slot names must be generic and evidence-derived from widget roles, action
+    properties, resource/text semantics, or runtime-confirmed static priors. Do not
+    derive slots from benchmark-specific app knowledge, package names, hidden task
+    answers, or fixture constants.
+  * Package names, app slugs, bundle names, raw screen ids, file paths, and
+    evaluator/gold labels are provenance only. Do not use them to infer the app
+    domain, choose a guard kind, choose slot names, or introduce expected literals.
+  * Before emitting only `read(..., is_enabled) == true` or
+    `read(..., is_clickable) == true`, check whether the transition is an input,
+    selection, option, form-submit, or commit-like action whose source/action
+    evidence can express a semantic binding with `action(...)`, `read(...)`, or
+    `value(...)` against a declared `$intent.*` slot.
+  * Enabledness/clickability may remain as readiness predicates, but they do not
+    replace semantic binding when executable binding evidence is available.
 
 [SPECIFICATION of Effect Invariant Hints]
 **Given**:
@@ -579,9 +550,10 @@ ReadableActionProperty:
 
 **Requirement**:
   * Emit it as `effect_invariant_hints`, not as a runtime state invariant.
-  * Examples include "after send, status is Sent", "after selecting recipient,
-    summary shows $intent.recipient", and "after payment, total equals
-    $intent.amount".
+  * Examples include "after a side-effecting commit, a stable status label appears",
+    "after selecting an entity, a source/target summary reflects
+    $intent.<selected_entity_slot>", and "after submitting a typed value, a stable
+    summary reflects $intent.<typed_value_slot>".
   * If the fact is side-effecting or authority-changing, also produce or request a pre-action guard when source
     evidence supports one.
 
@@ -599,8 +571,8 @@ ReadableActionProperty:
     is explicitly provided.
   * For transition guards, `action` is allowed only over known action properties.
   * Do not emit natural-language pseudo-predicates such as `visible(...)`,
-    `selected(...)`, `matches(...)`, `is_recipient(...)`, `has_error(...)`, or
-    `screen_contains(...)`.
+    `selected(...)`, `matches(...)`, `is_target_entity(...)`, `has_error(...)`,
+    or `screen_contains(...)`.
   * Do not emit compound expressions for state invariants unless each atom is
     independently executable and admission can parse the full DSL expression.
 
@@ -655,9 +627,13 @@ ReadableActionProperty:
   * Mark volatile facts as rejected or metadata-only.
   * Exact literal text is acceptable for stable chrome labels, button labels,
     dialog titles, permission scopes, status labels, and error/success messages.
-  * Exact literal text is not acceptable for user-entered fields, messages, contacts,
-    product names, order totals, balances, dates, times, counters, and feed rows
-    unless repeated evidence and domain context prove stability.
+  * Exact literal text is not acceptable for user-entered fields, user-authored
+    content, entity names, item names, computed totals, balances, dates, times,
+    counters, and feed rows unless repeated evidence and domain context prove
+    stability.
+  * Treat fixture-looking names, synthetic app labels, benchmark personas/items, and
+    task-answer strings as user-specific or hidden-test data unless runtime evidence
+    shows they are stable UI chrome.
   * Boolean facts such as enabled/checked/selected may be invariants only when they
     are stable state facts, not transient interaction artifacts.
 

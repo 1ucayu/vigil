@@ -49,6 +49,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.models.invariant_candidate import TransitionGuardCandidate
     from vigil.neuro.app_prior import AppPrior
     from vigil.neuro.invariant_evidence import InvariantEvidence
+    from vigil.neuro.prompt_redaction import PromptRedactor
 
 InvariantSource = Literal["deterministic", "llm", "hybrid", "audit"]
 
@@ -69,13 +70,52 @@ def _write_packet_audit(
     path = audit_dir / f"state_{_slug(evidence.target_state_id)}.json"
     payload = {
         "state_id": evidence.target_state_id,
+        "parsed_ok": candidate.parsed_ok,
+        "schema_name": candidate.schema_name,
+        "schema_hash": candidate.schema_hash,
+        "schema_constraint_mode": candidate.schema_constraint_mode,
+        "provider": candidate.provider,
+        "model": candidate.model,
+        "spec_hash": candidate.spec_hash,
+        "refusal": candidate.refusal,
         "rejection_reason": candidate.rejection_reason,
         "parse_errors": candidate.parse_errors,
+        "validation_errors": candidate.validation_errors,
+        "normalization_warnings": candidate.normalization_warnings,
         "packet": candidate.packet.model_dump(mode="json"),
         "raw_responses": candidate.raw_responses,
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return str(path)
+
+
+def _invariant_candidate_meta(candidate: LlmInvariantPacketCandidate | None) -> dict[str, Any]:
+    """Structured-output provenance fields for a report row (empty for deterministic/audit)."""
+    if candidate is None:
+        return {
+            "parsed_ok": None,
+            "schema_name": "",
+            "schema_hash": "",
+            "schema_constraint_mode": "",
+            "provider": "",
+            "model": "",
+            "spec_hash": "",
+            "refusal": "",
+            "validation_errors": [],
+            "normalization_warnings": [],
+        }
+    return {
+        "parsed_ok": candidate.parsed_ok,
+        "schema_name": candidate.schema_name,
+        "schema_hash": candidate.schema_hash,
+        "schema_constraint_mode": candidate.schema_constraint_mode,
+        "provider": candidate.provider,
+        "model": candidate.model,
+        "spec_hash": candidate.spec_hash,
+        "refusal": candidate.refusal,
+        "validation_errors": candidate.validation_errors,
+        "normalization_warnings": candidate.normalization_warnings,
+    }
 
 
 def _packet_from_audit(path: Path) -> InvariantGuardCandidatePacket | None:
@@ -100,13 +140,17 @@ def _resolve_packet(
     use_images: bool,
     audit_dir: Path | None,
     audit_rows_by_state: dict[str, dict[str, Any]],
-) -> tuple[InvariantGuardCandidatePacket, str, str, str]:
+    redactor: PromptRedactor | None,
+    allow_provider_fallback: bool,
+) -> tuple[InvariantGuardCandidatePacket, str, str, str, LlmInvariantPacketCandidate | None]:
     """Resolve the candidate packet for one state.
 
-    Returns ``(packet, origin, fallback_reason, audit_path)``.
+    Returns ``(packet, origin, fallback_reason, audit_path, candidate)``. ``candidate`` is the
+    LLM packet candidate (with structured-output provenance) for live llm/hybrid modes, else
+    ``None``.
     """
     if invariant_source == "deterministic":
-        return synthesize_invariant_candidates(evidence), "deterministic", "", ""
+        return synthesize_invariant_candidates(evidence), "deterministic", "", "", None
 
     if invariant_source == "audit":
         # Strict, reproducible replay: audit mode attaches ONLY invariants present in the
@@ -121,6 +165,7 @@ def _resolve_packet(
                 "audit",
                 "audit packet path missing for state; no invariants attached",
                 "",
+                None,
             )
         packet = _packet_from_audit(Path(audit_path))
         if packet is None:
@@ -129,26 +174,35 @@ def _resolve_packet(
                 "audit",
                 f"audit packet missing/unreadable: {audit_path}",
                 audit_path,
+                None,
             )
-        return packet, "audit", "", audit_path
+        return packet, "audit", "", audit_path, None
 
     assert llm is not None
     candidate = generate_llm_invariant_guard_candidate(
-        evidence, llm, prompt_name=invariant_prompt, use_images=use_images
+        evidence,
+        llm,
+        prompt_name=invariant_prompt,
+        use_images=use_images,
+        redactor=redactor,
+        allow_provider_fallback=allow_provider_fallback,
     )
     audit_path = _write_packet_audit(evidence, candidate, audit_dir)
     if invariant_source == "llm":
-        return candidate.packet, "llm", candidate.rejection_reason, audit_path
+        # A structured-generation failure (parsed_ok=False) yields an empty packet: nothing is
+        # attached and the rejection reason is reported. No deterministic synthesis is faked.
+        return candidate.packet, "llm", candidate.rejection_reason, audit_path, candidate
 
     # hybrid: prefer the LLM packet; fall back to deterministic synthesis on LLM failure.
-    if candidate.rejection_reason:
+    if not candidate.parsed_ok or candidate.rejection_reason:
         return (
             synthesize_invariant_candidates(evidence),
             "fallback",
             f"llm packet rejected: {candidate.rejection_reason}",
             audit_path,
+            candidate,
         )
-    return candidate.packet, "llm", "", audit_path
+    return candidate.packet, "llm", "", audit_path, candidate
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +342,7 @@ def generate_contract_invariants(
     raw_screens: dict[str, Any],
     app_prior: AppPrior | None = None,
     *,
-    invariant_source: InvariantSource = "deterministic",
+    invariant_source: InvariantSource = "llm",
     llm: LlmClient | None = None,
     invariant_prompt: str = DEFAULT_INVARIANT_PROMPT,
     use_images: bool = True,
@@ -296,6 +350,9 @@ def generate_contract_invariants(
     llm_audit_report: list[dict[str, Any]] | None = None,
     grammar_path: str | None = None,
     min_runtime_observations: int = 2,
+    redactor: PromptRedactor | None = None,
+    redact_identifiers: list[str] | None = None,
+    allow_provider_fallback: bool = False,
 ) -> list[dict[str, Any]]:
     """Synthesize, admit, and attach runtime state invariants across ``fsm``'s states.
 
@@ -309,6 +366,11 @@ def generate_contract_invariants(
 
     evaluator = DSLEvaluator(grammar_path)
     evidence_items = build_all_invariant_evidence(fsm, raw_screens, app_prior)
+    # Build a prompt redactor for live LLM modes (config/evidence-driven) unless supplied.
+    if redactor is None and invariant_source in ("llm", "hybrid"):
+        from vigil.neuro.prompt_redaction import build_prompt_redactor
+
+        redactor = build_prompt_redactor(fsm, evidence_items, extra_identifiers=redact_identifiers)
     audit_rows_by_state = {
         str(row.get("state_id")): row for row in (llm_audit_report or []) if isinstance(row, dict)
     }
@@ -316,7 +378,7 @@ def generate_contract_invariants(
     report: list[dict[str, Any]] = []
     for evidence in evidence_items:
         state = fsm.states.get(evidence.target_state_id)
-        packet, origin, fallback, audit_path = _resolve_packet(
+        packet, origin, fallback, audit_path, packet_candidate = _resolve_packet(
             evidence,
             invariant_source,
             llm,
@@ -324,6 +386,8 @@ def generate_contract_invariants(
             use_images,
             llm_audit_dir,
             audit_rows_by_state,
+            redactor,
+            allow_provider_fallback,
         )
 
         admitted: list[StateInvariant] = []
@@ -414,6 +478,7 @@ def generate_contract_invariants(
                 "effect_hints": hint_rows,
                 "rejected": rejected_rows,
                 "guard_candidates": guard_rows,
+                **_invariant_candidate_meta(packet_candidate),
             }
         )
 

@@ -2,34 +2,42 @@
 
 This asks an LLM to produce a typed
 :class:`~vigil.models.invariant_candidate.InvariantGuardCandidatePacket` for a *single,
-already-built* arrival state, using ``src/vigil/system_prompt/invariant_guard_generaton.spec``
-as the normative schema. The model is a candidate generator only: it proposes typed
-state-invariant candidates, transition-guard candidates, effect-invariant hints, and
-rejected candidates. Admission, DSL parsing, alias resolution, replay confidence, and
-runtime verdicts all remain deterministic / symbolic downstream.
+already-built* arrival state via **provider structured output** (a strict
+:class:`~vigil.models.llm_structured.LlmInvariantGuardResponse` schema), then converts the
+parsed object into a :class:`LlmInvariantPacketCandidate`. The model is a candidate generator
+only: it proposes typed state-invariant candidates, transition-guard candidates,
+effect-invariant hints, and rejected candidates. Admission, DSL parsing, alias resolution,
+replay confidence, and runtime verdicts all remain deterministic / symbolic downstream.
 
-Parsing is defensive: any LLM/parse failure degrades to an empty packet with a
-``rejection_reason`` rather than raising into the pipeline.
+When structured output is unavailable (provider/schema failure, refusal, or validation
+failure), the result is a clearly rejected candidate (``parsed_ok=False``) with the
+provider/schema error — never a fabricated success. There is no prompt-only JSON parsing and
+no repair-prompt loop on this path.
 """
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from vigil.models.invariant_candidate import InvariantGuardCandidatePacket
-from vigil.neuro.guard_contract_llm import _parse_json, _registry_lines
+from vigil.models.llm_structured import LlmInvariantGuardResponse
+from vigil.neuro.guard_contract_llm import _failure_reason, _registry_lines
 from vigil.system_prompt import load_system_prompt
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.core.llm_client import LlmClient
+    from vigil.core.structured import StructuredResult
     from vigil.neuro.invariant_evidence import InvariantEvidence
+    from vigil.neuro.prompt_redaction import PromptRedactor
 
 
 DEFAULT_INVARIANT_PROMPT = "invariant_guard_generaton.spec"
+INVARIANT_SCHEMA_NAME = "LlmInvariantGuardResponse"
 
 # Cap how much per-observation detail enters the prompt so multi-visit states stay bounded.
 _MAX_PROMPT_OBSERVATIONS = 4
@@ -38,13 +46,30 @@ _MAX_PROMPT_IMAGES = 3
 
 
 class LlmInvariantPacketCandidate(BaseModel):
-    """An LLM-produced candidate packet, before admission."""
+    """An LLM-produced candidate packet, before admission.
+
+    ``parsed_ok`` is the authoritative success flag: ``True`` only when the provider returned
+    a schema-valid object. When ``False`` the pipeline must treat this as a clear rejection
+    and must not synthesize/attach invariants as if generation had succeeded.
+    """
 
     packet: InvariantGuardCandidatePacket = Field(default_factory=InvariantGuardCandidatePacket)
     rejection_reason: str = ""
     raw_response: str = ""
     raw_responses: list[str] = Field(default_factory=list)
     parse_errors: list[str] = Field(default_factory=list)
+    # Structured-output provenance (audit only).
+    parsed_ok: bool = False
+    schema_name: str = ""
+    schema_hash: str = ""
+    schema_constraint_mode: str = ""
+    provider: str = ""
+    model: str = ""
+    refusal: str = ""
+    validation_errors: list[str] = Field(default_factory=list)
+    spec_hash: str = ""
+    # Populated only by the opt-in legacy audit migration utility.
+    normalization_warnings: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +121,16 @@ def _transition_lines(transitions: Any) -> list[str]:
     return lines
 
 
-def build_invariant_user_prompt(evidence: InvariantEvidence) -> str:
-    """Build the per-state user prompt for invariant/guard candidate generation."""
+def build_invariant_user_prompt(
+    evidence: InvariantEvidence,
+    *,
+    redactor: PromptRedactor | None = None,
+) -> str:
+    """Build the per-state user prompt for invariant/guard candidate generation.
+
+    When ``redactor`` is supplied, identifier/benchmark leakage is masked in the assembled
+    prompt while usable registry aliases, permissions, and action properties are preserved.
+    """
     reg_lines = _registry_lines(evidence.arrival_registry)
     existing = [spec.expr for spec in evidence.existing_invariant_specs]
 
@@ -149,6 +182,19 @@ def build_invariant_user_prompt(evidence: InvariantEvidence) -> str:
     )
 
     sections.append(
+        "[Transition Guard Candidate Checklist]\n"
+        "For any transition_guard_candidates you emit, `required_slots` is the "
+        "candidate contract's declared intent interface. Declare slots only when "
+        "grounded in source/action evidence or an explicitly supplied task intent "
+        "interface; use generic role-derived names, not app-specific fixtures.\n"
+        "For input_text, row/item selection, option selection, form submission, and "
+        "commit-like actions, first try an executable semantic binding predicate over "
+        "action(...), read(...), or value(...) against a declared $intent.* slot. "
+        "Enabledness/clickability can be readiness checks, but an enabled/clickable-only "
+        "guard is incomplete when executable semantic binding evidence is available."
+    )
+
+    sections.append(
         "[Global Information / Static APK Priors]\n"
         "Purpose: semantic role/domain hints only; never runtime proof.\n"
         + (
@@ -160,7 +206,7 @@ def build_invariant_user_prompt(evidence: InvariantEvidence) -> str:
 
     sections.append(
         "[Output]\n"
-        "Return JSON only: the InvariantGuardCandidatePacket object from the system prompt "
+        "Emit the InvariantGuardCandidatePacket object from the system prompt "
         "(state_invariant_candidates, transition_guard_candidates, effect_invariant_hints, "
         "rejected_candidates, notes).\n"
         "For every transition_guard_candidate, copy the matching transition's exact `cak=` "
@@ -168,7 +214,10 @@ def build_invariant_user_prompt(evidence: InvariantEvidence) -> str:
         "share the same (source, target)."
     )
 
-    return "\n\n".join(sections)
+    prompt = "\n\n".join(sections)
+    if redactor is not None:
+        prompt = redactor.redact(prompt)
+    return prompt
 
 
 def invariant_image_paths(evidence: InvariantEvidence) -> tuple[list[Path], list[str]]:
@@ -198,42 +247,50 @@ def invariant_image_paths(evidence: InvariantEvidence) -> tuple[list[Path], list
 
 
 # ---------------------------------------------------------------------------
-# Parsing
+# Structured-result conversion
 # ---------------------------------------------------------------------------
 
 
-def parse_invariant_guard_packet(raw_response: str) -> LlmInvariantPacketCandidate:
-    """Parse a raw LLM response into a candidate packet, never raising."""
-    parsed = _parse_json(raw_response)
-    if parsed is None:
-        return LlmInvariantPacketCandidate(
-            rejection_reason="LLM output is not valid JSON",
-            raw_response=raw_response,
-            raw_responses=[raw_response],
-            parse_errors=["LLM output is not valid JSON"],
-        )
-    if not isinstance(parsed, dict):
-        return LlmInvariantPacketCandidate(
-            rejection_reason="LLM output is not a JSON object",
-            raw_response=raw_response,
-            raw_responses=[raw_response],
-            parse_errors=["LLM output is not a JSON object"],
-        )
-    try:
-        packet = InvariantGuardCandidatePacket.model_validate(parsed)
-    except ValidationError as exc:
-        reason = f"packet schema validation failed: {exc.error_count()} error(s)"
-        return LlmInvariantPacketCandidate(
-            rejection_reason=reason,
-            raw_response=raw_response,
-            raw_responses=[raw_response],
-            parse_errors=[reason],
-        )
-    return LlmInvariantPacketCandidate(
-        packet=packet,
-        raw_response=raw_response,
-        raw_responses=[raw_response],
+def _attach_structured_metadata(
+    candidate: LlmInvariantPacketCandidate,
+    result: StructuredResult,
+    spec_hash: str,
+) -> LlmInvariantPacketCandidate:
+    candidate.schema_name = result.schema_name
+    candidate.schema_hash = result.schema_hash
+    candidate.schema_constraint_mode = result.schema_constraint_mode
+    candidate.provider = result.provider
+    candidate.model = result.model
+    candidate.refusal = result.refusal or ""
+    candidate.validation_errors = list(result.validation_errors)
+    candidate.spec_hash = spec_hash
+    candidate.raw_response = result.raw_text
+    candidate.raw_responses = [result.raw_text] if result.raw_text else []
+    return candidate
+
+
+def candidate_from_structured_result(
+    result: StructuredResult,
+    spec_hash: str,
+) -> LlmInvariantPacketCandidate:
+    """Convert a :class:`StructuredResult` into an invariant packet candidate (never raises)."""
+    if result.parsed is not None:
+        assert isinstance(result.parsed, LlmInvariantGuardResponse)
+        candidate = LlmInvariantPacketCandidate(packet=result.parsed.to_runtime(), parsed_ok=True)
+        return _attach_structured_metadata(candidate, result, spec_hash)
+
+    reason = _failure_reason(result)
+    candidate = LlmInvariantPacketCandidate(
+        parsed_ok=False,
+        rejection_reason=reason,
+        parse_errors=[reason],
     )
+    return _attach_structured_metadata(candidate, result, spec_hash)
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
 
 def generate_llm_invariant_guard_candidate(
@@ -242,22 +299,47 @@ def generate_llm_invariant_guard_candidate(
     *,
     prompt_name: str = DEFAULT_INVARIANT_PROMPT,
     use_images: bool = True,
+    redactor: PromptRedactor | None = None,
+    allow_provider_fallback: bool = False,
 ) -> LlmInvariantPacketCandidate:
-    """Generate an invariant/guard candidate packet for one state via the LLM."""
+    """Generate an invariant/guard candidate packet for one state via structured output."""
     system_prompt = load_system_prompt(prompt_name)
-    user_prompt = build_invariant_user_prompt(evidence)
+    spec_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
+    user_prompt = build_invariant_user_prompt(evidence, redactor=redactor)
     try:
         images, image_labels = invariant_image_paths(evidence) if use_images else ([], [])
-        if images and hasattr(llm, "generate_with_images"):
-            raw = llm.generate_with_images(system_prompt, user_prompt, images, image_labels)
+        if redactor is not None:
+            image_labels = [redactor.redact(label) for label in image_labels]
+        if images and hasattr(llm, "generate_structured_with_images"):
+            result = llm.generate_structured_with_images(
+                system_prompt,
+                user_prompt,
+                images,
+                LlmInvariantGuardResponse,
+                INVARIANT_SCHEMA_NAME,
+                image_labels,
+                allow_provider_fallback=allow_provider_fallback,
+            )
         else:
-            raw = llm.generate(system_prompt, user_prompt)
+            result = llm.generate_structured(
+                system_prompt,
+                user_prompt,
+                LlmInvariantGuardResponse,
+                INVARIANT_SCHEMA_NAME,
+                allow_provider_fallback=allow_provider_fallback,
+            )
     except Exception as exc:  # noqa: BLE001 - degrade gracefully, never crash the pipeline
         logger.warning(
             f"LLM invariant generation failed for state {evidence.target_state_id}: {exc}"
         )
+        reason = f"llm call failed: {exc}"
         return LlmInvariantPacketCandidate(
-            rejection_reason=f"llm call failed: {exc}",
-            parse_errors=[f"llm call failed: {exc}"],
+            parsed_ok=False,
+            rejection_reason=reason,
+            parse_errors=[reason],
+            validation_errors=[reason],
+            schema_name=INVARIANT_SCHEMA_NAME,
+            schema_constraint_mode="prompt_only_unavailable",
+            spec_hash=spec_hash,
         )
-    return parse_invariant_guard_packet(raw)
+    return candidate_from_structured_result(result, spec_hash)

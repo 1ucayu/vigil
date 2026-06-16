@@ -1,117 +1,49 @@
 """LLM-backed, contract-first guard generation (Stage 4).
 
 This module asks an LLM to produce a typed transition
-:class:`~vigil.models.guard.GuardContract` for a *single, already-known* transition,
-then parses and validates that JSON into a
+:class:`~vigil.models.guard.GuardContract` for a *single, already-known* transition via
+**provider structured output** (a strict :class:`~vigil.models.llm_structured.LlmGuardResponse`
+schema), then converts the parsed object into a
 :class:`~vigil.models.guard.LlmGuardContractCandidate`.
 
-Design constraints (CLAUDE.md → "DSL Guard Generation Direction"; plan):
+Design constraints (CLAUDE.md -> "DSL Guard Generation Direction"; plan):
 
-- The LLM never emits free-form DSL as its primary artifact — it emits typed contract
-  JSON. Compilation/admission to executable DSL is a later deterministic step.
-- The LLM may not create/modify FSM states, actions, transitions, replay confidence, or
-  runtime verdicts. Target-state evidence is background context only; executable guard
-  predicates may read only the source screen, proposed action, and frozen intent.
-- ``$bind.*`` is metadata only: it appears in ``contract.binding_requirements`` /
-  ``precondition.binding_requirements``, never as a predicate /
-  :class:`~vigil.models.guard.ValueRef`. A predicate's ``expected.kind`` may only be
-  ``literal`` or ``intent`` on this path; anything else makes the candidate a rejection
-  (the compiler/admission would drop it anyway).
-- Parsing is defensive: any failure returns a rejected candidate (with a reason) rather
-  than raising into the pipeline.
+- The LLM never emits free-form DSL and never raw/fenced JSON — it emits a single schema-valid
+  ``LlmGuardResponse`` object. Compilation/admission to executable DSL is a later deterministic
+  step. There is no prompt-only JSON parsing and no repair-prompt loop on this path.
+- The LLM may not create/modify FSM states, actions, transitions, replay confidence, or runtime
+  verdicts. Target-state evidence is background context only; executable guard predicates may
+  read only the source screen, proposed action, and frozen intent.
+- ``$bind.*`` is metadata only (``contract.binding_requirements``), never a predicate. The strict
+  schema already restricts predicate RHS to ``literal`` / ``intent``.
+- When structured output is unavailable (provider/schema failure, refusal, or validation
+  failure), the result is a clearly rejected candidate (``parsed_ok=False``) carrying the
+  provider/schema error — never a fabricated success.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from pydantic import ValidationError
 
-from vigil.models.guard import (
-    GuardContract,
-    LlmGuardContractCandidate,
-)
+from vigil.models.guard import LlmGuardContractCandidate
+from vigil.models.llm_structured import LlmGuardResponse
 from vigil.system_prompt import load_system_prompt
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.core.llm_client import LlmClient
+    from vigil.core.structured import StructuredResult
     from vigil.neuro.guard_evidence import GuardEvidence, ScreenEvidence
     from vigil.neuro.guard_registry import WidgetRegistry
+    from vigil.neuro.prompt_redaction import PromptRedactor
 
 
 DEFAULT_GUARD_PROMPT = "transition_guard_generation.spec"
-
-# RHS value kinds the LLM path is allowed to put inside a predicate. ``$bind.*`` and other
-# UI/action-side references must live in ``binding_requirements``, not predicates.
-_ALLOWED_EXPECTED_KINDS: frozenset[str] = frozenset({"literal", "intent"})
-
-
-# ---------------------------------------------------------------------------
-# JSON parsing (mirrors visual_grounder._parse_json)
-# ---------------------------------------------------------------------------
-
-
-def _parse_json(response: str) -> Any | None:
-    """Parse possibly fenced / prose-wrapped JSON, returning ``None`` on failure."""
-    text = (response or "").strip()
-    if text.startswith("```"):
-        lines = [ln for ln in text.splitlines() if not ln.strip().startswith("```")]
-        text = "\n".join(lines).strip()
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    candidate = _first_balanced_json_object(text)
-    if candidate is None:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        candidate = text[start : end + 1]
-    try:
-        return json.loads(candidate)
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-
-def _first_balanced_json_object(text: str) -> str | None:
-    """Return the first balanced JSON object substring, ignoring strings/escapes."""
-    start = text.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    in_string = False
-    escaped = False
-    for idx in range(start, len(text)):
-        char = text[idx]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            continue
-        if char == '"':
-            in_string = True
-            continue
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : idx + 1]
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Prompt construction
-# ---------------------------------------------------------------------------
+GUARD_SCHEMA_NAME = "LlmGuardResponse"
 
 
 def _registry_lines(registry: WidgetRegistry) -> list[str]:
@@ -222,8 +154,17 @@ def guard_image_paths(evidence: GuardEvidence) -> tuple[list[Path], list[str]]:
     return images, labels
 
 
-def build_guard_user_prompt(evidence: GuardEvidence) -> str:
-    """Build the user prompt for one transition guard contract."""
+def build_guard_user_prompt(
+    evidence: GuardEvidence,
+    *,
+    redactor: PromptRedactor | None = None,
+) -> str:
+    """Build the user prompt for one transition guard contract.
+
+    When ``redactor`` is supplied, benchmark/identifier leakage (package names, app slugs,
+    raw screen ids, local paths, evaluator labels) is masked in the assembled prompt while
+    usable registry aliases, permissions, and action properties are preserved.
+    """
     reg_lines = _registry_lines(evidence.source_registry)
     sib_lines = _sibling_lines(evidence.sibling_actions)
     invariant_lines = _invariant_lines(evidence.target_invariants)
@@ -235,8 +176,6 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
         "Generate a transition guard contract Gamma for this already-known transition.\n"
         "Gamma may reference only source screen P, known_action properties, and frozen "
         "$intent.* variables.\n"
-        "The top-level `contract` field is the canonical output object. The parser also "
-        "accepts a legacy `precondition` wrapper for compatibility.\n"
         "$bind.* needs are metadata in binding_requirements, not executable Gamma predicates."
     )
 
@@ -314,149 +253,102 @@ def build_guard_user_prompt(evidence: GuardEvidence) -> str:
 
     sections.append(
         "[Verifier Basis]\n"
-        "- Output typed transition guard JSON in the top-level `contract` object.\n"
-        "- A legacy `precondition` object is accepted only as a compatibility wrapper.\n"
+        "- Emit a single transition guard contract object (the structured schema fixes the "
+        "shape).\n"
         "- Predicates compile to conjunctions over: read, value, action, count, "
         "in_state, and time_in, with contains/not_contains as comparison operators.\n"
         "- Guard predicates may reference only source widget aliases, proposed action "
         "properties, literal values, and declared frozen $intent.* slots.\n"
+        "- `required_slots` is the contract's declared intent interface. Declare slots "
+        "only when grounded in source/action evidence or an explicitly supplied task "
+        "intent interface; use generic role-derived names, not app-specific fixtures.\n"
         "- Put UI/action-side $bind.* needs in binding_requirements metadata only; never "
         "inside executable predicates."
     )
 
     sections.append(
+        "[Semantic Binding Checklist]\n"
+        "- For input_text, row/item selection, option selection, form submission, and "
+        "commit-like actions, first try an executable semantic binding predicate over "
+        "action(...), read(...), or value(...) against a declared $intent.* slot.\n"
+        "- A guard with only read(..., is_enabled) == true or "
+        "read(..., is_clickable) == true is incomplete for those transitions when "
+        "source/action evidence can bind the intended value or selected object.\n"
+        "- Enabledness/clickability may be included as readiness checks in addition to "
+        "semantic binding.\n"
+        "- If semantic binding is plausible but cannot be grounded with source/action "
+        "evidence and the supported vocabulary, leave executable predicates empty or "
+        "readiness-only and explain the missing binding in notes or "
+        "binding_requirements."
+    )
+
+    sections.append(
         "[Output]\n"
-        "Return JSON only, using the transition guard contract object described in the "
-        "system prompt.\n"
+        "Emit the transition guard contract object described in the system prompt.\n"
         "Put any $bind.* UI-side binding in binding_requirements, never in predicates."
     )
 
-    return "\n\n".join(sections)
+    prompt = "\n\n".join(sections)
+    if redactor is not None:
+        prompt = redactor.redact(prompt)
+    return prompt
 
 
 # ---------------------------------------------------------------------------
-# Candidate validation
+# Structured-result conversion
 # ---------------------------------------------------------------------------
 
 
-def _coerce_candidate(parsed: Any) -> tuple[LlmGuardContractCandidate | None, str]:
-    """Validate parsed JSON into a candidate. Returns ``(candidate, reason)``.
-
-    ``candidate`` is ``None`` when the JSON cannot be validated as a contract.
-    """
-    if not isinstance(parsed, dict):
-        return None, "LLM output is not a JSON object"
-
-    # Accept the canonical wrapper {contract: {...}}, a legacy {precondition: {...}}
-    # wrapper, or a bare contract object.
-    if isinstance(parsed.get("contract"), dict):
-        contract_payload = parsed["contract"]
-    elif isinstance(parsed.get("precondition"), dict):
-        contract_payload = parsed["precondition"]
-    elif "contract" in parsed:
-        return None, "missing 'contract' object"
-    elif "precondition" in parsed:
-        return None, "missing 'precondition' object"
-    else:
-        contract_payload = parsed
-    if not isinstance(contract_payload, dict):
-        return None, "missing 'contract' or 'precondition' object"
-
-    try:
-        contract = GuardContract.model_validate(contract_payload)
-    except ValidationError as exc:
-        return None, f"contract schema validation failed: {exc.error_count()} error(s)"
-
-    parse_warnings: list[str] = []
-
-    # Boundary enforcement: predicates may only compare against literal / intent values.
-    # Anything else (action/read RHS, or a smuggled $bind reference) is not allowed on the
-    # LLM path — treat the whole candidate as rejected so we do not silently drop bindings.
-    for pred in contract.predicates:
-        kind = pred.expected.kind if pred.expected is not None else None
-        if kind is not None and kind not in _ALLOWED_EXPECTED_KINDS:
-            return None, (
-                f"predicate expected.kind={kind!r} not allowed on the LLM path "
-                "($bind.* / action / read RHS must be metadata, not a predicate)"
-            )
-    incomplete = bool(
-        parsed.get("semantic_binding_incomplete", contract.semantic_binding_incomplete)
-    )
-    contract.semantic_binding_incomplete = contract.semantic_binding_incomplete or incomplete
-    rejection_reason = str(parsed.get("rejection_reason") or "")
-    return (
-        LlmGuardContractCandidate(
-            contract=contract,
-            semantic_binding_incomplete=contract.semantic_binding_incomplete,
-            rejection_reason=rejection_reason,
-            parse_errors=parse_warnings,
-        ),
-        "",
-    )
+def _failure_reason(result: StructuredResult) -> str:
+    """Human-readable reason for a structured result that produced no parsed object."""
+    if result.refusal:
+        return f"provider refusal: {result.refusal}"
+    if result.schema_constraint_mode == "prompt_only_unavailable":
+        detail = result.validation_errors[0] if result.validation_errors else ""
+        return f"structured output unavailable: {detail}".strip()
+    if result.validation_errors:
+        return f"schema validation failed: {result.validation_errors[0]}"
+    if result.incomplete:
+        return f"incomplete response: {result.incomplete_detail or 'truncated'}"
+    return "no schema-valid object returned"
 
 
-def parse_llm_guard_candidate(raw_response: str) -> LlmGuardContractCandidate:
-    """Parse a raw LLM response into a candidate, never raising.
-
-    On any parse/validation failure, returns a candidate whose ``contract`` is empty and
-    whose ``rejection_reason`` explains why. ``raw_response`` is always preserved for audit.
-    """
-    parsed = _parse_json(raw_response)
-    if parsed is None:
-        return LlmGuardContractCandidate(
-            rejection_reason="LLM output is not valid JSON",
-            raw_response=raw_response,
-            raw_responses=[raw_response],
-            parse_errors=["LLM output is not valid JSON"],
-        )
-    candidate, reason = _coerce_candidate(parsed)
-    if candidate is None:
-        return LlmGuardContractCandidate(
-            rejection_reason=reason,
-            raw_response=raw_response,
-            raw_responses=[raw_response],
-            parse_errors=[reason],
-        )
-    candidate.raw_response = raw_response
-    candidate.raw_responses = [raw_response]
+def _attach_structured_metadata(
+    candidate: LlmGuardContractCandidate,
+    result: StructuredResult,
+    spec_hash: str,
+) -> LlmGuardContractCandidate:
+    candidate.schema_name = result.schema_name
+    candidate.schema_hash = result.schema_hash
+    candidate.schema_constraint_mode = result.schema_constraint_mode
+    candidate.provider = result.provider
+    candidate.model = result.model
+    candidate.refusal = result.refusal or ""
+    candidate.validation_errors = list(result.validation_errors)
+    candidate.spec_hash = spec_hash
+    candidate.raw_response = result.raw_text
+    candidate.raw_responses = [result.raw_text] if result.raw_text else []
     return candidate
 
 
-def _merge_candidates(
-    first: LlmGuardContractCandidate,
-    repaired: LlmGuardContractCandidate,
+def candidate_from_structured_result(
+    result: StructuredResult,
+    spec_hash: str,
 ) -> LlmGuardContractCandidate:
-    """Preserve first/repair audit metadata while returning the repair result."""
-    repaired.raw_responses = [
-        *(first.raw_responses or ([first.raw_response] if first.raw_response else [])),
-        *(repaired.raw_responses or ([repaired.raw_response] if repaired.raw_response else [])),
-    ]
-    repaired.parse_errors = [
-        *(first.parse_errors or ([first.rejection_reason] if first.rejection_reason else [])),
-        *(
-            repaired.parse_errors
-            or ([repaired.rejection_reason] if repaired.rejection_reason else [])
-        ),
-    ]
-    repaired.repair_attempted = True
-    return repaired
+    """Convert a :class:`StructuredResult` into a guard candidate (never raises)."""
+    if result.parsed is not None:
+        assert isinstance(result.parsed, LlmGuardResponse)
+        candidate = result.parsed.to_runtime()
+        candidate.parsed_ok = True
+        return _attach_structured_metadata(candidate, result, spec_hash)
 
-
-def _repair_prompt(user_prompt: str, candidate: LlmGuardContractCandidate) -> str:
-    """Ask the model to repair only its JSON transition guard contract output."""
-    raw = candidate.raw_response or ""
-    reason = candidate.rejection_reason or "invalid transition guard contract JSON"
-    return (
-        "Your previous guard-contract response could not be admitted because it was not "
-        f"valid transition guard contract JSON: {reason}.\n\n"
-        "Return JSON only. Do not use markdown, prose, comments, or multiple JSON objects.\n\n"
-        "[Original transition evidence]\n"
-        f"{user_prompt}\n\n"
-        "[Previous invalid response]\n"
-        "```text\n"
-        f"{raw}\n"
-        "```"
+    reason = _failure_reason(result)
+    candidate = LlmGuardContractCandidate(
+        parsed_ok=False,
+        rejection_reason=reason,
+        parse_errors=[reason],
     )
+    return _attach_structured_metadata(candidate, result, spec_hash)
 
 
 # ---------------------------------------------------------------------------
@@ -470,42 +362,55 @@ def generate_llm_guard_candidate(
     *,
     prompt_name: str = DEFAULT_GUARD_PROMPT,
     use_images: bool = True,
+    redactor: PromptRedactor | None = None,
+    allow_provider_fallback: bool = False,
 ) -> LlmGuardContractCandidate:
-    """Generate a guard-contract candidate for one transition via the LLM.
+    """Generate a guard-contract candidate for one transition via structured output.
 
-    Loads the system prompt by name, builds the Hoare user prompt from ``evidence``, calls
-    the LLM (multimodal when source/target screenshots exist), and parses the response
-    into a validated candidate. Any LLM/parse failure degrades to a rejected candidate
-    rather than raising.
+    Loads the system prompt, builds the (optionally redacted) user prompt from ``evidence``,
+    and calls the provider's schema-constrained structured-output path with the strict
+    :class:`LlmGuardResponse` model (multimodal when source/target screenshots exist). The
+    parsed object is converted directly into a candidate; a structured-output failure yields
+    a clearly rejected candidate (``parsed_ok=False``) rather than a fabricated success. No
+    prompt-only JSON parsing or repair re-prompts run on this path.
     """
     system_prompt = load_system_prompt(prompt_name)
-    user_prompt = build_guard_user_prompt(evidence)
+    spec_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
+    user_prompt = build_guard_user_prompt(evidence, redactor=redactor)
     try:
         images, image_labels = guard_image_paths(evidence) if use_images else ([], [])
-        if images and hasattr(llm, "generate_with_images"):
-            raw = llm.generate_with_images(system_prompt, user_prompt, images, image_labels)
+        if redactor is not None:
+            image_labels = [redactor.redact(label) for label in image_labels]
+        if images and hasattr(llm, "generate_structured_with_images"):
+            result = llm.generate_structured_with_images(
+                system_prompt,
+                user_prompt,
+                images,
+                LlmGuardResponse,
+                GUARD_SCHEMA_NAME,
+                image_labels,
+                allow_provider_fallback=allow_provider_fallback,
+            )
         else:
-            raw = llm.generate(system_prompt, user_prompt)
+            result = llm.generate_structured(
+                system_prompt,
+                user_prompt,
+                LlmGuardResponse,
+                GUARD_SCHEMA_NAME,
+                allow_provider_fallback=allow_provider_fallback,
+            )
     except Exception as exc:  # noqa: BLE001 - degrade gracefully, never crash the pipeline
         logger.warning(
             f"LLM guard generation failed for transition {evidence.transition_index}: {exc}"
         )
+        reason = f"llm call failed: {exc}"
         return LlmGuardContractCandidate(
-            rejection_reason=f"llm call failed: {exc}",
-            contract=GuardContract(),
-            parse_errors=[f"llm call failed: {exc}"],
+            parsed_ok=False,
+            rejection_reason=reason,
+            parse_errors=[reason],
+            validation_errors=[reason],
+            schema_name=GUARD_SCHEMA_NAME,
+            schema_constraint_mode="prompt_only_unavailable",
+            spec_hash=spec_hash,
         )
-    candidate = parse_llm_guard_candidate(raw)
-    if not candidate.rejection_reason:
-        return candidate
-
-    try:
-        repaired_raw = llm.generate(system_prompt, _repair_prompt(user_prompt, candidate))
-    except Exception as exc:  # noqa: BLE001 - repair is best-effort only
-        logger.warning(
-            "LLM guard JSON repair failed for transition " f"{evidence.transition_index}: {exc}"
-        )
-        candidate.parse_errors.append(f"repair call failed: {exc}")
-        return candidate
-
-    return _merge_candidates(candidate, parse_llm_guard_candidate(repaired_raw))
+    return candidate_from_structured_result(result, spec_hash)

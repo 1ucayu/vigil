@@ -15,6 +15,7 @@ from vigil.models.fsm import (
     Transition,
 )
 from vigil.models.guard import GuardAdmissionStatus
+from vigil.models.llm_structured import LlmInvariantGuardResponse
 from vigil.neuro.invariant_generation_pipeline import generate_contract_invariants
 from vigil.symbolic.decision_engine import DecisionEngine
 from vigil.symbolic.fsm_checker import VerifyReason, VerifyResult
@@ -232,14 +233,29 @@ def test_legacy_required_guard_without_admission_does_not_block_after_invariants
 
 
 class _FixedPacketLlm:
-    def __init__(self, response: str) -> None:
-        self.response = response
+    """Structured-interface stand-in returning a fixed parsed packet response."""
 
-    def generate(self, _system: str, _user: str) -> str:
-        return self.response
+    def __init__(self, parsed) -> None:
+        self._parsed = parsed
 
-    def generate_with_images(self, _system, _text, _images, _labels=None) -> str:
-        return self.response
+    def _result(self, schema_name: str):
+        from vigil.core.structured import StructuredResult
+
+        return StructuredResult(
+            parsed=self._parsed,
+            raw_text="{}" if self._parsed is not None else "",
+            provider="proxy",
+            model="fake",
+            schema_name=schema_name,
+            schema_hash="h",
+            schema_constraint_mode="native_schema",
+        )
+
+    def generate_structured(self, _system, _user, _model, schema_name, **_kw):
+        return self._result(schema_name)
+
+    def generate_structured_with_images(self, *a, schema_name="x", **k):
+        return self._result(schema_name)
 
 
 def test_target_only_guard_predicate_rejected_via_existing_admission() -> None:
@@ -271,7 +287,7 @@ def test_target_only_guard_predicate_rejected_via_existing_admission() -> None:
             ],
         },
     }
-    packet = json.dumps(
+    packet = LlmInvariantGuardResponse.model_validate(
         {
             "state_invariant_candidates": [],
             "transition_guard_candidates": [
@@ -288,7 +304,7 @@ def test_target_only_guard_predicate_rejected_via_existing_admission() -> None:
                                 "element": "target_only_field",
                                 "property": "text",
                                 "operator": "==",
-                                "expected": {"kind": "literal", "value": "Z"},
+                                "expected": {"kind": "literal", "literal_value": "Z"},
                             }
                         ],
                     },
@@ -404,8 +420,10 @@ def _two_edge_fsm() -> tuple[AppFSM, dict[str, Any]]:
     return fsm, raw_screens
 
 
-def _guard_packet(source: str, target: str, cak: str, element: str = "x") -> str:
-    return json.dumps(
+def _guard_packet(
+    source: str, target: str, cak: str, element: str = "x"
+) -> LlmInvariantGuardResponse:
+    return LlmInvariantGuardResponse.model_validate(
         {
             "state_invariant_candidates": [],
             "transition_guard_candidates": [
@@ -422,7 +440,7 @@ def _guard_packet(source: str, target: str, cak: str, element: str = "x") -> str
                                 "element": element,
                                 "property": "text",
                                 "operator": "==",
-                                "expected": {"kind": "literal", "value": "X"},
+                                "expected": {"kind": "literal", "literal_value": "X"},
                             }
                         ],
                     },

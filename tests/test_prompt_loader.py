@@ -29,6 +29,20 @@ def test_prompt_dir_points_at_package():
     assert (PROMPT_DIR / "transition_guard_generation.spec").is_file()
 
 
+def test_specs_are_policy_not_schema_authority():
+    guard = load_system_prompt("transition_guard_generation.spec")
+    invariant = load_system_prompt("invariant_guard_generaton.spec")
+    # Policy markers: the structured schema is the shape authority, not the spec.
+    assert "structured-output schema" in guard
+    assert "structured-output schema" in invariant
+    # The old JSON answer-template blocks are gone.
+    assert '"semantic_binding_incomplete": false,' not in guard
+    assert '"admission_target": "runtime_state_invariant|metadata_only|reject"' not in invariant
+    assert "precondition" not in guard.lower()
+    # Ordinary mobile-app domain concepts remain legitimate.
+    assert "permission" in guard.lower()
+
+
 def test_missing_prompt_raises_file_not_found():
     with pytest.raises(FileNotFoundError):
         load_system_prompt("does_not_exist.spec")

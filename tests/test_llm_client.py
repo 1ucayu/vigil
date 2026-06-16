@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from PIL import Image
+from pydantic import BaseModel
 
 from vigil.core.config import LLMConfig
 from vigil.core.llm_client import LlmClient
@@ -361,3 +362,139 @@ class TestProxyProvider:
         assert content[0]["type"] == "image_url"
         assert content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
         assert content[1] == {"type": "text", "text": "text prompt"}
+
+
+class _Schema(BaseModel):
+    value: str
+
+
+class TestStructuredOutput:
+    """Provider-aware structured generation routing (fake clients only)."""
+
+    @patch("openai.OpenAI")
+    def test_proxy_native_schema_parse(self, mock_openai_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        message = MagicMock(parsed=_Schema(value="ok"), content='{"value":"ok"}', refusal=None)
+        completion = MagicMock(choices=[MagicMock(message=message, finish_reason="stop")])
+        mock_client.chat.completions.parse.return_value = completion
+
+        client = LlmClient(LLMConfig(provider="proxy"))
+        result = client.generate_structured("sys", "user", _Schema, "Sch")
+
+        assert result.parsed == _Schema(value="ok")
+        assert result.schema_constraint_mode == "native_schema"
+        assert result.refusal is None
+        call_kwargs = mock_client.chat.completions.parse.call_args.kwargs
+        assert call_kwargs["response_format"] is _Schema
+        assert "max_tokens" not in call_kwargs
+        assert "max_completion_tokens" not in call_kwargs
+
+    @patch("openai.OpenAI")
+    def test_proxy_unsupported_schema_fails_clearly_without_fallback(
+        self, mock_openai_cls: MagicMock
+    ) -> None:
+        import httpx
+        import openai
+
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        request = httpx.Request("POST", "http://localhost:4141/v1/chat/completions")
+        response = httpx.Response(400, request=request)
+        mock_client.chat.completions.parse.side_effect = openai.BadRequestError(
+            "response_format json_schema not supported", response=response, body=None
+        )
+
+        client = LlmClient(LLMConfig(provider="proxy"))
+        result = client.generate_structured("sys", "user", _Schema, "Sch")
+
+        assert result.parsed is None
+        assert result.schema_constraint_mode == "prompt_only_unavailable"
+        assert result.validation_errors
+        # The plain text path must NOT be used when fallback is not opted into.
+        mock_client.chat.completions.create.assert_not_called()
+
+    @patch("openai.OpenAI")
+    def test_proxy_unsupported_schema_uses_fallback_when_opted_in(
+        self, mock_openai_cls: MagicMock
+    ) -> None:
+        import httpx
+        import openai
+
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        request = httpx.Request("POST", "http://localhost:4141/v1/chat/completions")
+        response = httpx.Response(400, request=request)
+        mock_client.chat.completions.parse.side_effect = openai.BadRequestError(
+            "json_schema unsupported", response=response, body=None
+        )
+        # fallback_validate routes through the plain chat.completions.create text path.
+        text_completion = MagicMock(
+            choices=[MagicMock(message=MagicMock(content='{"value":"fallback"}'))], usage=None
+        )
+        mock_client.chat.completions.create.return_value = text_completion
+
+        client = LlmClient(LLMConfig(provider="proxy"))
+        result = client.generate_structured(
+            "sys", "user", _Schema, "Sch", allow_provider_fallback=True
+        )
+
+        assert result.schema_constraint_mode == "fallback_validate"
+        assert result.parsed == _Schema(value="fallback")
+        mock_client.chat.completions.create.assert_called_once()
+
+    @patch.dict(os.environ, {"GOOGLE_API_KEY": "k"})
+    def test_google_native_response_schema(self) -> None:
+        with patch("google.genai.Client") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            candidate = MagicMock()
+            candidate.finish_reason = MagicMock(value="STOP")
+            response = MagicMock(parsed=_Schema(value="ok"), text='{"value":"ok"}')
+            response.candidates = [candidate]
+            mock_client.models.generate_content.return_value = response
+
+            client = LlmClient(LLMConfig(provider="google", model="gemini-2.5-pro"))
+            result = client.generate_structured("sys", "user", _Schema, "Sch")
+
+            assert result.parsed == _Schema(value="ok")
+            assert result.schema_constraint_mode == "native_schema"
+            gen_config = mock_client.models.generate_content.call_args.kwargs["config"]
+            assert gen_config.response_schema is _Schema
+            assert gen_config.response_mime_type == "application/json"
+
+    @patch("anthropic.Anthropic")
+    def test_anthropic_forced_tool_use(self, mock_anthropic_cls: MagicMock) -> None:
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}):
+            mock_client = MagicMock()
+            mock_anthropic_cls.return_value = mock_client
+            block = MagicMock()
+            block.type = "tool_use"
+            block.input = {"value": "ok"}
+            message = MagicMock(content=[block], stop_reason="tool_use")
+            mock_client.messages.create.return_value = message
+
+            client = LlmClient(LLMConfig(provider="anthropic", model="claude-sonnet-4.6"))
+            result = client.generate_structured("sys", "user", _Schema, "Sch")
+
+            assert result.parsed == _Schema(value="ok")
+            assert result.schema_constraint_mode == "tool_schema"
+            call_kwargs = mock_client.messages.create.call_args.kwargs
+            assert call_kwargs["tool_choice"] == {"type": "tool", "name": "Sch"}
+            assert call_kwargs["tools"][0]["name"] == "Sch"
+            # Anthropic REQUIRES max_tokens; it is the one documented cap.
+            assert "max_tokens" in call_kwargs
+
+    @patch("openai.OpenAI")
+    def test_proxy_refusal_yields_no_parsed(self, mock_openai_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        message = MagicMock(parsed=None, content=None, refusal="I refuse")
+        completion = MagicMock(choices=[MagicMock(message=message, finish_reason="stop")])
+        mock_client.chat.completions.parse.return_value = completion
+
+        client = LlmClient(LLMConfig(provider="proxy"))
+        result = client.generate_structured("sys", "user", _Schema, "Sch")
+
+        assert result.parsed is None
+        assert result.refusal == "I refuse"

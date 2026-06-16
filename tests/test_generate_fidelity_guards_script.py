@@ -62,6 +62,18 @@ def _run_main(monkeypatch, tmp_path, argv: list[str]) -> dict:
     return captured
 
 
+def test_default_guard_and_invariant_sources_build_llm(monkeypatch, tmp_path) -> None:
+    sentinel = object()
+    monkeypatch.setattr(script, "discover_default_model", lambda *_a, **_k: "fake-model")
+    monkeypatch.setattr(script, "LlmClient", lambda *_a, **_k: sentinel)
+
+    captured = _run_main(monkeypatch, tmp_path, ["--skip-visual"])
+
+    assert captured["guard_source"] == "llm"
+    assert captured["invariant_source"] == "llm"
+    assert captured["llm"] is sentinel
+
+
 def test_deterministic_skip_visual_builds_no_llm(monkeypatch, tmp_path) -> None:
     # Deterministic guard generation with --skip-visual must not query or construct a model.
     def _boom(*_a, **_k):
@@ -75,7 +87,15 @@ def test_deterministic_skip_visual_builds_no_llm(monkeypatch, tmp_path) -> None:
     )
 
     captured = _run_main(
-        monkeypatch, tmp_path, ["--skip-visual", "--guard-source", "deterministic"]
+        monkeypatch,
+        tmp_path,
+        [
+            "--skip-visual",
+            "--guard-source",
+            "deterministic",
+            "--invariant-source",
+            "deterministic",
+        ],
     )
     assert captured["guard_source"] == "deterministic"
     assert captured["llm"] is None
@@ -114,6 +134,8 @@ def test_audit_skip_visual_builds_no_llm(monkeypatch, tmp_path) -> None:
             "audit",
             "--guard-audit-root",
             str(audit_root),
+            "--invariant-source",
+            "deterministic",
         ],
     )
     assert captured["guard_source"] == "audit"
