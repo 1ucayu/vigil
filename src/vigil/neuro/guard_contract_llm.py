@@ -2,20 +2,22 @@
 
 This module asks an LLM to produce a typed transition
 :class:`~vigil.models.guard.GuardContract` for a *single, already-known* transition via
-**provider structured output** (a strict :class:`~vigil.models.llm_structured.LlmGuardResponse`
-schema), then converts the parsed object into a
+**provider structured output** (a strict
+:class:`~vigil.models.llm_structured.LlmTransitionGuardResponse` schema), then converts
+the parsed object into a
 :class:`~vigil.models.guard.LlmGuardContractCandidate`.
 
 Design constraints (CLAUDE.md -> "DSL Guard Generation Direction"; plan):
 
-- The LLM never emits free-form DSL and never raw/fenced JSON — it emits a single schema-valid
-  ``LlmGuardResponse`` object. Compilation/admission to executable DSL is a later deterministic
-  step. There is no prompt-only JSON parsing and no repair-prompt loop on this path.
+- The LLM never emits free-form DSL and never raw/fenced JSON — it emits a single
+  schema-valid ``LlmTransitionGuardResponse`` object. Compilation/admission to executable
+  DSL is a later deterministic step. There is no prompt-only JSON parsing and no
+  repair-prompt loop on this path.
 - The LLM may not create/modify FSM states, actions, transitions, replay confidence, or runtime
   verdicts. Target-state evidence is background context only; executable guard predicates may
   read only the source screen, proposed action, and frozen intent.
-- ``$bind.*`` is metadata only (``contract.binding_requirements``), never a predicate. The strict
-  schema already restricts predicate RHS to ``literal`` / ``intent``.
+- The lean LLM schema exposes only ``kind``, ``slots``, and executable ``predicates``.
+  Non-executable binding ideas are omitted; admission reports unsupported semantics.
 - When structured output is unavailable (provider/schema failure, refusal, or validation
   failure), the result is a clearly rejected candidate (``parsed_ok=False``) carrying the
   provider/schema error — never a fabricated success.
@@ -31,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from vigil.models.guard import LlmGuardContractCandidate
-from vigil.models.llm_structured import LlmGuardResponse
+from vigil.models.llm_structured import LlmTransitionGuardResponse
 from vigil.system_prompt import load_system_prompt
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -43,7 +45,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 
 DEFAULT_GUARD_PROMPT = "transition_guard_generation.spec"
-GUARD_SCHEMA_NAME = "LlmGuardResponse"
+GUARD_SCHEMA_NAME = "LlmTransitionGuardResponse"
 
 
 def _registry_lines(registry: WidgetRegistry) -> list[str]:
@@ -85,10 +87,7 @@ def _fenced(label: str, value: str) -> str:
 
 
 def _screen_section(title: str, screen: ScreenEvidence, *, source_readable: bool) -> str:
-    image_status = "not available"
-    if screen.screenshot_path:
-        image_status = "attached as image if the file exists"
-
+    screenshot_status = "available in trace" if screen.screenshot_path else "not available"
     purpose = (
         "This is P/source: the ONLY UI state that transition guard Gamma may read."
         if source_readable
@@ -102,16 +101,15 @@ def _screen_section(title: str, screen: ScreenEvidence, *, source_readable: bool
         f"[{title}]",
         f"Purpose: {purpose}",
         f"- state_id: {screen.state_id}",
-        f"- screen_id: {screen.screen_id or '(none)'}",
         f"- activity: {screen.activity_name or '(none)'}",
-        f"- package: {screen.package_name or '(none)'}",
         f"- display_name: {screen.display_name!r}",
         f"- page_function: {screen.page_function!r}",
-        f"- screenshot_path: {screen.screenshot_path or '(none)'} ({image_status})",
-        f"- xml_tree_path: {screen.xml_tree_path or '(none)'}",
-        _fenced("LLM-derived visual alt text / layout summary", screen.alt_text),
+        f"- screenshot: {screenshot_status}; not attached unless explicit image mode is enabled",
+        _fenced(
+            "Visual Caption Cache (screenshot-only perception hint, not admission proof)",
+            screen.alt_text,
+        ),
         _fenced("Compact accessibility/XML tree summary", screen.compact_tree_text),
-        _fenced("XML file text", screen.xml_excerpt),
     ]
     return "\n".join(parts)
 
@@ -173,10 +171,9 @@ def build_guard_user_prompt(
     sections: list[str] = []
     sections.append(
         "/* Transition Guard Evidence */\n"
-        "Generate a transition guard contract Gamma for this already-known transition.\n"
+        "Generate a minimal transition guard contract Gamma for this already-known transition.\n"
         "Gamma may reference only source screen P, known_action properties, and frozen "
-        "$intent.* variables.\n"
-        "$bind.* needs are metadata in binding_requirements, not executable Gamma predicates."
+        "$intent.* variables."
     )
 
     sections.append(
@@ -186,9 +183,7 @@ def build_guard_user_prompt(
         f"- target_state_id: {evidence.target_state_id}\n"
         f"- source_state_name: {evidence.source_state_name!r}\n"
         f"- source_page_function: {evidence.source_page_function!r}\n"
-        f"- source_screen_ids: {evidence.source_screen_ids}\n"
-        f"- replay_confidence: {evidence.replay_confidence}\n"
-        f"- low_trust: {evidence.low_trust}"
+        f"- replay_confidence: {evidence.replay_confidence}"
     )
 
     sections.append(
@@ -256,14 +251,12 @@ def build_guard_user_prompt(
         "- Emit a single transition guard contract object (the structured schema fixes the "
         "shape).\n"
         "- Predicates compile to conjunctions over: read, value, action, count, "
-        "in_state, and time_in, with contains/not_contains as comparison operators.\n"
+        "and contains, with contains/not_contains as comparison operators.\n"
         "- Guard predicates may reference only source widget aliases, proposed action "
         "properties, literal values, and declared frozen $intent.* slots.\n"
-        "- `required_slots` is the contract's declared intent interface. Declare slots "
+        "- `slots` is the contract's declared intent interface. Declare slots "
         "only when grounded in source/action evidence or an explicitly supplied task "
-        "intent interface; use generic role-derived names, not app-specific fixtures.\n"
-        "- Put UI/action-side $bind.* needs in binding_requirements metadata only; never "
-        "inside executable predicates."
+        "intent interface; use generic role-derived names, not app-specific fixtures."
     )
 
     sections.append(
@@ -278,14 +271,12 @@ def build_guard_user_prompt(
         "semantic binding.\n"
         "- If semantic binding is plausible but cannot be grounded with source/action "
         "evidence and the supported vocabulary, leave executable predicates empty or "
-        "readiness-only and explain the missing binding in notes or "
-        "binding_requirements."
+        "readiness-only."
     )
 
     sections.append(
         "[Output]\n"
-        "Emit the transition guard contract object described in the system prompt.\n"
-        "Put any $bind.* UI-side binding in binding_requirements, never in predicates."
+        "Emit only the minimal transition guard contract object described in the system prompt."
     )
 
     prompt = "\n\n".join(sections)
@@ -337,7 +328,7 @@ def candidate_from_structured_result(
 ) -> LlmGuardContractCandidate:
     """Convert a :class:`StructuredResult` into a guard candidate (never raises)."""
     if result.parsed is not None:
-        assert isinstance(result.parsed, LlmGuardResponse)
+        assert isinstance(result.parsed, LlmTransitionGuardResponse)
         candidate = result.parsed.to_runtime()
         candidate.parsed_ok = True
         return _attach_structured_metadata(candidate, result, spec_hash)
@@ -361,7 +352,7 @@ def generate_llm_guard_candidate(
     llm: LlmClient,
     *,
     prompt_name: str = DEFAULT_GUARD_PROMPT,
-    use_images: bool = True,
+    use_images: bool = False,
     redactor: PromptRedactor | None = None,
     allow_provider_fallback: bool = False,
 ) -> LlmGuardContractCandidate:
@@ -369,9 +360,11 @@ def generate_llm_guard_candidate(
 
     Loads the system prompt, builds the (optionally redacted) user prompt from ``evidence``,
     and calls the provider's schema-constrained structured-output path with the strict
-    :class:`LlmGuardResponse` model (multimodal when source/target screenshots exist). The
-    parsed object is converted directly into a candidate; a structured-output failure yields
-    a clearly rejected candidate (``parsed_ok=False``) rather than a fabricated success. No
+    :class:`LlmTransitionGuardResponse` model. By default this stage does not resend
+    screenshots; it consumes the visual caption cache produced by visual grounding. Explicit
+    image mode remains available for debugging or low-confidence perception fallback. The
+    parsed object is converted directly into a candidate; a structured-output failure yields a
+    clearly rejected candidate (``parsed_ok=False``) rather than a fabricated success. No
     prompt-only JSON parsing or repair re-prompts run on this path.
     """
     system_prompt = load_system_prompt(prompt_name)
@@ -386,7 +379,7 @@ def generate_llm_guard_candidate(
                 system_prompt,
                 user_prompt,
                 images,
-                LlmGuardResponse,
+                LlmTransitionGuardResponse,
                 GUARD_SCHEMA_NAME,
                 image_labels,
                 allow_provider_fallback=allow_provider_fallback,
@@ -395,7 +388,7 @@ def generate_llm_guard_candidate(
             result = llm.generate_structured(
                 system_prompt,
                 user_prompt,
-                LlmGuardResponse,
+                LlmTransitionGuardResponse,
                 GUARD_SCHEMA_NAME,
                 allow_provider_fallback=allow_provider_fallback,
             )

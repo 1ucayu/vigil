@@ -13,6 +13,7 @@ than collapsing to FALSE.
 
 from __future__ import annotations
 
+import ast
 import operator
 from enum import StrEnum
 from pathlib import Path
@@ -319,8 +320,11 @@ class _GuardEvaluator(Transformer):
             return False
         if s == "null":
             return None
-        if s.startswith('"') and s.endswith('"'):
-            return s[1:-1]
+        if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+            try:
+                return ast.literal_eval(s)
+            except (SyntaxError, ValueError):
+                return s[1:-1]
         try:
             if "." in s:
                 return float(s)

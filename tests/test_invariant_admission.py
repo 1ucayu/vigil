@@ -108,6 +108,26 @@ def test_stable_bool_fact_admitted() -> None:
     assert result.invariant.expr == "read(com.app:id/submit, is_enabled) == true"
 
 
+def test_single_quoted_string_literal_admitted_and_canonicalized() -> None:
+    rid = "com.app:id/screen_marker"
+    ev = _evidence(
+        "home",
+        [
+            _obs("a", [{"resource_id": rid, "text": "screen:home"}]),
+            _obs("b", [{"resource_id": rid, "text": "screen:home"}]),
+        ],
+    )
+
+    result = admit_state_invariant_candidate(
+        _cand("read(com.app:id/screen_marker, text) == 'screen:home'"),
+        ev,
+    )
+
+    assert result.admitted is True
+    assert result.invariant is not None
+    assert result.invariant.expr == 'read(com.app:id/screen_marker, text) == "screen:home"'
+
+
 def test_candidate_using_resource_id_directly_admitted() -> None:
     rid = f"{CLOCK}:id/elapsed_ms"
     ev = _evidence(

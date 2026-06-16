@@ -1,9 +1,8 @@
 """Focused screenshot/layout grounding for guard generation.
 
 This module is a lightweight alternative to :mod:`vigil.neuro.semantic_grounder`.
-It only enriches state annotations with visual layout summaries and icon labels;
-it does not mine invariants, alter state identity, add transitions, or make
-runtime decisions.
+It only enriches state annotations with a visual alt-text caption; it does not
+mine invariants, alter state identity, add transitions, or make runtime decisions.
 """
 
 from __future__ import annotations
@@ -22,31 +21,21 @@ _VISUAL_SYSTEM_PROMPT = """\
 You are annotating Android mobile GUI screenshots for a runtime verifier.
 You receive one screenshot plus a compact accessibility element table.
 
-Return ONLY valid JSON with this exact shape:
-{
-  "alt_text": "description focused on visual layout and visible controls",
-  "layout_summary": "description of regions, lists/forms/dialogs, and hierarchy",
-  "page_function": "stable slash/path such as chat/thread or banking/transfer/form",
-  "expected_actions": ["semantic_action", "..."],
-  "icon_labels": [
-    {
-      "element_id": "e_0001",
-      "label": "snake_case_functional_label",
-      "confidence": 0.0,
-      "basis": "visual/accessibility reason"
-    }
-  ],
-  "confidence": 0.0
-}
+Return ONLY a concise plain-text visual caption. Do not return JSON, markdown,
+tables, bullets, or code fences.
 
 Rules:
-- Describe only what is visible in the screenshot/accessibility data.
-- Icon labels are for textless or visually ambiguous controls only.
-- Use functional labels such as back_button, send_button, overflow_menu,
-  delete_button, add_item_button. Do not use color/shape-only labels.
+- Describe only screenshot-visible facts that are missing from or ambiguous in
+  the accessibility/XML table.
+- Focus on icon semantics, visual grouping, selected/disabled/occluded visual
+  state, dialogs/overlays, and layout relationships.
+- Refer to widgets by existing element ids, resource ids, visible text, or
+  content descriptions when available.
+- Do not restate ordinary XML-visible text/resource ids unless needed to explain
+  a visual relationship.
 - Do not invent transitions, guards, state ids, user intent values, or runtime verdicts.
-- Keep labels stable across captures; avoid names containing row instance values unless
-  the visible UI truly identifies a list item.
+- Keep the caption stable and app-agnostic. Avoid benchmark-specific labels,
+  package names, local paths, or hidden evaluator facts.
 """
 
 
@@ -71,19 +60,14 @@ def ground_fsm_visual_annotations(
         if max_states is not None and attempted >= max_states:
             break
 
-        if (
-            not force
-            and state.annotations.alt_text
-            and state.annotations.widget_aliases
-            and state.annotations.generation_confidence > 0
-        ):
+        if not force and state.annotations.alt_text and state.annotations.generation_confidence > 0:
             report.append(
                 {
                     "state_id": state_id,
                     "status": "skipped_existing",
                     "screen_id": None,
                     "page_function": state.annotations.page_function,
-                    "icon_labels": len(state.annotations.widget_aliases),
+                    "alt_text_chars": len(state.annotations.alt_text),
                 }
             )
             continue
@@ -126,9 +110,8 @@ def ground_fsm_visual_annotations(
                 "state_id": state_id,
                 "status": "annotated",
                 "screen_id": screen_id,
-                "page_function": parsed.get("page_function", ""),
                 "confidence": parsed.get("confidence", 0.0),
-                "icon_labels": len(parsed.get("icon_labels") or []),
+                "alt_text_chars": len(str(parsed.get("alt_text") or "")),
             }
         )
 
@@ -155,10 +138,10 @@ def describe_screen_visuals(
     else:
         response = llm.generate(_VISUAL_SYSTEM_PROMPT, prompt)
 
-    parsed = _parse_json(response)
-    if not isinstance(parsed, dict):
-        raise ValueError("visual grounding response was not a JSON object")
-    return parsed
+    alt_text = _clean_caption(response)
+    if not alt_text:
+        raise ValueError("visual grounding response was empty")
+    return {"alt_text": alt_text, "confidence": 0.5}
 
 
 def write_visual_grounding_report(report: list[dict[str, Any]], path: Path) -> None:
@@ -183,22 +166,15 @@ def _apply_visual_annotation(fsm: AppFSM, state_id: str, parsed: dict[str, Any])
     current = state.annotations
 
     alt_text = str(parsed.get("alt_text") or "").strip()
-    layout_summary = str(parsed.get("layout_summary") or "").strip()
-    if layout_summary and layout_summary not in alt_text:
-        alt_text = f"{alt_text}\nLayout: {layout_summary}".strip()
     if not alt_text:
         alt_text = current.alt_text
 
-    widget_aliases = _normalize_icon_labels(parsed.get("icon_labels"))
     state.annotations = StateAnnotations(
         display_name=current.display_name,
         alt_text=alt_text,
-        page_function=str(parsed.get("page_function") or current.page_function or ""),
-        expected_actions=[
-            str(item) for item in (parsed.get("expected_actions") or []) if str(item).strip()
-        ]
-        or current.expected_actions,
-        widget_aliases=widget_aliases or current.widget_aliases,
+        page_function=current.page_function,
+        expected_actions=current.expected_actions,
+        widget_aliases=current.widget_aliases,
         generation_confidence=_coerce_confidence(
             parsed.get("confidence", current.generation_confidence)
         ),
@@ -345,19 +321,10 @@ def _existing_screenshot_path(observation: dict[str, Any]) -> Path | None:
     return None
 
 
-def _parse_json(response: str) -> Any | None:
+def _clean_caption(response: str) -> str:
+    """Normalize a plain-text visual caption while tolerating fenced model output."""
     text = response.strip()
     if text.startswith("```"):
         lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
         text = "\n".join(lines).strip()
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        try:
-            return json.loads(text[start : end + 1])
-        except (json.JSONDecodeError, ValueError):
-            return None
+    return text

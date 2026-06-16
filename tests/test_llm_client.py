@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
+from typing import Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,7 +13,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from vigil.core.config import LLMConfig
-from vigil.core.llm_client import LlmClient
+from vigil.core.llm_client import LlmClient, _ProxyStructuredStrategy
 
 
 class TestGoogleInit:
@@ -113,6 +114,26 @@ class TestAnthropicProvider:
             api_key="env-key",
             base_url="http://example.test",
         )
+
+    @patch("anthropic.Anthropic")
+    def test_anthropic_generate_omits_sampling_but_includes_required_max_tokens(
+        self, mock_anthropic_cls: MagicMock
+    ) -> None:
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}):
+            mock_client = MagicMock()
+            mock_anthropic_cls.return_value = mock_client
+            text_block = MagicMock(text="ok")
+            mock_client.messages.create.return_value = MagicMock(
+                content=[text_block],
+                usage=None,
+            )
+
+            client = LlmClient(LLMConfig(provider="anthropic", model="claude-sonnet-4.6"))
+            assert client.generate("sys", "user") == "ok"
+
+            call_kwargs = mock_client.messages.create.call_args.kwargs
+            assert "temperature" not in call_kwargs
+            assert "max_tokens" in call_kwargs
 
 
 class TestOpenAIProvider:
@@ -309,7 +330,13 @@ class TestProxyProvider:
 
         config = LLMConfig(provider="proxy", proxy_model="gpt-5.4")
         client = LlmClient(config)
-        result = client.generate("system prompt", "user prompt")
+        metadata = {
+            "vendor": "Azure OpenAI",
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {"supports": {"vision": True}},
+        }
+        with patch.object(client, "_proxy_model_metadata", return_value=metadata):
+            result = client.generate("system prompt", "user prompt")
 
         assert result == "guard result"
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
@@ -329,10 +356,18 @@ class TestProxyProvider:
         mock_response.usage = None
         mock_client.chat.completions.create.return_value = mock_response
 
-        config = LLMConfig(provider="proxy")
+        config = LLMConfig(provider="proxy", proxy_model="gpt-5-mini")
         client = LlmClient(config)
+        metadata = {
+            "vendor": "Azure OpenAI",
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {"supports": {"vision": True}},
+        }
 
-        with pytest.raises(ValueError, match="contained no choices"):
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            pytest.raises(ValueError, match="contained no choices"),
+        ):
             client.generate("system prompt", "user prompt")
 
     @patch("openai.OpenAI")
@@ -350,10 +385,16 @@ class TestProxyProvider:
         img_path = tmp_path / "test.png"
         img.save(img_path)
 
-        config = LLMConfig(provider="proxy")
+        config = LLMConfig(provider="proxy", proxy_model="gpt-5-mini")
         client = LlmClient(config)
+        metadata = {
+            "vendor": "Azure OpenAI",
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {"supports": {"vision": True}},
+        }
 
-        result = client.generate_with_images("system", "text prompt", images=[img_path])
+        with patch.object(client, "_proxy_model_metadata", return_value=metadata):
+            result = client.generate_with_images("system", "text prompt", images=[img_path])
 
         assert result == "text only"
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
@@ -363,23 +404,94 @@ class TestProxyProvider:
         assert content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
         assert content[1] == {"type": "text", "text": "text prompt"}
 
+    @patch("openai.OpenAI")
+    def test_proxy_claude_generate_uses_messages_endpoint(self, mock_openai_cls: MagicMock) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        config = LLMConfig(provider="proxy", proxy_model="claude-haiku-4-5")
+        client = LlmClient(config)
+        metadata = {
+            "vendor": "Anthropic",
+            "supported_endpoints": ["/v1/messages", "/chat/completions"],
+            "capabilities": {
+                "supports": {"vision": True, "tool_calls": True},
+                "limits": {"max_output_tokens": 1234},
+            },
+        }
+        calls: list[tuple[str, dict]] = []
+
+        def fake_post(path: str, payload: dict) -> dict:
+            calls.append((path, payload))
+            return {"content": [{"type": "text", "text": "plain result"}]}
+
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            patch.object(client, "_proxy_post_json", side_effect=fake_post),
+        ):
+            result = client.generate("system prompt", "user prompt")
+
+        assert result == "plain result"
+        assert calls[0][0] == "/messages"
+        assert calls[0][1]["model"] == "claude-haiku-4-5"
+        assert calls[0][1]["max_tokens"] == 1234
+        mock_openai_cls.return_value.chat.completions.create.assert_not_called()
+
+    @patch("openai.OpenAI")
+    def test_proxy_claude_generate_with_images_uses_messages_endpoint(
+        self,
+        mock_openai_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        img = Image.new("RGB", (100, 100))
+        img_path = tmp_path / "test.png"
+        img.save(img_path)
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="claude-haiku-4-5"))
+        metadata = {
+            "vendor": "Anthropic",
+            "supported_endpoints": ["/v1/messages", "/chat/completions"],
+            "capabilities": {"supports": {"vision": True, "tool_calls": True}},
+        }
+        calls: list[tuple[str, dict]] = []
+
+        def fake_post(path: str, payload: dict) -> dict:
+            calls.append((path, payload))
+            return {"content": [{"type": "text", "text": "image result"}]}
+
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            patch.object(client, "_proxy_post_json", side_effect=fake_post),
+        ):
+            result = client.generate_with_images("system", "prompt", [img_path], ["img"])
+
+        assert result == "image result"
+        assert calls[0][0] == "/messages"
+        blocks = calls[0][1]["messages"][0]["content"]
+        assert blocks[0] == {"type": "text", "text": "img"}
+        assert blocks[1]["type"] == "image"
+        assert blocks[2] == {"type": "text", "text": "prompt"}
+        mock_openai_cls.return_value.chat.completions.create.assert_not_called()
+
 
 class _Schema(BaseModel):
     value: str
+
+
+class _StructuredStrictSchema(BaseModel):
+    value: Literal["ok"]
 
 
 class TestStructuredOutput:
     """Provider-aware structured generation routing (fake clients only)."""
 
     @patch("openai.OpenAI")
-    def test_proxy_native_schema_parse(self, mock_openai_cls: MagicMock) -> None:
+    def test_openai_native_schema_parse(self, mock_openai_cls: MagicMock) -> None:
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
         message = MagicMock(parsed=_Schema(value="ok"), content='{"value":"ok"}', refusal=None)
         completion = MagicMock(choices=[MagicMock(message=message, finish_reason="stop")])
         mock_client.chat.completions.parse.return_value = completion
 
-        client = LlmClient(LLMConfig(provider="proxy"))
+        client = LlmClient(LLMConfig(provider="openai", model="gpt-5.4"))
         result = client.generate_structured("sys", "user", _Schema, "Sch")
 
         assert result.parsed == _Schema(value="ok")
@@ -391,7 +503,7 @@ class TestStructuredOutput:
         assert "max_completion_tokens" not in call_kwargs
 
     @patch("openai.OpenAI")
-    def test_proxy_unsupported_schema_fails_clearly_without_fallback(
+    def test_openai_unsupported_schema_fails_clearly_without_fallback(
         self, mock_openai_cls: MagicMock
     ) -> None:
         import httpx
@@ -405,7 +517,7 @@ class TestStructuredOutput:
             "response_format json_schema not supported", response=response, body=None
         )
 
-        client = LlmClient(LLMConfig(provider="proxy"))
+        client = LlmClient(LLMConfig(provider="openai", model="gpt-5.4"))
         result = client.generate_structured("sys", "user", _Schema, "Sch")
 
         assert result.parsed is None
@@ -415,7 +527,7 @@ class TestStructuredOutput:
         mock_client.chat.completions.create.assert_not_called()
 
     @patch("openai.OpenAI")
-    def test_proxy_unsupported_schema_uses_fallback_when_opted_in(
+    def test_openai_unsupported_schema_uses_fallback_when_opted_in(
         self, mock_openai_cls: MagicMock
     ) -> None:
         import httpx
@@ -434,10 +546,317 @@ class TestStructuredOutput:
         )
         mock_client.chat.completions.create.return_value = text_completion
 
-        client = LlmClient(LLMConfig(provider="proxy"))
+        client = LlmClient(LLMConfig(provider="openai", model="gpt-5.4"))
         result = client.generate_structured(
             "sys", "user", _Schema, "Sch", allow_provider_fallback=True
         )
+
+        assert result.schema_constraint_mode == "fallback_validate"
+        assert result.parsed == _Schema(value="fallback")
+        mock_client.chat.completions.create.assert_called_once()
+
+    @patch("openai.OpenAI")
+    def test_proxy_anthropic_messages_tool(self, mock_openai_cls: MagicMock) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="claude-haiku-4-5"))
+        metadata = {
+            "vendor": "Anthropic",
+            "supported_endpoints": ["/v1/messages"],
+            "capabilities": {
+                "supports": {"tool_calls": True, "vision": True},
+                "limits": {"max_output_tokens": 12345},
+            },
+        }
+        calls: list[tuple[str, dict]] = []
+
+        def fake_post(path: str, payload: dict) -> dict:
+            calls.append((path, payload))
+            return {
+                "content": [{"type": "tool_use", "input": {"value": "ok"}}],
+                "stop_reason": "tool_use",
+            }
+
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            patch.object(client, "_proxy_probe_strategy", return_value=MagicMock(ok=True)),
+            patch.object(client, "_proxy_post_json", side_effect=fake_post),
+        ):
+            result = client.generate_structured("sys", "user", _Schema, "Sch")
+
+        assert result.parsed == _Schema(value="ok")
+        assert result.schema_constraint_mode == "tool_schema"
+        assert result.strategy == "anthropic_messages_tool"
+        assert result.transport == "/v1/messages"
+        path, payload = calls[0]
+        assert path == "/messages"
+        assert payload["tool_choice"] == {"type": "tool", "name": "Sch"}
+        assert payload["tools"][0]["strict"] is True
+        assert payload["max_tokens"] == 12345
+        assert "temperature" not in payload
+
+    @patch("openai.OpenAI")
+    def test_proxy_google_chat_function_tool(self, mock_openai_cls: MagicMock) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="gemini-3.5-flash"))
+        metadata = {
+            "vendor": "Google",
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {"supports": {"tool_calls": True, "vision": True}},
+        }
+        calls: list[tuple[str, dict]] = []
+
+        def fake_post(path: str, payload: dict) -> dict:
+            calls.append((path, payload))
+            return {
+                "choices": [
+                    {
+                        "message": {"tool_calls": [{"function": {"arguments": '{"value":"ok"}'}}]},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            patch.object(client, "_proxy_probe_strategy", return_value=MagicMock(ok=True)),
+            patch.object(client, "_proxy_post_json", side_effect=fake_post),
+        ):
+            result = client.generate_structured("sys", "user", _Schema, "Sch")
+
+        assert result.parsed == _Schema(value="ok")
+        assert result.schema_constraint_mode == "tool_schema"
+        assert result.strategy == "chat_function_tool"
+        path, payload = calls[0]
+        assert path == "/chat/completions"
+        assert payload["tool_choice"] == {"type": "function", "function": {"name": "Sch"}}
+        assert payload["tools"][0]["function"]["strict"] is True
+        assert "temperature" not in payload
+
+    @patch("openai.OpenAI")
+    def test_proxy_openai_responses_json_schema(self, mock_openai_cls: MagicMock) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="gpt-5.4"))
+        metadata = {
+            "vendor": "Azure OpenAI",
+            "supported_endpoints": ["/responses"],
+            "capabilities": {"supports": {"structured_outputs": True, "vision": True}},
+        }
+        calls: list[tuple[str, dict]] = []
+
+        def fake_post(path: str, payload: dict) -> dict:
+            calls.append((path, payload))
+            return {"output_text": '{"value":"ok"}', "status": "completed"}
+
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            patch.object(client, "_proxy_probe_strategy", return_value=MagicMock(ok=True)),
+            patch.object(client, "_proxy_post_json", side_effect=fake_post),
+        ):
+            result = client.generate_structured("sys", "user", _Schema, "Sch")
+
+        assert result.parsed == _Schema(value="ok")
+        assert result.schema_constraint_mode == "native_schema"
+        assert result.strategy == "responses_json_schema"
+        path, payload = calls[0]
+        assert path == "/responses"
+        assert payload["text"]["format"]["strict"] is True
+        assert payload["text"]["format"]["name"] == "Sch"
+        assert "temperature" not in payload
+
+    @patch("openai.OpenAI")
+    def test_proxy_openai_responses_json_schema_explicit_temperature(
+        self, mock_openai_cls: MagicMock
+    ) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="gpt-5.4", temperature=0.0))
+        metadata = {
+            "vendor": "Azure OpenAI",
+            "supported_endpoints": ["/responses"],
+            "capabilities": {"supports": {"structured_outputs": True, "vision": True}},
+        }
+        calls: list[tuple[str, dict]] = []
+
+        def fake_post(path: str, payload: dict) -> dict:
+            calls.append((path, payload))
+            return {"output_text": '{"value":"ok"}', "status": "completed"}
+
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            patch.object(client, "_proxy_probe_strategy", return_value=MagicMock(ok=True)),
+            patch.object(client, "_proxy_post_json", side_effect=fake_post),
+        ):
+            client.generate_structured("sys", "user", _Schema, "Sch")
+
+        assert calls[0][1]["temperature"] == 0.0
+
+    @patch("openai.OpenAI")
+    def test_proxy_openai_chat_json_schema(self, mock_openai_cls: MagicMock) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="gpt-5-mini"))
+        metadata = {
+            "vendor": "Azure OpenAI",
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {"supports": {"structured_outputs": True, "vision": True}},
+        }
+        calls: list[tuple[str, dict]] = []
+
+        def fake_post(path: str, payload: dict) -> dict:
+            calls.append((path, payload))
+            return {
+                "choices": [{"message": {"content": '{"value":"ok"}'}, "finish_reason": "stop"}]
+            }
+
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            patch.object(client, "_proxy_probe_strategy", return_value=MagicMock(ok=True)),
+            patch.object(client, "_proxy_post_json", side_effect=fake_post),
+        ):
+            result = client.generate_structured("sys", "user", _Schema, "Sch")
+
+        assert result.parsed == _Schema(value="ok")
+        assert result.schema_constraint_mode == "native_schema"
+        assert result.strategy == "chat_json_schema"
+        path, payload = calls[0]
+        assert path == "/chat/completions"
+        assert payload["response_format"]["type"] == "json_schema"
+        assert payload["response_format"]["json_schema"]["strict"] is True
+        assert "temperature" not in payload
+
+    @patch("openai.OpenAI")
+    def test_proxy_native_unenforced_fails_without_repair(self, mock_openai_cls: MagicMock) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="gpt-5-mini"))
+        metadata = {
+            "vendor": "Azure OpenAI",
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {"supports": {"structured_outputs": True, "vision": True}},
+        }
+
+        def fake_post(_path: str, _payload: dict) -> dict:
+            return {
+                "choices": [
+                    {
+                        "message": {"content": '```json\n{"value":"bad"}\n```'},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            patch.object(client, "_proxy_probe_strategy", return_value=MagicMock(ok=True)),
+            patch.object(client, "_proxy_post_json", side_effect=fake_post),
+        ):
+            result = client.generate_structured("sys", "user", _StructuredStrictSchema, "Sch")
+
+        assert result.parsed is None
+        assert result.schema_constraint_mode == "native_schema_unenforced"
+        assert result.validation_errors
+
+    @patch("openai.OpenAI")
+    def test_proxy_tool_schema_invalid_arguments_are_rejected(
+        self, mock_openai_cls: MagicMock
+    ) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="gemini-3.5-flash"))
+        metadata = {
+            "vendor": "Google",
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {"supports": {"tool_calls": True, "vision": True}},
+        }
+
+        def fake_post(_path: str, _payload: dict) -> dict:
+            return {
+                "choices": [
+                    {
+                        "message": {"tool_calls": [{"function": {"arguments": '{"value":"bad"}'}}]},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            patch.object(client, "_proxy_probe_strategy", return_value=MagicMock(ok=True)),
+            patch.object(client, "_proxy_post_json", side_effect=fake_post),
+        ):
+            result = client.generate_structured("sys", "user", _StructuredStrictSchema, "Sch")
+
+        assert result.parsed is None
+        assert result.schema_constraint_mode == "tool_schema"
+        assert result.strategy == "chat_function_tool"
+        assert result.validation_errors
+
+    @patch("openai.OpenAI")
+    def test_proxy_probe_rejects_unenforced_chat_json_schema(
+        self, mock_openai_cls: MagicMock
+    ) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="gpt-5-mini"))
+        strategy = _ProxyStructuredStrategy(
+            "chat_json_schema",
+            "/chat/completions",
+            "native_schema",
+        )
+
+        def fake_post(_path: str, _payload: dict) -> dict:
+            return {
+                "choices": [
+                    {
+                        "message": {"content": '{"value":"bad"}'},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+
+        with patch.object(client, "_proxy_post_json", side_effect=fake_post):
+            status = client._proxy_probe_strategy(strategy, {"vendor": "Azure OpenAI"})
+
+        assert status.ok is False
+        assert "Input should be 'ok'" in status.detail
+
+    @patch("openai.OpenAI")
+    def test_proxy_no_strategy_fails_clearly_without_fallback(
+        self,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        mock_openai_cls.return_value = MagicMock()
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="text-only"))
+        metadata = {
+            "vendor": "Unknown",
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {"supports": {"vision": True}},
+        }
+
+        with patch.object(client, "_proxy_model_metadata", return_value=metadata):
+            result = client.generate_structured("sys", "user", _Schema, "Sch")
+
+        assert result.parsed is None
+        assert result.schema_constraint_mode == "prompt_only_unavailable"
+        assert result.validation_errors
+
+    @patch("openai.OpenAI")
+    def test_proxy_no_strategy_uses_fallback_when_opted_in(
+        self,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        text_completion = MagicMock(
+            choices=[MagicMock(message=MagicMock(content='{"value":"fallback"}'))], usage=None
+        )
+        mock_client.chat.completions.create.return_value = text_completion
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="text-only"))
+        metadata = {
+            "vendor": "Unknown",
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {"supports": {"vision": True}},
+        }
+
+        with patch.object(client, "_proxy_model_metadata", return_value=metadata):
+            result = client.generate_structured(
+                "sys", "user", _Schema, "Sch", allow_provider_fallback=True
+            )
 
         assert result.schema_constraint_mode == "fallback_validate"
         assert result.parsed == _Schema(value="fallback")
@@ -489,12 +908,29 @@ class TestStructuredOutput:
     def test_proxy_refusal_yields_no_parsed(self, mock_openai_cls: MagicMock) -> None:
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
-        message = MagicMock(parsed=None, content=None, refusal="I refuse")
-        completion = MagicMock(choices=[MagicMock(message=message, finish_reason="stop")])
-        mock_client.chat.completions.parse.return_value = completion
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="gpt-5-mini"))
+        metadata = {
+            "vendor": "Azure OpenAI",
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {"supports": {"structured_outputs": True, "vision": True}},
+        }
 
-        client = LlmClient(LLMConfig(provider="proxy"))
-        result = client.generate_structured("sys", "user", _Schema, "Sch")
+        def fake_post(_path: str, _payload: dict) -> dict:
+            return {
+                "choices": [
+                    {
+                        "message": {"content": None, "refusal": "I refuse"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+
+        with (
+            patch.object(client, "_proxy_model_metadata", return_value=metadata),
+            patch.object(client, "_proxy_probe_strategy", return_value=MagicMock(ok=True)),
+            patch.object(client, "_proxy_post_json", side_effect=fake_post),
+        ):
+            result = client.generate_structured("sys", "user", _Schema, "Sch")
 
         assert result.parsed is None
         assert result.refusal == "I refuse"

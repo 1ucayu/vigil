@@ -16,6 +16,7 @@ from loguru import logger
 from vigil.core.config import LLMConfig
 from vigil.core.llm_client import LlmClient
 from vigil.models.fsm import AppFSM
+from vigil.models.llm_structured import LlmInvariantGuardResponse, LlmTransitionGuardResponse
 from vigil.neuro.app_prior import AppPrior
 from vigil.neuro.guard_contract_llm import DEFAULT_GUARD_PROMPT
 from vigil.neuro.guard_generation_pipeline import (
@@ -52,12 +53,15 @@ FIDELITY_APPS: tuple[FidelityAppSpec, ...] = (
 _PREFERRED_MODELS = (
     # Prefer the explicitly tested local proxy model before falling back to other
     # vision-capable chat-completions models.
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6",
     "claude-sonnet-4.6",
     "gpt-5-mini",
     "gpt-5.4",
-    "gemini-3.5-flash[1m]",
+    "gemini-3.5-flash",
     "gemini-3-flash-preview",
     "gemini-2.5-pro",
+    "claude-haiku-4.5",
     "claude-sonnet-4.6[1m]",
 )
 
@@ -163,9 +167,13 @@ def main() -> None:
         help="System-prompt file name (under src/vigil/system_prompt/) for the LLM path.",
     )
     parser.add_argument(
-        "--guard-no-images",
+        "--guard-with-images",
         action="store_true",
-        help="Disable source/target screenshot attachments for LLM guard generation.",
+        help=(
+            "Opt in to source/target screenshot attachments for LLM guard generation. "
+            "Off by default: guard synthesis consumes the visual caption cache from "
+            "the visual grounding stage."
+        ),
     )
     parser.add_argument(
         "--skip-invariants",
@@ -188,9 +196,13 @@ def main() -> None:
         help="System-prompt file name (under src/vigil/system_prompt/) for the LLM invariant path.",
     )
     parser.add_argument(
-        "--invariant-no-images",
+        "--invariant-with-images",
         action="store_true",
-        help="Disable observation screenshot attachments for LLM invariant generation.",
+        help=(
+            "Opt in to observation screenshot attachments for LLM invariant generation. "
+            "Off by default: invariant synthesis consumes the visual caption cache from "
+            "the visual grounding stage."
+        ),
     )
     parser.add_argument(
         "--invariant-audit-root",
@@ -240,17 +252,27 @@ def main() -> None:
     need_llm = (not args.skip_visual) or need_llm_for_guards or need_llm_for_invariants
     llm = None
     if need_llm:
-        model = args.model or discover_default_model(args.models_url)
+        model = args.model or discover_default_model(
+            args.models_url,
+            require_structured=need_llm_for_guards or need_llm_for_invariants,
+        )
         logger.info(f"Using model {model!r} via {args.base_url}")
         llm = LlmClient(
             LLMConfig(
                 provider="proxy",
                 proxy_base_url=args.base_url,
+                proxy_models_url=args.models_url,
                 proxy_api_key="dummy_key",
                 proxy_model=model,
-                temperature=0.0,
             )
         )
+        if need_llm_for_guards or need_llm_for_invariants:
+            preflight_structured_output(
+                llm,
+                check_guard=need_llm_for_guards,
+                check_invariant=need_llm_for_invariants,
+                allow_provider_fallback=args.allow_provider_fallback,
+            )
 
     summary: list[dict[str, Any]] = []
     for spec in selected:
@@ -270,12 +292,12 @@ def main() -> None:
                 max_states=args.max_states,
                 guard_source=args.guard_source,
                 guard_prompt=args.guard_prompt,
-                guard_use_images=not args.guard_no_images,
+                guard_use_images=args.guard_with_images,
                 guard_audit_root=args.guard_audit_root,
                 skip_invariants=args.skip_invariants,
                 invariant_source=args.invariant_source,
                 invariant_prompt=args.invariant_prompt,
-                invariant_use_images=not args.invariant_no_images,
+                invariant_use_images=args.invariant_with_images,
                 invariant_audit_root=args.invariant_audit_root,
                 min_invariant_observations=args.min_invariant_observations,
                 allow_provider_fallback=args.allow_provider_fallback,
@@ -288,8 +310,13 @@ def main() -> None:
     logger.info(f"Summary written to {summary_path}")
 
 
-def discover_default_model(models_url: str) -> str:
-    """Select a vision-capable chat-completions model from the local model list."""
+def discover_default_model(models_url: str, *, require_structured: bool = False) -> str:
+    """Select a vision-capable model from the local model list.
+
+    When guard/invariant LLM generation is active, prefer models whose metadata exposes at
+    least one structured-output strategy. A live preflight still validates the selected
+    strategy before any output directory is cleaned.
+    """
     try:
         with urllib.request.urlopen(models_url, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -306,9 +333,10 @@ def discover_default_model(models_url: str) -> str:
         if not model_id:
             continue
         ids.add(model_id)
-        endpoints = set(item.get("supported_endpoints") or [])
         supports = (item.get("capabilities") or {}).get("supports") or {}
-        if "/chat/completions" in endpoints and supports.get("vision"):
+        if supports.get("vision") and (
+            not require_structured or _model_has_structured_strategy(item)
+        ):
             eligible.add(model_id)
 
     for model in _PREFERRED_MODELS:
@@ -319,7 +347,78 @@ def discover_default_model(models_url: str) -> str:
     for model in _PREFERRED_MODELS:
         if model in ids:
             return model
-    raise SystemExit("No suitable vision chat model found in local /models response")
+    requirement = "vision + structured" if require_structured else "vision"
+    raise SystemExit(f"No suitable {requirement} model found in local /models response")
+
+
+def _model_has_structured_strategy(item: dict[str, Any]) -> bool:
+    vendor = str(item.get("vendor") or item.get("owned_by") or "").lower()
+    model_id = str(item.get("id") or "")
+    endpoints = set(item.get("supported_endpoints") or [])
+    supports = (item.get("capabilities") or {}).get("supports") or {}
+    no_endpoint_metadata = not endpoints
+
+    def has(endpoint: str) -> bool:
+        return no_endpoint_metadata or endpoint in endpoints
+
+    has_tools = bool(supports.get("tool_calls"))
+    has_structured = bool(supports.get("structured_outputs"))
+    is_anthropic = "anthropic" in vendor or model_id.startswith("claude")
+    is_google = "google" in vendor or model_id.startswith("gemini")
+    is_openai = "openai" in vendor or "azure" in vendor or model_id.startswith(("gpt", "mai-"))
+
+    if is_anthropic:
+        return has_tools and (has("/v1/messages") or has("/chat/completions"))
+    if is_google:
+        return has_tools and has("/chat/completions")
+    if is_openai:
+        return (has_structured and (has("/responses") or has("/chat/completions"))) or (
+            has_tools and has("/chat/completions")
+        )
+    return (has_tools and (has("/v1/messages") or has("/chat/completions"))) or (
+        has_structured and (has("/responses") or has("/chat/completions"))
+    )
+
+
+def preflight_structured_output(
+    llm: LlmClient,
+    *,
+    check_guard: bool = True,
+    check_invariant: bool = True,
+    allow_provider_fallback: bool = False,
+) -> None:
+    """Fail before any per-app output cleanup when strict structured output is unavailable."""
+    checks: list[tuple[str, type[Any]]] = []
+    if check_guard:
+        checks.append(("LlmTransitionGuardResponse", LlmTransitionGuardResponse))
+    if check_invariant:
+        checks.append(("LlmInvariantGuardResponse", LlmInvariantGuardResponse))
+    for schema_name, response_model in checks:
+        if allow_provider_fallback:
+            result = llm.probe_structured_output(
+                response_model,
+                schema_name,
+                allow_provider_fallback=True,
+            )
+        else:
+            result = llm.probe_structured_output(response_model, schema_name)
+        if result.parsed is not None:
+            logger.info(
+                "Structured output preflight passed: "
+                f"schema={schema_name} model={result.model} strategy={result.strategy} "
+                f"mode={result.schema_constraint_mode}"
+            )
+            continue
+        detail = (
+            "; ".join(result.validation_errors) or result.raw_text or result.refusal or "unknown"
+        )
+        raise SystemExit(
+            "Structured output preflight failed before modifying outputs: "
+            f"schema={schema_name} model={result.model} mode={result.schema_constraint_mode} "
+            f"strategy={result.strategy or 'none'} detail={detail}"
+        )
+    if not checks:
+        logger.info("Structured output preflight skipped: no guard/invariant LLM schema requested")
 
 
 def run_one_app(
@@ -338,12 +437,12 @@ def run_one_app(
     clean_output: bool = False,
     guard_source: str = "llm",
     guard_prompt: str = DEFAULT_GUARD_PROMPT,
-    guard_use_images: bool = True,
+    guard_use_images: bool = False,
     guard_audit_root: Path | None = None,
     skip_invariants: bool = False,
     invariant_source: str = "llm",
     invariant_prompt: str = DEFAULT_INVARIANT_PROMPT,
-    invariant_use_images: bool = True,
+    invariant_use_images: bool = False,
     invariant_audit_root: Path | None = None,
     min_invariant_observations: int = 2,
     allow_provider_fallback: bool = False,

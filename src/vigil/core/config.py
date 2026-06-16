@@ -84,12 +84,13 @@ class LLMConfig(BaseModel):
 
     provider: Literal["anthropic", "openai", "google", "proxy"] = "proxy"
     model: str = "claude-sonnet-4.6"
-    temperature: float = 0.0
+    temperature: float | None = None
     openai_base_url: str = "http://localhost:4141/v1"
     openai_api_key: str | None = "dummy_key"
     anthropic_base_url: str = "http://localhost:4141"
     anthropic_api_key: str | None = "dummy_key"
     proxy_base_url: str = "http://localhost:4141/v1"
+    proxy_models_url: str = "http://localhost:4141/models"
     proxy_api_key: str = "dummy_key"
     proxy_model: str = "claude-sonnet-4.6"
 

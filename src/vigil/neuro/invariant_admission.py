@@ -33,6 +33,7 @@ checks, and the shared DSL compiler — it does not introduce a parallel guard/D
 
 from __future__ import annotations
 
+import ast
 import json
 from dataclasses import dataclass
 from functools import lru_cache
@@ -169,6 +170,12 @@ def _literal_from_token(token: str | None) -> Any:
             return json.loads(s)
         except (json.JSONDecodeError, ValueError):
             return s[1:-1]
+    if s.startswith("'") and s.endswith("'"):
+        try:
+            value = ast.literal_eval(s)
+        except (SyntaxError, ValueError):
+            return s[1:-1]
+        return value if isinstance(value, str) else s[1:-1]
     if s == "true":
         return True
     if s == "false":

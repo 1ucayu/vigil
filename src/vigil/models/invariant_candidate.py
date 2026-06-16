@@ -1,7 +1,7 @@
 """Typed candidate models for contract-first invariant + guard generation.
 
 These models mirror the ``InvariantGuardCandidatePacket`` output schema declared in
-``src/vigil/system_prompt/invariant_guard_generaton.spec``. They are the LLM (or
+``src/vigil/system_prompt/invariant_guard_generation.spec``. They are the LLM (or
 deterministic synthesizer) *candidate* IR — proposed, not admitted. Deterministic
 admission (:mod:`vigil.neuro.invariant_admission`) decides which state-invariant
 candidates become runtime ``AbstractState.invariant_specs`` entries; the existing guard

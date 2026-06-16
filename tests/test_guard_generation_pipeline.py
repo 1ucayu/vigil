@@ -11,7 +11,7 @@ import pytest
 from vigil.core.structured import StructuredResult
 from vigil.models.fsm import AbstractState, AppFSM, HierarchyLevel, Transition
 from vigil.models.guard import GuardAdmissionStatus, GuardKind
-from vigil.models.llm_structured import LlmGuardResponse
+from vigil.models.llm_structured import LlmTransitionGuardResponse
 from vigil.neuro.guard_generation_pipeline import (
     generate_contract_guards,
     guard_action_schema_key,
@@ -182,7 +182,7 @@ def test_commit_transition_attaches_executable_enabled_guard():
     assert t2.guard_contract is not None
     assert t2.guard_contract.admission_status is GuardAdmissionStatus.ADMITTED
     assert t2.guard_contract.admission_reason == "admitted: 1 executable predicate(s)"
-    assert report[2]["semantic_binding_incomplete"] is False
+    assert "semantic_binding_incomplete" not in report[2]
 
 
 def test_input_text_transition_attaches_input_text_guard():
@@ -212,7 +212,7 @@ def test_report_includes_status_and_reason():
     for row in report:
         assert "status" in row and "reason" in row
         assert "kind" in row and "required" in row
-        assert "semantic_binding_incomplete" in row
+        assert "semantic_binding_incomplete" not in row
         assert "contract" in row
     assert report[0]["guard"] == "action(target_text) == $intent.contact_name"
 
@@ -260,7 +260,7 @@ class _FakeStructuredLlm:
 
     def __init__(
         self,
-        parsed: LlmGuardResponse | None,
+        parsed: LlmTransitionGuardResponse | None,
         *,
         schema_constraint_mode: str = "native_schema",
         refusal: str | None = None,
@@ -304,19 +304,18 @@ class _FakeStructuredLlm:
     # Intentionally NO generate()/generate_with_images(): the structured path must never call them.
 
 
-def _item_response() -> LlmGuardResponse:
-    return LlmGuardResponse.model_validate(
+def _item_response() -> LlmTransitionGuardResponse:
+    return LlmTransitionGuardResponse.model_validate(
         {
             "contract": {
                 "kind": "item_binding",
-                "required": True,
-                "required_slots": [{"name": "contact_name", "slot_type": "string"}],
+                "slots": [{"name": "contact_name", "slot_type": "string"}],
                 "predicates": [
                     {
                         "predicate_type": "action",
                         "property": "target_text",
                         "operator": "==",
-                        "expected": {"kind": "intent", "intent_slot": "contact_name"},
+                        "expected": {"kind": "intent", "slot": "contact_name"},
                     }
                 ],
             }

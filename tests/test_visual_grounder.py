@@ -46,18 +46,7 @@ def test_describe_screen_visuals_uses_existing_screenshot(tmp_path: Path) -> Non
     screenshot = tmp_path / "screen.png"
     screenshot.write_bytes(b"placeholder")
     llm = FakeVisualLlm(
-        """
-        ```json
-        {
-          "alt_text": "A form screen with a toolbar.",
-          "layout_summary": "Toolbar above two input fields.",
-          "page_function": "banking/transfer/form",
-          "expected_actions": ["enter_amount"],
-          "icon_labels": [],
-          "confidence": 0.7
-        }
-        ```
-        """
+        "The screenshot adds a visual grouping: the toolbar sits above two input fields."
     )
 
     parsed = describe_screen_visuals(
@@ -70,7 +59,8 @@ def test_describe_screen_visuals_uses_existing_screenshot(tmp_path: Path) -> Non
         llm=llm,  # type: ignore[arg-type]
     )
 
-    assert parsed["page_function"] == "banking/transfer/form"
+    assert parsed["alt_text"].startswith("The screenshot adds a visual grouping")
+    assert parsed["confidence"] == 0.5
     assert llm.image_calls == [[screenshot]]
     assert llm.text_calls == 0
 
@@ -79,24 +69,7 @@ def test_ground_fsm_visual_annotations_writes_state_annotations(tmp_path: Path) 
     screenshot = tmp_path / "screen.png"
     screenshot.write_bytes(b"placeholder")
     llm = FakeVisualLlm(
-        """
-        Result:
-        {
-          "alt_text": "A chat thread with messages and a bottom composer.",
-          "layout_summary": "Message list above text input and send icon.",
-          "page_function": "chat/thread",
-          "expected_actions": ["type_message", "send_message"],
-          "icon_labels": [
-            {
-              "element_id": "e_7",
-              "label": "send button",
-              "confidence": 0.91,
-              "basis": "paper-plane icon next to composer"
-            }
-          ],
-          "confidence": 0.86
-        }
-        """
+        "Element e_7 is visually a paper-plane send icon grouped with the bottom composer."
     )
     fsm = AppFSM("com.test")
     fsm.add_state(_state("s1", ["scr_1"]))
@@ -122,14 +95,10 @@ def test_ground_fsm_visual_annotations_writes_state_annotations(tmp_path: Path) 
 
     assert report[0]["status"] == "annotated"
     annotations = fsm.states["s1"].annotations
-    assert annotations.page_function == "chat/thread"
-    assert annotations.expected_actions == ["type_message", "send_message"]
-    assert annotations.widget_aliases == [
-        {
-            "element_id": "e_7",
-            "label": "send_button",
-            "confidence": 0.91,
-            "basis": "paper-plane icon next to composer",
-        }
-    ]
-    assert annotations.generation_confidence == 0.86
+    assert annotations.alt_text == (
+        "Element e_7 is visually a paper-plane send icon grouped with the bottom composer."
+    )
+    assert annotations.page_function == ""
+    assert annotations.expected_actions == []
+    assert annotations.widget_aliases == []
+    assert annotations.generation_confidence == 0.5

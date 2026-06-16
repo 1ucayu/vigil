@@ -77,29 +77,14 @@ def _evidence() -> InvariantEvidence:
         arrival_registry=registry,
         observations=[screen],
         observation_count=1,
+        visual_alt_text="The screenshot shows a stable completion banner not encoded as XML text.",
     )
 
 
 def _packet_response() -> LlmInvariantGuardResponse:
     return LlmInvariantGuardResponse.model_validate(
         {
-            "state_invariant_candidates": [
-                {
-                    "kind": "success_presence",
-                    "expr": 'value(title) contains "Done"',
-                    "admission_target": "runtime_state_invariant",
-                    "source": "llm",
-                }
-            ],
-            "effect_invariant_hints": [
-                {
-                    "target_state_id": "s1",
-                    "description": "after send, status is Sent",
-                    "desired_expr": 'read(status, text) == "<success_status_literal>"',
-                    "why_not_runtime_state_invariant": "depends_on_action",
-                }
-            ],
-            "notes": "ok",
+            "candidates": [{"kind": "status", "expr": 'value(title) contains "Done"'}],
         }
     )
 
@@ -122,7 +107,7 @@ def test_candidate_from_parsed_packet() -> None:
     candidate = candidate_from_structured_result(result, spec_hash="abc")
     assert candidate.parsed_ok is True
     assert candidate.packet.state_invariant_candidates[0].expr == 'value(title) contains "Done"'
-    assert candidate.packet.effect_invariant_hints
+    assert candidate.packet.effect_invariant_hints == []
     assert candidate.spec_hash == "abc"
 
 
@@ -169,13 +154,16 @@ def test_user_prompt_has_key_sections() -> None:
     for marker in (
         "[Target state]",
         "[State observations]",
+        "[Visual Caption Cache]",
         "[Arrival-state widget registry]",
         "[Incoming transitions]",
         "[Outgoing transitions]",
     ):
         assert marker in prompt
     assert "$intent" in prompt
-    assert "[Transition Guard Candidate Checklist]" in prompt
+    assert "completion banner" in prompt
+    assert "[Transition Guard Candidate Checklist]" not in prompt
+    assert "transition_guard_candidates" not in prompt
 
 
 def test_user_prompt_redacts_identifiers_when_redactor_supplied() -> None:

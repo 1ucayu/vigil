@@ -1,13 +1,13 @@
-"""LLM-backed, contract-first invariant + guard candidate generation (Stage 4).
+"""LLM-backed, contract-first state-invariant candidate generation (Stage 4).
 
 This asks an LLM to produce a typed
 :class:`~vigil.models.invariant_candidate.InvariantGuardCandidatePacket` for a *single,
 already-built* arrival state via **provider structured output** (a strict
 :class:`~vigil.models.llm_structured.LlmInvariantGuardResponse` schema), then converts the
-parsed object into a :class:`LlmInvariantPacketCandidate`. The model is a candidate generator
-only: it proposes typed state-invariant candidates, transition-guard candidates,
-effect-invariant hints, and rejected candidates. Admission, DSL parsing, alias resolution,
-replay confidence, and runtime verdicts all remain deterministic / symbolic downstream.
+parsed object into a :class:`LlmInvariantPacketCandidate`. The model is a lean candidate
+generator only: it proposes minimal typed state-invariant candidates. Admission, DSL parsing,
+alias resolution, replay confidence, and runtime verdicts all remain deterministic / symbolic
+downstream.
 
 When structured output is unavailable (provider/schema failure, refusal, or validation
 failure), the result is a clearly rejected candidate (``parsed_ok=False``) with the
@@ -36,7 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from vigil.neuro.prompt_redaction import PromptRedactor
 
 
-DEFAULT_INVARIANT_PROMPT = "invariant_guard_generaton.spec"
+DEFAULT_INVARIANT_PROMPT = "invariant_guard_generation.spec"
 INVARIANT_SCHEMA_NAME = "LlmInvariantGuardResponse"
 
 # Cap how much per-observation detail enters the prompt so multi-visit states stay bounded.
@@ -104,19 +104,30 @@ def _observations_section(evidence: InvariantEvidence) -> str:
     return "\n".join(parts)
 
 
+def _visual_caption_section(evidence: InvariantEvidence) -> str:
+    caption = evidence.visual_alt_text.strip()
+    if not caption:
+        caption = "(none)"
+    return (
+        "[Visual Caption Cache]\n"
+        "Purpose: screenshot-only perception hint from visual grounding. Use it to "
+        "interpret icon meanings, visual grouping, overlays, selected/disabled visual "
+        "state, and other facts missing from XML. It is not symbolic admission proof; "
+        "executable invariant expressions must still reference arrival-registry aliases "
+        "or current-state runtime resource ids.\n"
+        f"```text\n{caption}\n```"
+    )
+
+
 def _transition_lines(transitions: Any) -> list[str]:
     lines: list[str] = []
     for summary in transitions:
         action_type = str(summary.action.get("type") or "")
         target_text = str(summary.action.get("target_text") or "").strip()
         suffix = f" target_text={target_text!r}" if target_text else ""
-        # Surface the exact canonical_action_key so the model can copy it verbatim into a
-        # transition_guard_candidate.canonical_action_key — the disambiguator when several
-        # transitions share the same (source, target).
         lines.append(
             f"- {summary.source_state_id} -> {summary.target_state_id} "
-            f"[{action_type}{suffix}] cak={summary.canonical_action_key} "
-            f"conf={summary.replay_confidence} low_trust={summary.low_trust}"
+            f"[{action_type}{suffix}] conf={summary.replay_confidence}"
         )
     return lines
 
@@ -126,7 +137,7 @@ def build_invariant_user_prompt(
     *,
     redactor: PromptRedactor | None = None,
 ) -> str:
-    """Build the per-state user prompt for invariant/guard candidate generation.
+    """Build the per-state user prompt for invariant candidate generation.
 
     When ``redactor`` is supplied, identifier/benchmark leakage is masked in the assembled
     prompt while usable registry aliases, permissions, and action properties are preserved.
@@ -136,15 +147,12 @@ def build_invariant_user_prompt(
 
     sections: list[str] = []
     sections.append(
-        "/* Contract-first invariant + guard synthesis */\n"
-        "Generate the typed InvariantGuardCandidatePacket for this ALREADY-BUILT arrival "
+        "/* Minimal invariant synthesis */\n"
+        "Generate the typed invariant candidate packet for this ALREADY-BUILT "
         "state. Topology is fixed: do not invent states/transitions/actions/confidence.\n"
         "Runtime state invariants are evaluated with ScreenContext only — they may use "
-        "read/value/count over the arrival registry, including "
-        "contains/not_contains operators on readable text/list values, and must "
-        "NOT use $intent.*, $bind.*, action(...), in_state(...), or time_in(...). Put "
-        "intent/action-dependent facts in effect_invariant_hints; put pre-action safety "
-        "checks in transition_guard_candidates."
+        "read/value/count/contains over the arrival registry and must NOT use "
+        "$intent.*, $bind.*, action(...), in_state(...), or time_in(...)."
     )
 
     sections.append(
@@ -157,9 +165,10 @@ def build_invariant_user_prompt(
         f"- template_id: {evidence.template_id!r}\n"
         f"- page_function: {evidence.page_function!r}\n"
         f"- display_name: {evidence.display_name!r}\n"
-        f"- raw_screen_ids: {evidence.raw_screen_ids}\n"
         f"- existing_invariant_specs: {existing}"
     )
+
+    sections.append(_visual_caption_section(evidence))
 
     sections.append(_observations_section(evidence))
 
@@ -171,27 +180,14 @@ def build_invariant_user_prompt(
 
     sections.append(
         "[Incoming transitions]\n"
-        "Purpose: preservation evidence + state-consistency/side-effect classification.\n"
+        "Purpose: context for stable arrival facts; do not emit predecessor-specific facts.\n"
         + ("\n".join(_transition_lines(evidence.incoming)) if evidence.incoming else "- (none)")
     )
 
     sections.append(
         "[Outgoing transitions]\n"
-        "Purpose: pre-action guard candidates and sibling choices.\n"
+        "Purpose: context for avoiding ordinary action-affordance enumeration.\n"
         + ("\n".join(_transition_lines(evidence.outgoing)) if evidence.outgoing else "- (none)")
-    )
-
-    sections.append(
-        "[Transition Guard Candidate Checklist]\n"
-        "For any transition_guard_candidates you emit, `required_slots` is the "
-        "candidate contract's declared intent interface. Declare slots only when "
-        "grounded in source/action evidence or an explicitly supplied task intent "
-        "interface; use generic role-derived names, not app-specific fixtures.\n"
-        "For input_text, row/item selection, option selection, form submission, and "
-        "commit-like actions, first try an executable semantic binding predicate over "
-        "action(...), read(...), or value(...) against a declared $intent.* slot. "
-        "Enabledness/clickability can be readiness checks, but an enabled/clickable-only "
-        "guard is incomplete when executable semantic binding evidence is available."
     )
 
     sections.append(
@@ -206,12 +202,8 @@ def build_invariant_user_prompt(
 
     sections.append(
         "[Output]\n"
-        "Emit the InvariantGuardCandidatePacket object from the system prompt "
-        "(state_invariant_candidates, transition_guard_candidates, effect_invariant_hints, "
-        "rejected_candidates, notes).\n"
-        "For every transition_guard_candidate, copy the matching transition's exact `cak=` "
-        "value into canonical_action_key so it binds to the right transition when several "
-        "share the same (source, target)."
+        "Emit the invariant packet object from the system prompt "
+        "(`candidates` only)."
     )
 
     prompt = "\n\n".join(sections)
@@ -298,7 +290,7 @@ def generate_llm_invariant_guard_candidate(
     llm: LlmClient,
     *,
     prompt_name: str = DEFAULT_INVARIANT_PROMPT,
-    use_images: bool = True,
+    use_images: bool = False,
     redactor: PromptRedactor | None = None,
     allow_provider_fallback: bool = False,
 ) -> LlmInvariantPacketCandidate:

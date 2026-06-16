@@ -12,8 +12,9 @@ import json
 import os
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -52,6 +53,27 @@ _SCHEMA_UNSUPPORTED_MARKERS = (
     "invalid schema",
     "strict",
 )
+
+
+class _StructuredProbeResponse(BaseModel):
+    value: Literal["ok"]
+
+
+@dataclass(frozen=True)
+class _ProxyStructuredStrategy:
+    name: str
+    transport: str
+    constraint_mode: SchemaConstraintMode
+
+
+@dataclass(frozen=True)
+class _ProxyProbeStatus:
+    ok: bool
+    detail: str
+
+
+class _ProxyStructuredUnavailableError(Exception):
+    """Raised when a proxy structured-output strategy cannot be used."""
 
 
 def _extract_json(text: str) -> str:
@@ -99,6 +121,8 @@ class LlmClient:
                 api_key=config.proxy_api_key,
             )
             self._model = config.proxy_model
+            self._proxy_model_metadata_cache: dict[str, dict[str, Any]] = {}
+            self._proxy_probe_cache: dict[tuple[str, str], _ProxyProbeStatus] = {}
         else:
             env_key = self._ENV_KEYS.get(self._provider, "")
             configured_api_key = {
@@ -135,11 +159,19 @@ class LlmClient:
                 msg = f"Provider '{self._provider}' not yet implemented"
                 raise NotImplementedError(msg)
 
+    def _add_sampling_params(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Attach optional sampling parameters only when explicitly configured."""
+        if self._config.temperature is not None:
+            payload["temperature"] = self._config.temperature
+        return payload
+
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         """Text-only generation."""
         if self._provider == "google":
             return self._generate_google(system_prompt, user_prompt, contents=[user_prompt])
-        if self._provider in {"openai", "proxy"}:
+        if self._provider == "proxy":
+            return self._generate_proxy(system_prompt, user_prompt, images=None, image_labels=None)
+        if self._provider == "openai":
             return self._generate_openai_compatible(system_prompt, user_prompt)
         return self._generate_anthropic(system_prompt, user_prompt)
 
@@ -155,7 +187,14 @@ class LlmClient:
         Each image is loaded, resized to max 1280px longest edge,
         and sent as image content blocks.
         """
-        if self._provider in {"openai", "proxy"}:
+        if self._provider == "proxy":
+            return self._generate_proxy(
+                system_prompt,
+                text_prompt,
+                images=images,
+                image_labels=image_labels,
+            )
+        if self._provider == "openai":
             return self._generate_openai_compatible_with_images(
                 system_prompt, text_prompt, images, image_labels
             )
@@ -237,6 +276,27 @@ class LlmClient:
             image_labels=image_labels,
         )
 
+    def probe_structured_output(
+        self,
+        response_model: type[BaseModel] = _StructuredProbeResponse,
+        schema_name: str = "StructuredProbe",
+        *,
+        allow_provider_fallback: bool = False,
+    ) -> StructuredResult:
+        """Check whether the configured provider/model can enforce a strict schema."""
+        user_prompt = (
+            'Return {"value":"bad"}. Do not return ok.'
+            if response_model is _StructuredProbeResponse
+            else "Return the smallest valid object for the requested schema."
+        )
+        return self.generate_structured(
+            "You are checking whether the provider enforces structured output.",
+            user_prompt,
+            response_model,
+            schema_name,
+            allow_provider_fallback=allow_provider_fallback,
+        )
+
     def _structured(
         self,
         system_prompt: str,
@@ -248,7 +308,17 @@ class LlmClient:
         images: list[Path] | None,
         image_labels: list[str] | None,
     ) -> StructuredResult:
-        if self._provider in {"openai", "proxy"}:
+        if self._provider == "proxy":
+            return self._structured_proxy(
+                system_prompt,
+                text_prompt,
+                response_model,
+                schema_name,
+                allow_provider_fallback,
+                images,
+                image_labels,
+            )
+        if self._provider == "openai":
             return self._structured_openai(
                 system_prompt,
                 text_prompt,
@@ -277,6 +347,784 @@ class LlmClient:
             images,
             image_labels,
         )
+
+    def _generate_proxy(
+        self,
+        system_prompt: str,
+        text_prompt: str,
+        *,
+        images: list[Path] | None,
+        image_labels: list[str] | None,
+    ) -> str:
+        metadata = self._proxy_model_metadata(self._model)
+        vendor = self._proxy_vendor(metadata).lower()
+        endpoints = set(metadata.get("supported_endpoints") or [])
+        no_endpoint_metadata = not endpoints
+
+        def has(endpoint: str) -> bool:
+            return no_endpoint_metadata or endpoint in endpoints
+
+        is_anthropic = "anthropic" in vendor or self._model.startswith("claude")
+        if is_anthropic and has("/v1/messages"):
+            return self._generate_proxy_anthropic_messages(
+                system_prompt,
+                text_prompt,
+                images,
+                image_labels,
+                metadata,
+            )
+        if has("/chat/completions"):
+            if images:
+                return self._generate_openai_compatible_with_images(
+                    system_prompt,
+                    text_prompt,
+                    images,
+                    image_labels,
+                )
+            return self._generate_openai_compatible(system_prompt, text_prompt)
+        if has("/responses"):
+            return self._generate_proxy_responses(system_prompt, text_prompt, images, image_labels)
+        raise ValueError(f"Proxy model {self._model!r} has no supported plain generation endpoint")
+
+    def _generate_proxy_anthropic_messages(
+        self,
+        system_prompt: str,
+        text_prompt: str,
+        images: list[Path] | None,
+        image_labels: list[str] | None,
+        metadata: dict[str, Any],
+    ) -> str:
+        if images:
+            labels = image_labels or [None] * len(images)
+            pil_images = [self._preprocess_image(p) for p in images]
+            content: Any = self._anthropic_image_content(text_prompt, pil_images, labels)
+        else:
+            content = text_prompt
+        payload = {
+            "model": self._model,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": content}],
+            # Anthropic Messages requires this field; use the model/proxy output ceiling,
+            # not a project budget or artificial truncation limit.
+            "max_tokens": self._proxy_anthropic_max_tokens(metadata),
+        }
+        self._add_sampling_params(payload)
+        response = self._proxy_post_json("/messages", payload)
+        return self._proxy_messages_text(response)
+
+    def _generate_proxy_responses(
+        self,
+        system_prompt: str,
+        text_prompt: str,
+        images: list[Path] | None,
+        image_labels: list[str] | None,
+    ) -> str:
+        user_content: Any = (
+            self._openai_response_input_content(text_prompt, images, image_labels)
+            if images
+            else text_prompt
+        )
+        payload = {
+            "model": self._model,
+            "input": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+        }
+        self._add_sampling_params(payload)
+        response = self._proxy_post_json("/responses", payload)
+        return self._proxy_response_output_text(response)
+
+    def _structured_proxy(
+        self,
+        system_prompt: str,
+        text_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        allow_provider_fallback: bool,
+        images: list[Path] | None,
+        image_labels: list[str] | None,
+    ) -> StructuredResult:
+        metadata = self._proxy_model_metadata(self._model)
+        failures: list[str] = []
+        for strategy in self._proxy_strategy_order(metadata):
+            probe = self._proxy_probe_strategy(strategy, metadata)
+            if not probe.ok:
+                failures.append(f"{strategy.name}: {probe.detail}")
+                continue
+            try:
+                result = self._run_proxy_strategy(
+                    strategy,
+                    system_prompt,
+                    text_prompt,
+                    response_model,
+                    schema_name,
+                    images,
+                    image_labels,
+                    metadata,
+                    probe_status="ok",
+                )
+            except _ProxyStructuredUnavailableError as exc:
+                failures.append(f"{strategy.name}: {exc}")
+                continue
+            if (
+                allow_provider_fallback
+                and result.parsed is None
+                and result.schema_constraint_mode == "native_schema_unenforced"
+            ):
+                return self._fallback_validate(
+                    system_prompt,
+                    text_prompt,
+                    response_model,
+                    schema_name,
+                    images,
+                    image_labels,
+                )
+            return result
+
+        reason = "; ".join(failures) or f"no structured strategy available for {self._model}"
+        if allow_provider_fallback:
+            return self._fallback_validate(
+                system_prompt,
+                text_prompt,
+                response_model,
+                schema_name,
+                images,
+                image_labels,
+            )
+        logger.warning(f"Structured output unavailable ({reason}); failing clearly.")
+        return StructuredResult(
+            parsed=None,
+            raw_text="",
+            provider=self._provider,
+            model=self._model,
+            schema_name=schema_name,
+            schema_hash=schema_hash(response_model),
+            schema_constraint_mode="prompt_only_unavailable",
+            validation_errors=[reason],
+            strategy="unavailable",
+            vendor=self._proxy_vendor(metadata),
+            probe_status="failed",
+        )
+
+    def _proxy_model_metadata(self, model: str) -> dict[str, Any]:
+        cache = getattr(self, "_proxy_model_metadata_cache", None)
+        if cache is None:
+            return {}
+        if model in cache:
+            return cache[model]
+
+        try:
+            payload = self._proxy_get_json(self._config.proxy_models_url)
+        except Exception as exc:  # pragma: no cover - depends on optional local proxy.
+            logger.warning(f"Could not query proxy model metadata: {exc}")
+            cache[model] = {}
+            return {}
+
+        data = payload.get("data", []) if isinstance(payload, dict) else []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            ids = {str(item.get("id") or ""), str(item.get("claude_model_id") or "")}
+            if model in ids:
+                cache[model] = item
+                return item
+        cache[model] = {}
+        return {}
+
+    def _proxy_probe_strategy(
+        self,
+        strategy: _ProxyStructuredStrategy,
+        metadata: dict[str, Any],
+    ) -> _ProxyProbeStatus:
+        cache = getattr(self, "_proxy_probe_cache", None)
+        cache_key = (self._model, strategy.name)
+        if cache is not None and cache_key in cache:
+            return cache[cache_key]
+
+        try:
+            result = self._run_proxy_strategy(
+                strategy,
+                "You are checking whether the provider enforces structured output.",
+                'Return {"value":"bad"}. Do not return ok.',
+                _StructuredProbeResponse,
+                "StructuredProbe",
+                images=None,
+                image_labels=None,
+                metadata=metadata,
+                probe_status="probe",
+            )
+        except Exception as exc:
+            status = _ProxyProbeStatus(False, str(exc))
+        else:
+            parsed = result.parsed
+            if isinstance(parsed, _StructuredProbeResponse) and parsed.value == "ok":
+                status = _ProxyProbeStatus(True, "ok")
+            else:
+                detail = (
+                    result.validation_errors[0] if result.validation_errors else result.raw_text
+                )
+                status = _ProxyProbeStatus(False, detail or "schema was not enforced")
+        if cache is not None:
+            cache[cache_key] = status
+        return status
+
+    def _proxy_strategy_order(self, metadata: dict[str, Any]) -> list[_ProxyStructuredStrategy]:
+        vendor = self._proxy_vendor(metadata).lower()
+        endpoints = set(metadata.get("supported_endpoints") or [])
+        supports = (metadata.get("capabilities") or {}).get("supports") or {}
+        no_endpoint_metadata = not endpoints
+
+        def has_endpoint(endpoint: str) -> bool:
+            return no_endpoint_metadata or endpoint in endpoints
+
+        def supports_flag(flag: str) -> bool:
+            return no_endpoint_metadata or bool(supports.get(flag))
+
+        is_anthropic = "anthropic" in vendor or self._model.startswith("claude")
+        is_google = "google" in vendor or self._model.startswith("gemini")
+        is_openai = (
+            "openai" in vendor
+            or "azure" in vendor
+            or self._model.startswith("gpt")
+            or self._model.startswith("mai-")
+        )
+
+        strategies: list[_ProxyStructuredStrategy] = []
+
+        def add(name: str, transport: str, mode: SchemaConstraintMode) -> None:
+            strategy = _ProxyStructuredStrategy(name, transport, mode)
+            if strategy not in strategies:
+                strategies.append(strategy)
+
+        if is_anthropic:
+            if has_endpoint("/v1/messages") and supports_flag("tool_calls"):
+                add("anthropic_messages_tool", "/v1/messages", "tool_schema")
+            if has_endpoint("/chat/completions") and supports_flag("tool_calls"):
+                add("chat_function_tool", "/chat/completions", "tool_schema")
+        elif is_google:
+            if has_endpoint("/chat/completions") and supports_flag("tool_calls"):
+                add("chat_function_tool", "/chat/completions", "tool_schema")
+            if has_endpoint("/chat/completions"):
+                add("chat_json_schema", "/chat/completions", "native_schema")
+        elif is_openai:
+            if has_endpoint("/responses") and supports_flag("structured_outputs"):
+                add("responses_json_schema", "/responses", "native_schema")
+            if has_endpoint("/chat/completions") and supports_flag("structured_outputs"):
+                add("chat_json_schema", "/chat/completions", "native_schema")
+            if has_endpoint("/chat/completions") and supports_flag("tool_calls"):
+                add("chat_function_tool", "/chat/completions", "tool_schema")
+        else:
+            if has_endpoint("/v1/messages") and supports_flag("tool_calls"):
+                add("anthropic_messages_tool", "/v1/messages", "tool_schema")
+            if has_endpoint("/responses") and bool(supports.get("structured_outputs")):
+                add("responses_json_schema", "/responses", "native_schema")
+            if has_endpoint("/chat/completions") and supports_flag("tool_calls"):
+                add("chat_function_tool", "/chat/completions", "tool_schema")
+            if has_endpoint("/chat/completions") and bool(supports.get("structured_outputs")):
+                add("chat_json_schema", "/chat/completions", "native_schema")
+
+        return strategies
+
+    def _run_proxy_strategy(
+        self,
+        strategy: _ProxyStructuredStrategy,
+        system_prompt: str,
+        text_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        images: list[Path] | None,
+        image_labels: list[str] | None,
+        metadata: dict[str, Any],
+        *,
+        probe_status: str,
+    ) -> StructuredResult:
+        if strategy.name == "anthropic_messages_tool":
+            return self._proxy_anthropic_messages_tool(
+                system_prompt,
+                text_prompt,
+                response_model,
+                schema_name,
+                images,
+                image_labels,
+                metadata,
+                strategy,
+                probe_status,
+            )
+        if strategy.name == "chat_function_tool":
+            return self._proxy_chat_function_tool(
+                system_prompt,
+                text_prompt,
+                response_model,
+                schema_name,
+                images,
+                image_labels,
+                metadata,
+                strategy,
+                probe_status,
+            )
+        if strategy.name == "responses_json_schema":
+            return self._proxy_responses_json_schema(
+                system_prompt,
+                text_prompt,
+                response_model,
+                schema_name,
+                images,
+                image_labels,
+                metadata,
+                strategy,
+                probe_status,
+            )
+        if strategy.name == "chat_json_schema":
+            return self._proxy_chat_json_schema(
+                system_prompt,
+                text_prompt,
+                response_model,
+                schema_name,
+                images,
+                image_labels,
+                metadata,
+                strategy,
+                probe_status,
+            )
+        raise _ProxyStructuredUnavailableError(f"unknown strategy {strategy.name}")
+
+    def _proxy_anthropic_messages_tool(
+        self,
+        system_prompt: str,
+        text_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        images: list[Path] | None,
+        image_labels: list[str] | None,
+        metadata: dict[str, Any],
+        strategy: _ProxyStructuredStrategy,
+        probe_status: str,
+    ) -> StructuredResult:
+        content: Any
+        if images:
+            labels = image_labels or [None] * len(images)
+            pil_images = [self._preprocess_image(p) for p in images]
+            content = self._anthropic_image_content(text_prompt, pil_images, labels)
+        else:
+            content = text_prompt
+
+        tool = {
+            "name": schema_name,
+            "description": f"Return exactly one well-formed {schema_name} object.",
+            "input_schema": to_strict_schema(response_model, inline_refs=True),
+            "strict": True,
+        }
+        payload = {
+            "model": self._model,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": content}],
+            "tools": [tool],
+            "tool_choice": {"type": "tool", "name": schema_name},
+            "max_tokens": self._proxy_anthropic_max_tokens(metadata),
+        }
+        self._add_sampling_params(payload)
+        response = self._proxy_post_json("/messages", payload)
+        block = next(
+            (
+                b
+                for b in response.get("content", [])
+                if isinstance(b, dict) and b.get("type") == "tool_use"
+            ),
+            None,
+        )
+        raw = json.dumps(block.get("input")) if isinstance(block, dict) else ""
+        parsed, errors = self._validate_proxy_obj(
+            response_model,
+            block.get("input") if block else None,
+        )
+        stop = str(response.get("stop_reason") or "")
+        return self._proxy_structured_result(
+            parsed,
+            raw,
+            response_model,
+            schema_name,
+            strategy,
+            metadata,
+            probe_status,
+            refusal="refused" if stop == "refusal" else None,
+            stop_reason=stop or None,
+            incomplete=(stop == "max_tokens"),
+            incomplete_detail="max_tokens" if stop == "max_tokens" else None,
+            validation_errors=errors or ([] if block else ["forced tool call was not returned"]),
+        )
+
+    def _proxy_chat_function_tool(
+        self,
+        system_prompt: str,
+        text_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        images: list[Path] | None,
+        image_labels: list[str] | None,
+        metadata: dict[str, Any],
+        strategy: _ProxyStructuredStrategy,
+        probe_status: str,
+    ) -> StructuredResult:
+        user_content: Any = (
+            self._openai_image_content(text_prompt, images, image_labels) if images else text_prompt
+        )
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": schema_name,
+                        "description": f"Return exactly one well-formed {schema_name} object.",
+                        "parameters": to_strict_schema(response_model, inline_refs=True),
+                        "strict": True,
+                    },
+                }
+            ],
+            "tool_choice": {"type": "function", "function": {"name": schema_name}},
+        }
+        self._add_sampling_params(payload)
+        response = self._proxy_post_json("/chat/completions", payload)
+        choice = self._proxy_first_choice(response)
+        message = choice.get("message", {}) if isinstance(choice, dict) else {}
+        raw = self._proxy_tool_arguments(message)
+        parsed, errors = self._validate_proxy_json(response_model, raw)
+        finish = str(choice.get("finish_reason") or "") if isinstance(choice, dict) else ""
+        return self._proxy_structured_result(
+            parsed,
+            raw,
+            response_model,
+            schema_name,
+            strategy,
+            metadata,
+            probe_status,
+            refusal=message.get("refusal") if isinstance(message, dict) else None,
+            stop_reason=finish or None,
+            incomplete=(finish == "length"),
+            incomplete_detail="length" if finish == "length" else None,
+            validation_errors=errors or ([] if raw else ["forced tool call was not returned"]),
+        )
+
+    def _proxy_responses_json_schema(
+        self,
+        system_prompt: str,
+        text_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        images: list[Path] | None,
+        image_labels: list[str] | None,
+        metadata: dict[str, Any],
+        strategy: _ProxyStructuredStrategy,
+        probe_status: str,
+    ) -> StructuredResult:
+        user_content: Any = (
+            self._openai_response_input_content(text_prompt, images, image_labels)
+            if images
+            else text_prompt
+        )
+        payload = {
+            "model": self._model,
+            "input": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": to_strict_schema(response_model, inline_refs=True),
+                }
+            },
+        }
+        self._add_sampling_params(payload)
+        response = self._proxy_post_json("/responses", payload)
+        raw = self._proxy_response_output_text(response)
+        parsed, errors = self._validate_proxy_json(response_model, raw)
+        mode = "native_schema" if parsed is not None else "native_schema_unenforced"
+        status = str(response.get("status") or "")
+        return self._proxy_structured_result(
+            parsed,
+            raw,
+            response_model,
+            schema_name,
+            strategy,
+            metadata,
+            probe_status,
+            mode=mode,
+            refusal=self._proxy_response_refusal(response),
+            stop_reason=status or None,
+            incomplete=(status == "incomplete"),
+            incomplete_detail=str(response.get("incomplete_details") or "") or None,
+            validation_errors=errors,
+        )
+
+    def _proxy_chat_json_schema(
+        self,
+        system_prompt: str,
+        text_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        images: list[Path] | None,
+        image_labels: list[str] | None,
+        metadata: dict[str, Any],
+        strategy: _ProxyStructuredStrategy,
+        probe_status: str,
+    ) -> StructuredResult:
+        user_content: Any = (
+            self._openai_image_content(text_prompt, images, image_labels) if images else text_prompt
+        )
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": to_strict_schema(response_model, inline_refs=True),
+                },
+            },
+        }
+        self._add_sampling_params(payload)
+        response = self._proxy_post_json("/chat/completions", payload)
+        choice = self._proxy_first_choice(response)
+        message = choice.get("message", {}) if isinstance(choice, dict) else {}
+        raw = str(message.get("content") or "") if isinstance(message, dict) else ""
+        parsed, errors = self._validate_proxy_json(response_model, raw)
+        mode = "native_schema" if parsed is not None else "native_schema_unenforced"
+        finish = str(choice.get("finish_reason") or "") if isinstance(choice, dict) else ""
+        return self._proxy_structured_result(
+            parsed,
+            raw,
+            response_model,
+            schema_name,
+            strategy,
+            metadata,
+            probe_status,
+            mode=mode,
+            refusal=message.get("refusal") if isinstance(message, dict) else None,
+            stop_reason=finish or None,
+            incomplete=(finish == "length"),
+            incomplete_detail="length" if finish == "length" else None,
+            validation_errors=errors,
+        )
+
+    def _proxy_structured_result(
+        self,
+        parsed: BaseModel | None,
+        raw: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        strategy: _ProxyStructuredStrategy,
+        metadata: dict[str, Any],
+        probe_status: str,
+        *,
+        mode: SchemaConstraintMode | None = None,
+        refusal: str | None = None,
+        stop_reason: str | None = None,
+        incomplete: bool = False,
+        incomplete_detail: str | None = None,
+        validation_errors: list[str] | None = None,
+    ) -> StructuredResult:
+        return StructuredResult(
+            parsed=parsed,
+            raw_text=raw,
+            provider=self._provider,
+            model=self._model,
+            schema_name=schema_name,
+            schema_hash=schema_hash(response_model),
+            schema_constraint_mode=mode or strategy.constraint_mode,
+            refusal=refusal,
+            stop_reason=stop_reason,
+            incomplete=incomplete,
+            incomplete_detail=incomplete_detail,
+            validation_errors=validation_errors or [],
+            transport=strategy.transport,
+            strategy=strategy.name,
+            vendor=self._proxy_vendor(metadata),
+            probe_status=probe_status,
+        )
+
+    def _proxy_get_json(self, url: str) -> dict[str, Any]:
+        import httpx
+
+        response = httpx.get(url, headers=self._proxy_headers(), timeout=10)
+        if response.status_code >= 400:
+            raise _ProxyStructuredUnavailableError(f"HTTP {response.status_code}: {response.text}")
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+
+    def _proxy_post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        import httpx
+
+        url = self._proxy_url(path)
+
+        def _call() -> dict[str, Any]:
+            response = httpx.post(url, headers=self._proxy_headers(), json=payload, timeout=180)
+            if response.status_code >= 400:
+                detail = response.text
+                if self._is_schema_unsupported(Exception(detail)):
+                    raise _ProxyStructuredUnavailableError(
+                        f"{path} schema request unsupported: {detail}"
+                    )
+                raise _ProxyStructuredUnavailableError(
+                    f"{path} HTTP {response.status_code}: {detail}"
+                )
+            parsed = response.json()
+            return parsed if isinstance(parsed, dict) else {}
+
+        return self._call_with_retry(_call)
+
+    def _proxy_url(self, path: str) -> str:
+        return f"{self._config.proxy_base_url.rstrip('/')}/{path.lstrip('/')}"
+
+    def _proxy_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self._config.proxy_api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def _proxy_vendor(self, metadata: dict[str, Any]) -> str:
+        vendor = str(metadata.get("vendor") or metadata.get("owned_by") or "")
+        if vendor:
+            return vendor
+        if self._model.startswith("claude"):
+            return "Anthropic"
+        if self._model.startswith("gemini"):
+            return "Google"
+        if self._model.startswith("gpt") or self._model.startswith("mai-"):
+            return "OpenAI"
+        return "unknown"
+
+    @staticmethod
+    def _proxy_first_choice(response: dict[str, Any]) -> dict[str, Any]:
+        choices = response.get("choices") if isinstance(response, dict) else None
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            return choices[0]
+        return {}
+
+    @staticmethod
+    def _proxy_tool_arguments(message: dict[str, Any]) -> str:
+        tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+        if not isinstance(tool_calls, list) or not tool_calls:
+            return ""
+        call = tool_calls[0]
+        if not isinstance(call, dict):
+            return ""
+        function = call.get("function")
+        if not isinstance(function, dict):
+            return ""
+        args = function.get("arguments")
+        if isinstance(args, str):
+            return args
+        if isinstance(args, dict):
+            return json.dumps(args)
+        return ""
+
+    @staticmethod
+    def _proxy_messages_text(response: dict[str, Any]) -> str:
+        chunks: list[str] = []
+        content = response.get("content")
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+        return "".join(chunks)
+
+    @staticmethod
+    def _proxy_response_output_text(response: dict[str, Any]) -> str:
+        output_text = response.get("output_text")
+        if isinstance(output_text, str):
+            return output_text
+        chunks: list[str] = []
+        for item in response.get("output", []) if isinstance(response.get("output"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            for content in item.get("content", []) if isinstance(item.get("content"), list) else []:
+                if not isinstance(content, dict):
+                    continue
+                text = content.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+        return "".join(chunks)
+
+    @staticmethod
+    def _proxy_response_refusal(response: dict[str, Any]) -> str | None:
+        for item in response.get("output", []) if isinstance(response.get("output"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            for content in item.get("content", []) if isinstance(item.get("content"), list) else []:
+                if isinstance(content, dict) and content.get("type") == "refusal":
+                    refusal = content.get("refusal") or content.get("text")
+                    return str(refusal) if refusal else "refusal"
+        return None
+
+    @staticmethod
+    def _validate_proxy_json(
+        response_model: type[BaseModel],
+        raw: str,
+    ) -> tuple[BaseModel | None, list[str]]:
+        if not raw:
+            return None, ["structured response was empty"]
+        try:
+            return response_model.model_validate_json(raw), []
+        except ValidationError as exc:
+            return None, [str(exc)]
+
+    @staticmethod
+    def _validate_proxy_obj(
+        response_model: type[BaseModel],
+        obj: Any,
+    ) -> tuple[BaseModel | None, list[str]]:
+        if obj is None:
+            return None, ["structured response was empty"]
+        try:
+            return response_model.model_validate(obj), []
+        except ValidationError as exc:
+            return None, [str(exc)]
+
+    @staticmethod
+    def _proxy_anthropic_max_tokens(metadata: dict[str, Any]) -> int:
+        limits = (metadata.get("capabilities") or {}).get("limits") or {}
+        value = limits.get("max_output_tokens") or limits.get("max_non_streaming_output_tokens")
+        if isinstance(value, int) and value > 0:
+            return value
+        return _ANTHROPIC_MAX_OUTPUT_TOKENS
+
+    def _openai_response_input_content(
+        self,
+        text_prompt: str,
+        images: list[Path],
+        image_labels: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        labels = image_labels or [None] * len(images)
+        pil_images = [self._preprocess_image(p) for p in images]
+        content: list[dict[str, Any]] = []
+        for label, img in zip(labels, pil_images, strict=True):
+            if label:
+                content.append({"type": "input_text", "text": label})
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=_JPEG_QUALITY)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{b64}",
+                }
+            )
+        content.append({"type": "input_text", "text": text_prompt})
+        return content
 
     def _structured_openai(
         self,
@@ -313,12 +1161,13 @@ class LlmClient:
             )
 
         def _call() -> Any:
-            return self._client.chat.completions.parse(
-                model=self._model,
-                messages=messages,
-                response_format=response_model,
-                temperature=self._config.temperature,
-            )
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "messages": messages,
+                "response_format": response_model,
+            }
+            self._add_sampling_params(kwargs)
+            return self._client.chat.completions.parse(**kwargs)
 
         try:
             completion = self._call_with_retry(_call)
@@ -358,18 +1207,33 @@ class LlmClient:
         choice = completion.choices[0]
         message = choice.message
         finish = getattr(choice, "finish_reason", None)
+        raw = getattr(message, "content", None) or ""
+        parsed = getattr(message, "parsed", None)
+        errors: list[str] = []
+        mode: SchemaConstraintMode = "native_schema"
+        if parsed is None and raw:
+            try:
+                parsed = response_model.model_validate_json(raw)
+            except ValidationError as exc:
+                errors.append(str(exc))
+                mode = "native_schema_unenforced"
         return StructuredResult(
-            parsed=getattr(message, "parsed", None),
-            raw_text=getattr(message, "content", None) or "",
+            parsed=parsed,
+            raw_text=raw,
             provider=self._provider,
             model=self._model,
             schema_name=schema_name,
             schema_hash=schema_hash(response_model),
-            schema_constraint_mode="native_schema",
+            schema_constraint_mode=mode,
             refusal=getattr(message, "refusal", None),
             stop_reason=finish,
             incomplete=(finish == "length"),
             incomplete_detail="length" if finish == "length" else None,
+            validation_errors=errors,
+            transport="/chat/completions",
+            strategy="openai_chat_parse",
+            vendor="OpenAI",
+            probe_status="provider_native",
         )
 
     def _structured_google(
@@ -391,12 +1255,13 @@ class LlmClient:
         else:
             contents = [text_prompt]
 
-        config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=self._config.temperature,
-            response_mime_type="application/json",
-            response_schema=response_model,
-        )
+        config_kwargs: dict[str, Any] = {
+            "system_instruction": system_prompt,
+            "response_mime_type": "application/json",
+            "response_schema": response_model,
+        }
+        self._add_sampling_params(config_kwargs)
+        config = types.GenerateContentConfig(**config_kwargs)
 
         def _call() -> Any:
             return self._client.models.generate_content(
@@ -412,6 +1277,9 @@ class LlmClient:
                 parsed = response_model.model_validate_json(raw)
             except ValidationError as exc:
                 errors.append(str(exc))
+        mode: SchemaConstraintMode = (
+            "native_schema" if parsed is not None else "native_schema_unenforced"
+        )
         candidate = (getattr(response, "candidates", None) or [None])[0]
         finish = getattr(getattr(candidate, "finish_reason", None), "value", None)
         blocked = finish in {"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION"}
@@ -422,12 +1290,16 @@ class LlmClient:
             model=self._model,
             schema_name=schema_name,
             schema_hash=schema_hash(response_model),
-            schema_constraint_mode="native_schema",
+            schema_constraint_mode=mode,
             refusal=finish if blocked else None,
             stop_reason=finish,
             incomplete=(finish == "MAX_TOKENS"),
             incomplete_detail="MAX_TOKENS" if finish == "MAX_TOKENS" else None,
             validation_errors=errors,
+            transport="google-genai",
+            strategy="google_response_schema",
+            vendor="Google",
+            probe_status="provider_native",
         )
 
     def _structured_anthropic(
@@ -451,18 +1323,20 @@ class LlmClient:
             "name": schema_name,
             "description": f"Return exactly one well-formed {schema_name} object.",
             "input_schema": to_strict_schema(response_model),
+            "strict": True,
         }
 
         def _call() -> Any:
-            return self._client.messages.create(
-                model=self._model,
-                system=system_prompt,
-                messages=[{"role": "user", "content": content}],
-                temperature=self._config.temperature,
-                tools=[tool],
-                tool_choice={"type": "tool", "name": schema_name},
-                max_tokens=_ANTHROPIC_MAX_OUTPUT_TOKENS,
-            )
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": content}],
+                "tools": [tool],
+                "tool_choice": {"type": "tool", "name": schema_name},
+                "max_tokens": _ANTHROPIC_MAX_OUTPUT_TOKENS,
+            }
+            self._add_sampling_params(kwargs)
+            return self._client.messages.create(**kwargs)
 
         message = self._call_with_retry(_call)
         block = next((b for b in message.content if getattr(b, "type", None) == "tool_use"), None)
@@ -489,6 +1363,10 @@ class LlmClient:
             incomplete=(stop == "max_tokens"),
             incomplete_detail="max_tokens" if stop == "max_tokens" else None,
             validation_errors=errors,
+            transport="/v1/messages",
+            strategy="anthropic_messages_tool",
+            vendor="Anthropic",
+            probe_status="provider_native",
         )
 
     def _native_failure(
@@ -516,6 +1394,9 @@ class LlmClient:
             incomplete=incomplete,
             incomplete_detail=incomplete_detail,
             validation_errors=validation_errors or [],
+            strategy="unavailable",
+            vendor=self._provider,
+            probe_status="failed",
         )
 
     def _unavailable_or_fallback(
@@ -584,6 +1465,10 @@ class LlmClient:
             schema_hash=schema_hash(response_model),
             schema_constraint_mode="fallback_validate",
             validation_errors=errors,
+            transport="prompt",
+            strategy="fallback_validate",
+            vendor=self._provider,
+            probe_status="explicit_fallback",
         )
 
     @staticmethod
@@ -594,10 +1479,9 @@ class LlmClient:
     def _generate_google(self, system_prompt: str, _text_prompt: str, contents: list[Any]) -> str:
         from google.genai import types
 
-        config = types.GenerateContentConfig(
-            systemInstruction=system_prompt,
-            temperature=self._config.temperature,
-        )
+        config_kwargs: dict[str, Any] = {"systemInstruction": system_prompt}
+        self._add_sampling_params(config_kwargs)
+        config = types.GenerateContentConfig(**config_kwargs)
 
         def _call() -> Any:
             return self._client.models.generate_content(
@@ -622,12 +1506,13 @@ class LlmClient:
                 "model": self._model,
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": user_prompt}],
-                "temperature": self._config.temperature,
+                "max_tokens": _ANTHROPIC_MAX_OUTPUT_TOKENS,
             }
+            self._add_sampling_params(kwargs)
             return self._client.messages.create(**kwargs)
 
         response = self._call_with_retry(_call)
-        if hasattr(response, "usage"):
+        if getattr(response, "usage", None):
             logger.debug(
                 f"Anthropic tokens: input={response.usage.input_tokens}, "
                 f"output={response.usage.output_tokens}"
@@ -648,12 +1533,13 @@ class LlmClient:
                 "model": self._model,
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": content}],
-                "temperature": self._config.temperature,
+                "max_tokens": _ANTHROPIC_MAX_OUTPUT_TOKENS,
             }
+            self._add_sampling_params(kwargs)
             return self._client.messages.create(**kwargs)
 
         response = self._call_with_retry(_call)
-        if hasattr(response, "usage"):
+        if getattr(response, "usage", None):
             logger.debug(
                 f"Anthropic tokens: input={response.usage.input_tokens}, "
                 f"output={response.usage.output_tokens}"
@@ -691,8 +1577,8 @@ class LlmClient:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                "temperature": self._config.temperature,
             }
+            self._add_sampling_params(kwargs)
             return self._client.chat.completions.create(**kwargs)
 
         response = self._call_with_retry(_call)
@@ -720,8 +1606,8 @@ class LlmClient:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": content},
                 ],
-                "temperature": self._config.temperature,
             }
+            self._add_sampling_params(kwargs)
             return self._client.chat.completions.create(**kwargs)
 
         response = self._call_with_retry(_call)

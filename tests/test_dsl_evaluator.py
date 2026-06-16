@@ -28,6 +28,11 @@ class TestReadPredicate:
         r = self.ev.evaluate('read(item, text) != ""', screen_ctx=ctx)
         assert r.passed is True
 
+    def test_read_pred_accepts_single_quoted_string_literal(self) -> None:
+        ctx = ScreenContext(elements={"screen_marker": {"text": "screen:home"}})
+        r = self.ev.evaluate("read(screen_marker, text) == 'screen:home'", screen_ctx=ctx)
+        assert r.passed is True
+
     def test_read_missing_element(self) -> None:
         ctx = ScreenContext(elements={})
         r = self.ev.evaluate('read(missing, text) == "hello"', screen_ctx=ctx)
@@ -212,6 +217,12 @@ class TestLogicClauseParsing:
         assert [c["predicate_type"] for c in parsed["clauses"]] == ["read", "action"]
         assert parsed["clauses"][0]["text"] == "read(send_button, is_enabled) == true"
         assert parsed["clauses"][1]["property"] == "target_resource_id"
+
+    def test_parse_logic_clauses_accepts_single_quoted_string_literal(self) -> None:
+        parsed = self.ev.parse_logic_clauses("read(screen_marker, text) == 'screen:home'")
+
+        assert parsed["status"] == "parsed"
+        assert parsed["clauses"][0]["value"] == "'screen:home'"
 
     def test_parse_logic_clauses_for_parse_error(self) -> None:
         parsed = self.ev.parse_logic_clauses("invalid !@# syntax")

@@ -73,6 +73,7 @@ class InvariantEvidence(BaseModel):
     template_id: str = ""
     page_function: str = ""
     display_name: str = ""
+    visual_alt_text: str = ""
     raw_screen_ids: list[str] = Field(default_factory=list)
     observation_count: int = 0
     observations: list[dict[str, Any]] = Field(default_factory=list)
@@ -135,6 +136,7 @@ def build_invariant_evidence(
         template_id=state.abstraction.template_id or "",
         page_function=state.annotations.page_function,
         display_name=state.annotations.display_name,
+        visual_alt_text=state.annotations.alt_text,
         raw_screen_ids=list(state.evidence.raw_screen_ids),
         observation_count=len(observations),
         observations=observations,

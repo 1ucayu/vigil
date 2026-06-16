@@ -22,12 +22,14 @@ from pydantic import BaseModel
 
 # How strongly the provider constrained the output shape:
 # - native_schema: provider enforced the JSON Schema (openai json_schema / google response_schema)
+# - native_schema_unenforced: provider accepted the native request but returned invalid content
 # - tool_schema: provider forced a tool whose input_schema is the JSON Schema (anthropic)
 # - json_mode: provider guaranteed JSON syntax only (response_format json_object) + local validate
 # - prompt_only_unavailable: no structured path available and fallback was not permitted
 # - fallback_validate: opt-in only; schema embedded in the prompt + plain text + local validate
 SchemaConstraintMode = Literal[
     "native_schema",
+    "native_schema_unenforced",
     "tool_schema",
     "json_mode",
     "prompt_only_unavailable",
@@ -58,6 +60,10 @@ class StructuredResult:
     incomplete: bool = False
     incomplete_detail: str | None = None
     validation_errors: list[str] = field(default_factory=list)
+    transport: str = ""
+    strategy: str = ""
+    vendor: str = ""
+    probe_status: str = ""
 
 
 def schema_hash(model: type[BaseModel]) -> str:

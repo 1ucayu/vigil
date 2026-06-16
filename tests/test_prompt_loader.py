@@ -13,13 +13,14 @@ def test_loads_guard_generation_prompt():
     assert text.strip()
     # Encodes the transition-guard-only generation contract.
     assert "GuardContract" in text
-    assert "pre-action transition guard" in text
-    assert "Produce a typed `GuardContract` candidate only" in text
-    assert "Do not emit free-form DSL as the primary artifact" in text
-    assert "Guard predicates must not reference target-only UI" in text
-    assert "binding_requirements" in text
+    assert "pre-action guard" in text
+    assert "Produce one `GuardContract` candidate" in text
+    assert "Do not emit DSL text directly" in text
+    assert "must not reference target-only UI" in text
+    assert "binding_requirements" not in text
+    assert "semantic-completeness" in text
     assert "$intent" in text
-    assert "$bind" in text
+    assert "$bind" not in text
     for forbidden in ("post" + "condition", "P" + "si", "effect" + "_requirements"):
         assert forbidden not in text
 
@@ -31,16 +32,16 @@ def test_prompt_dir_points_at_package():
 
 def test_specs_are_policy_not_schema_authority():
     guard = load_system_prompt("transition_guard_generation.spec")
-    invariant = load_system_prompt("invariant_guard_generaton.spec")
+    invariant = load_system_prompt("invariant_guard_generation.spec")
     # Policy markers: the structured schema is the shape authority, not the spec.
     assert "structured-output schema" in guard
     assert "structured-output schema" in invariant
     # The old JSON answer-template blocks are gone.
     assert '"semantic_binding_incomplete": false,' not in guard
     assert '"admission_target": "runtime_state_invariant|metadata_only|reject"' not in invariant
+    assert "effect_invariant_hints" not in invariant
+    assert "rejected_candidates" not in invariant
     assert "precondition" not in guard.lower()
-    # Ordinary mobile-app domain concepts remain legitimate.
-    assert "permission" in guard.lower()
 
 
 def test_missing_prompt_raises_file_not_found():

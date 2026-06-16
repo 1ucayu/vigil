@@ -15,8 +15,11 @@ from vigil.models.fsm import (
     Transition,
 )
 from vigil.models.guard import GuardAdmissionStatus
-from vigil.models.llm_structured import LlmInvariantGuardResponse
-from vigil.neuro.invariant_generation_pipeline import generate_contract_invariants
+from vigil.models.invariant_candidate import TransitionGuardCandidate
+from vigil.neuro.invariant_generation_pipeline import (
+    _admit_packet_guard_candidates,
+    generate_contract_invariants,
+)
 from vigil.symbolic.decision_engine import DecisionEngine
 from vigil.symbolic.fsm_checker import VerifyReason, VerifyResult
 
@@ -287,42 +290,28 @@ def test_target_only_guard_predicate_rejected_via_existing_admission() -> None:
             ],
         },
     }
-    packet = LlmInvariantGuardResponse.model_validate(
+    candidate = TransitionGuardCandidate.model_validate(
         {
-            "state_invariant_candidates": [],
-            "transition_guard_candidates": [
-                {
-                    "source_state_id": "A",
-                    "target_state_id": "B",
-                    "canonical_action_key": "",
-                    "contract": {
-                        "kind": "item_binding",
-                        "required": True,
-                        "predicates": [
-                            {
-                                "predicate_type": "read",
-                                "element": "target_only_field",
-                                "property": "text",
-                                "operator": "==",
-                                "expected": {"kind": "literal", "literal_value": "Z"},
-                            }
-                        ],
-                    },
-                }
-            ],
-            "effect_invariant_hints": [],
-            "rejected_candidates": [],
+            "source_state_id": "A",
+            "target_state_id": "B",
+            "canonical_action_key": "",
+            "contract": {
+                "kind": "item_binding",
+                "required": True,
+                "predicates": [
+                    {
+                        "predicate_type": "read",
+                        "element": "target_only_field",
+                        "property": "text",
+                        "operator": "==",
+                        "expected": {"kind": "literal", "value": "Z"},
+                    }
+                ],
+            },
         }
     )
 
-    report = generate_contract_invariants(
-        fsm,
-        raw_screens,
-        invariant_source="llm",
-        llm=_FixedPacketLlm(packet),
-        use_images=False,
-    )
-    guard_rows = [row for state in report for row in state["guard_candidates"]]
+    guard_rows = _admit_packet_guard_candidates(fsm, raw_screens, None, [candidate])
     assert guard_rows, "expected the packet guard candidate to be admitted for the report"
     assert any(row["admitted"] is False for row in guard_rows)
     # The guard pipeline still owns Transition.guard — the invariant pass never attaches it.
@@ -420,48 +409,34 @@ def _two_edge_fsm() -> tuple[AppFSM, dict[str, Any]]:
     return fsm, raw_screens
 
 
-def _guard_packet(
+def _guard_candidate(
     source: str, target: str, cak: str, element: str = "x"
-) -> LlmInvariantGuardResponse:
-    return LlmInvariantGuardResponse.model_validate(
+) -> TransitionGuardCandidate:
+    return TransitionGuardCandidate.model_validate(
         {
-            "state_invariant_candidates": [],
-            "transition_guard_candidates": [
-                {
-                    "source_state_id": source,
-                    "target_state_id": target,
-                    "canonical_action_key": cak,
-                    "contract": {
-                        "kind": "item_binding",
-                        "required": True,
-                        "predicates": [
-                            {
-                                "predicate_type": "read",
-                                "element": element,
-                                "property": "text",
-                                "operator": "==",
-                                "expected": {"kind": "literal", "literal_value": "X"},
-                            }
-                        ],
-                    },
-                }
-            ],
-            "effect_invariant_hints": [],
-            "rejected_candidates": [],
+            "source_state_id": source,
+            "target_state_id": target,
+            "canonical_action_key": cak,
+            "contract": {
+                "kind": "item_binding",
+                "required": True,
+                "predicates": [
+                    {
+                        "predicate_type": "read",
+                        "element": element,
+                        "property": "text",
+                        "operator": "==",
+                        "expected": {"kind": "literal", "value": "X"},
+                    }
+                ],
+            },
         }
     )
 
 
 def test_ambiguous_guard_candidate_when_siblings_and_empty_key() -> None:
     fsm, raw = _two_edge_fsm()
-    report = generate_contract_invariants(
-        fsm,
-        raw,
-        invariant_source="llm",
-        llm=_FixedPacketLlm(_guard_packet("A", "B", "")),
-        use_images=False,
-    )
-    rows = [r for st in report for r in st["guard_candidates"]]
+    rows = _admit_packet_guard_candidates(fsm, raw, None, [_guard_candidate("A", "B", "")])
     assert rows
     assert all(r["admitted"] is False for r in rows)
     assert any(r["status"] == "ambiguous" for r in rows)
@@ -480,19 +455,8 @@ def test_keyed_candidate_is_non_ambiguous_match() -> None:
     from vigil.neuro.invariant_evidence import canonical_action_key_str
 
     second_cak = canonical_action_key_str(fsm.transitions[1].action)
-    report = generate_contract_invariants(
-        fsm,
-        raw,
-        invariant_source="llm",
-        llm=_FixedPacketLlm(_guard_packet("A", "B", second_cak)),
-        use_images=False,
-    )
-    matched = [
-        r
-        for st in report
-        for r in st["guard_candidates"]
-        if r["status"] not in ("ambiguous", "no_matching_transition")
-    ]
+    rows = _admit_packet_guard_candidates(fsm, raw, None, [_guard_candidate("A", "B", second_cak)])
+    matched = [r for r in rows if r["status"] not in ("ambiguous", "no_matching_transition")]
     # The candidate matched a specific transition and ran admission (element 'x' is a
     # target-only field at A, so the guard is rejected — but it was not ambiguous).
     assert matched

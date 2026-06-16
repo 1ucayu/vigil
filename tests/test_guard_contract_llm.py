@@ -6,7 +6,7 @@ from typing import Any
 
 from vigil.core.structured import StructuredResult
 from vigil.models.guard import GuardKind
-from vigil.models.llm_structured import LlmGuardResponse
+from vigil.models.llm_structured import LlmTransitionGuardResponse
 from vigil.neuro.guard_contract_llm import (
     build_guard_user_prompt,
     candidate_from_structured_result,
@@ -27,7 +27,7 @@ class FakeStructuredLlm:
 
     def __init__(
         self,
-        parsed: LlmGuardResponse | None,
+        parsed: LlmTransitionGuardResponse | None,
         *,
         schema_constraint_mode: str = "native_schema",
         refusal: str | None = None,
@@ -132,24 +132,23 @@ def _evidence() -> GuardEvidence:
     )
 
 
-def _item_response(**overrides: Any) -> LlmGuardResponse:
+def _item_response(**overrides: Any) -> LlmTransitionGuardResponse:
     payload = {
         "contract": {
             "kind": "confirm_commit",
-            "required": True,
-            "required_slots": [{"name": "contact_name", "slot_type": "string"}],
+            "slots": [{"name": "contact_name", "slot_type": "string"}],
             "predicates": [
                 {
                     "predicate_type": "action",
                     "property": "target_text",
                     "operator": "==",
-                    "expected": {"kind": "intent", "intent_slot": "contact_name"},
+                    "expected": {"kind": "intent", "slot": "contact_name"},
                 }
             ],
         }
     }
     payload.update(overrides)
-    return LlmGuardResponse.model_validate(payload)
+    return LlmTransitionGuardResponse.model_validate(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +168,7 @@ def test_user_prompt_includes_transition_guard_scope():
     assert "[Semantic Binding Checklist]" in prompt
     assert "alias=send" in prompt
     assert "perm:SEND_SMS" in prompt
+    assert "XML file text" not in prompt
     # No legacy wrapper language remains.
     assert "precondition" not in prompt.lower()
 
@@ -213,7 +213,7 @@ def test_candidate_from_parsed_result_is_admissible():
         raw_text="{}",
         provider="proxy",
         model="m",
-        schema_name="LlmGuardResponse",
+        schema_name="LlmTransitionGuardResponse",
         schema_hash="h",
         schema_constraint_mode="native_schema",
     )
@@ -231,7 +231,7 @@ def test_candidate_from_unavailable_result_is_rejected():
         raw_text="",
         provider="proxy",
         model="m",
-        schema_name="LlmGuardResponse",
+        schema_name="LlmTransitionGuardResponse",
         schema_hash="h",
         schema_constraint_mode="prompt_only_unavailable",
         validation_errors=["proxy lacks json_schema"],
@@ -265,11 +265,25 @@ def test_generate_uses_structured_images_when_screenshot_files_exist(tmp_path):
     ev.target_screen.screenshot_path = ""
     llm = FakeStructuredLlm(_item_response())
 
-    candidate = generate_llm_guard_candidate(ev, llm)
+    candidate = generate_llm_guard_candidate(ev, llm, use_images=True)
 
     assert candidate.parsed_ok is True
     assert llm.image_calls == 1
     assert llm.structured_calls == 0
+
+
+def test_generate_defaults_to_caption_cache_even_when_screenshot_exists(tmp_path):
+    source_img = tmp_path / "source.png"
+    source_img.write_bytes(b"fake")
+    ev = _evidence()
+    ev.source_screen.screenshot_path = str(source_img)
+    llm = FakeStructuredLlm(_item_response())
+
+    candidate = generate_llm_guard_candidate(ev, llm)
+
+    assert candidate.parsed_ok is True
+    assert llm.structured_calls == 1
+    assert llm.image_calls == 0
 
 
 def test_generate_structured_unavailable_degrades_to_rejected_candidate():
