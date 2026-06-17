@@ -2,22 +2,48 @@
   {
     "state_id": "s_001",
     "state_name": "@7F090001 #1",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_001.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_001.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_001.json",
     "observation_count": 79,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:inbox\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 79 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:inbox\""
+      },
+      {
+        "expr": "read(inbox_title, text) == \"Inbox\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 79 observation(s)",
+        "lowered_expr": "read(inbox.title, text) == \"Inbox\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"VigilChat\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 79 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"VigilChat\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:inbox\"",
+      "read(inbox.title, text) == \"Inbox\"",
+      "read(app.top_bar.title, text) == \"VigilChat\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -25,22 +51,54 @@
   {
     "state_id": "s_002",
     "state_name": "@7F090001 #2",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_002.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_002.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_002.json",
     "observation_count": 105,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:thread\"",
+        "kind": "structural",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 105 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:thread\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:thread\""
+    ],
     "effect_hints": [],
-    "rejected": [],
+    "rejected": [
+      {
+        "expr": "value(thread_title) == \"Alice Chen\"",
+        "kind": "stable_label",
+        "status": "rejected",
+        "reason": "not supported by all observations: false — Guard condition not satisfied",
+        "lowered_expr": ""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Alice Chen\"",
+        "kind": "stable_label",
+        "status": "rejected",
+        "reason": "not supported by all observations: false — Guard condition not satisfied",
+        "lowered_expr": ""
+      },
+      {
+        "expr": "value(thread_thread_id_alice) == \"alice\"",
+        "kind": "stable_label",
+        "status": "rejected",
+        "reason": "not supported by all observations: unknown — Inconclusive: element 'thread.thread_id.alice' not present on screen",
+        "lowered_expr": ""
+      }
+    ],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -48,22 +106,32 @@
   {
     "state_id": "s_004",
     "state_name": "@7F090001 #4",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_004.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_004.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_004.json",
     "observation_count": 103,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:thread\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 103 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:thread\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:thread\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -71,22 +139,48 @@
   {
     "state_id": "s_006",
     "state_name": "@7F090001 #6",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_006.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_006.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_006.json",
     "observation_count": 61,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:contacts\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 61 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:contacts\""
+      },
+      {
+        "expr": "value(contacts_title) == \"Contacts\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 61 observation(s)",
+        "lowered_expr": "value(contacts.title) == \"Contacts\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Contacts\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 61 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Contacts\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:contacts\"",
+      "value(contacts.title) == \"Contacts\"",
+      "value(app.top_bar.title) == \"Contacts\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -94,22 +188,56 @@
   {
     "state_id": "s_007",
     "state_name": "@7F090001 #7",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_007.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_007.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_007.json",
     "observation_count": 59,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:settings\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 59 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:settings\""
+      },
+      {
+        "expr": "value(settings_title) == \"Settings\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 59 observation(s)",
+        "lowered_expr": "value(settings.title) == \"Settings\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Settings\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 59 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Settings\""
+      },
+      {
+        "expr": "value(settings_info_text) contains \"No network, no disk I/O.\"",
+        "kind": "status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 59 observation(s)",
+        "lowered_expr": "value(settings.info_text) contains \"No network, no disk I/O.\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:settings\"",
+      "value(settings.title) == \"Settings\"",
+      "value(app.top_bar.title) == \"Settings\"",
+      "value(settings.info_text) contains \"No network, no disk I/O.\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -117,22 +245,48 @@
   {
     "state_id": "s_010",
     "state_name": "@7F090001 #10",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_010.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_010.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_010.json",
     "observation_count": 130,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:message_options\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 130 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:message_options\""
+      },
+      {
+        "expr": "read(message_options_title, text) == \"Message options\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 130 observation(s)",
+        "lowered_expr": "read(message_options.title, text) == \"Message options\""
+      },
+      {
+        "expr": "read(message_options_subtitle, text) == \"Choose an action for the selected message.\"",
+        "kind": "semantic_role",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 130 observation(s)",
+        "lowered_expr": "read(message_options.subtitle, text) == \"Choose an action for the selected message.\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:message_options\"",
+      "read(message_options.title, text) == \"Message options\"",
+      "read(message_options.subtitle, text) == \"Choose an action for the selected message.\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -140,22 +294,48 @@
   {
     "state_id": "s_011",
     "state_name": "@7F090001 #11",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_011.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_011.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_011.json",
     "observation_count": 64,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:attachment_picker\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 64 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:attachment_picker\""
+      },
+      {
+        "expr": "value(attachment_picker_title) == \"Choose attachment\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 64 observation(s)",
+        "lowered_expr": "value(attachment_picker.title) == \"Choose attachment\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Attach\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 64 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Attach\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:attachment_picker\"",
+      "value(attachment_picker.title) == \"Choose attachment\"",
+      "value(app.top_bar.title) == \"Attach\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -163,22 +343,40 @@
   {
     "state_id": "s_013",
     "state_name": "@7F090001 #13",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_013.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_013.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_013.json",
     "observation_count": 4,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(delete_confirm_title, text) == \"Delete message?\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 4 observation(s)",
+        "lowered_expr": "read(delete_confirm.title, text) == \"Delete message?\""
+      },
+      {
+        "expr": "read(screen_marker, text) == \"screen:delete_confirm\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 4 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:delete_confirm\""
+      }
+    ],
+    "invariants_attached": [
+      "read(delete_confirm.title, text) == \"Delete message?\"",
+      "read(screen_marker, text) == \"screen:delete_confirm\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -186,22 +384,47 @@
   {
     "state_id": "s_018",
     "state_name": "@7F090001 #18",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_018.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_018.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_018.json",
     "observation_count": 168,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:thread\"",
+        "kind": "structural",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 168 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:thread\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:thread\""
+    ],
     "effect_hints": [],
-    "rejected": [],
+    "rejected": [
+      {
+        "expr": "value(thread_title) == \"Carol Diaz\"",
+        "kind": "stable_label",
+        "status": "rejected",
+        "reason": "not supported by all observations: false — Guard condition not satisfied",
+        "lowered_expr": ""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Carol Diaz\"",
+        "kind": "stable_label",
+        "status": "rejected",
+        "reason": "not supported by all observations: false — Guard condition not satisfied",
+        "lowered_expr": ""
+      }
+    ],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -209,22 +432,40 @@
   {
     "state_id": "s_019",
     "state_name": "@7F090001 #19",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_019.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_019.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_019.json",
     "observation_count": 172,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:thread\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 172 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:thread\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:thread\""
+    ],
     "effect_hints": [],
-    "rejected": [],
+    "rejected": [
+      {
+        "expr": "read(app_top_bar_title, text) == \"Carol Diaz\"",
+        "kind": "stable_label",
+        "status": "rejected",
+        "reason": "not supported by all observations: false — Guard condition not satisfied",
+        "lowered_expr": ""
+      }
+    ],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -232,22 +473,72 @@
   {
     "state_id": "s_036",
     "state_name": "@7F090001 #36",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_036.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_036.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_036.json",
     "observation_count": 17,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:attachment_picker\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:attachment_picker\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Attach\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Attach\""
+      },
+      {
+        "expr": "read(attachment_picker_title, text) == \"Choose attachment\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "read(attachment_picker.title, text) == \"Choose attachment\""
+      },
+      {
+        "expr": "read(attachment_picker_item_photo_beach_label, text) == \"Beach photo\"",
+        "kind": "semantic_role",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "read(attachment_picker.item.photo_beach.label, text) == \"Beach photo\""
+      },
+      {
+        "expr": "read(attachment_picker_item_doc_report_label, text) == \"Q3 report.pdf\"",
+        "kind": "semantic_role",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "read(attachment_picker.item.doc_report.label, text) == \"Q3 report.pdf\""
+      },
+      {
+        "expr": "read(attachment_picker_item_sticker_thumbs_label, text) == \"Thumbs-up sticker\"",
+        "kind": "semantic_role",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "read(attachment_picker.item.sticker_thumbs.label, text) == \"Thumbs-up sticker\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:attachment_picker\"",
+      "read(app.top_bar.title, text) == \"Attach\"",
+      "read(attachment_picker.title, text) == \"Choose attachment\"",
+      "read(attachment_picker.item.photo_beach.label, text) == \"Beach photo\"",
+      "read(attachment_picker.item.doc_report.label, text) == \"Q3 report.pdf\"",
+      "read(attachment_picker.item.sticker_thumbs.label, text) == \"Thumbs-up sticker\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -255,22 +546,47 @@
   {
     "state_id": "s_041",
     "state_name": "@7F090001 #41",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_041.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_041.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_041.json",
     "observation_count": 20,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:thread\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 20 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:thread\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:thread\""
+    ],
     "effect_hints": [],
-    "rejected": [],
+    "rejected": [
+      {
+        "expr": "read(app_top_bar_title, text) == \"Alice Chen\"",
+        "kind": "stable_label",
+        "status": "rejected",
+        "reason": "not supported by all observations: false — Guard condition not satisfied",
+        "lowered_expr": ""
+      },
+      {
+        "expr": "read(thread_title, text) == \"Alice Chen\"",
+        "kind": "stable_label",
+        "status": "rejected",
+        "reason": "not supported by all observations: false — Guard condition not satisfied",
+        "lowered_expr": ""
+      }
+    ],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -278,22 +594,56 @@
   {
     "state_id": "s_042",
     "state_name": "@7F090001 #42",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_042.json",
-    "packet_audit_path": "output_docs/vigilchat/transition_guard/llm_invariant_attempts/state_s_042.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/llm_invariant_attempts/state_s_042.json",
     "observation_count": 17,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:thread\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:thread\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Alice Chen\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Alice Chen\""
+      },
+      {
+        "expr": "value(thread_title) == \"Alice Chen\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "value(thread.title) == \"Alice Chen\""
+      },
+      {
+        "expr": "value(thread_thread_id_alice) == \"alice\"",
+        "kind": "semantic_role",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "value(thread.thread_id.alice) == \"alice\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:thread\"",
+      "value(app.top_bar.title) == \"Alice Chen\"",
+      "value(thread.title) == \"Alice Chen\"",
+      "value(thread.thread_id.alice) == \"alice\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []

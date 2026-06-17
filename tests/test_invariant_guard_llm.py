@@ -84,7 +84,19 @@ def _evidence() -> InvariantEvidence:
 def _packet_response() -> LlmInvariantGuardResponse:
     return LlmInvariantGuardResponse.model_validate(
         {
-            "candidates": [{"kind": "status", "expr": 'value(title) contains "Done"'}],
+            "candidates": [
+                {
+                    "kind": "status",
+                    "predicates": [
+                        {
+                            "predicate_type": "contains",
+                            "element": "title",
+                            "operator": "contains",
+                            "expected": {"kind": "literal", "value": "Done"},
+                        }
+                    ],
+                }
+            ],
         }
     )
 

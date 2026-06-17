@@ -20,10 +20,10 @@
       "admitted": 111,
       "low_trust": 2
     },
-    "invariant_source": "audit",
-    "invariants_attached": 0,
-    "invariant_states": 0,
-    "invariants_admitted_run": 0,
+    "invariant_source": "llm",
+    "invariants_attached": 39,
+    "invariant_states": 14,
+    "invariants_admitted_run": 39,
     "invariant_hints": 0,
     "invariants_rejected": 0,
     "min_invariant_observations": 2
@@ -48,12 +48,42 @@
     "guard_status_counts": {
       "admitted": 77
     },
-    "invariant_source": "audit",
-    "invariants_attached": 0,
-    "invariant_states": 0,
-    "invariants_admitted_run": 0,
+    "invariant_source": "llm",
+    "invariants_attached": 35,
+    "invariant_states": 11,
+    "invariants_admitted_run": 35,
     "invariant_hints": 0,
-    "invariants_rejected": 0,
+    "invariants_rejected": 1,
+    "min_invariant_observations": 2
+  },
+  {
+    "app": "chat",
+    "package": "com_vigil_chat_fidelity",
+    "trace_package": "com_vigil_chat",
+    "input_fsm": "output_docs/gpt-5.4-mini/vigilchat/explored_fsm/fsm.json",
+    "output_fsm": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/fsm.json",
+    "trace": "data/apps/com_vigil_chat/traces/exploration_20260610_183602.json",
+    "states": 13,
+    "transitions": 233,
+    "visual_annotated": 0,
+    "visual_failed": 0,
+    "guard_source": "llm",
+    "guard_use_images": false,
+    "guards_attached": 62,
+    "guard_origin_counts": {
+      "llm": 233
+    },
+    "guard_status_counts": {
+      "admitted": 220,
+      "low_trust": 10,
+      "rejected": 3
+    },
+    "invariant_source": "llm",
+    "invariants_attached": 33,
+    "invariant_states": 13,
+    "invariants_admitted_run": 33,
+    "invariant_hints": 0,
+    "invariants_rejected": 8,
     "min_invariant_observations": 2
   },
   {
@@ -77,10 +107,10 @@
       "admitted": 167,
       "low_trust": 6
     },
-    "invariant_source": "audit",
-    "invariants_attached": 0,
-    "invariant_states": 0,
-    "invariants_admitted_run": 0,
+    "invariant_source": "llm",
+    "invariants_attached": 50,
+    "invariant_states": 14,
+    "invariants_admitted_run": 50,
     "invariant_hints": 0,
     "invariants_rejected": 0,
     "min_invariant_observations": 2

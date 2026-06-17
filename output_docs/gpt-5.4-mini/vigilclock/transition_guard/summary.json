@@ -19,10 +19,10 @@
     "admitted": 167,
     "low_trust": 6
   },
-  "invariant_source": "audit",
-  "invariants_attached": 0,
-  "invariant_states": 0,
-  "invariants_admitted_run": 0,
+  "invariant_source": "llm",
+  "invariants_attached": 50,
+  "invariant_states": 14,
+  "invariants_admitted_run": 50,
   "invariant_hints": 0,
   "invariants_rejected": 0,
   "min_invariant_observations": 2

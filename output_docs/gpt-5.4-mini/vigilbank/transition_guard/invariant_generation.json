@@ -2,22 +2,56 @@
   {
     "state_id": "s_001",
     "state_name": "@7F090001 #1",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_001.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_001.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_001.json",
     "observation_count": 28,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:home\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 28 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:home\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"VigilBank\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 28 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"VigilBank\""
+      },
+      {
+        "expr": "value(home_title) == \"Welcome back\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 28 observation(s)",
+        "lowered_expr": "value(home.title) == \"Welcome back\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:home\"",
+      "value(app.top_bar.title) == \"VigilBank\"",
+      "value(home.title) == \"Welcome back\""
+    ],
     "effect_hints": [],
-    "rejected": [],
+    "rejected": [
+      {
+        "expr": "value(home_subtitle) == \"Deterministic <app>ing, seeded data, stable UI markers.\"",
+        "kind": "stable_label",
+        "status": "rejected",
+        "reason": "not supported by all observations: false — Guard condition not satisfied",
+        "lowered_expr": ""
+      }
+    ],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -25,22 +59,48 @@
   {
     "state_id": "s_002",
     "state_name": "@7F090001 #2",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_002.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_002.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_002.json",
     "observation_count": 22,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:recipients\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 22 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:recipients\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Recipients\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 22 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Recipients\""
+      },
+      {
+        "expr": "value(recipients_title) == \"Choose recipient\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 22 observation(s)",
+        "lowered_expr": "value(recipients.title) == \"Choose recipient\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:recipients\"",
+      "value(app.top_bar.title) == \"Recipients\"",
+      "value(recipients.title) == \"Choose recipient\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -48,22 +108,48 @@
   {
     "state_id": "s_003",
     "state_name": "@7F090001 #3",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_003.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_003.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_003.json",
     "observation_count": 21,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:history\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 21 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:history\""
+      },
+      {
+        "expr": "read(history_title, text) == \"Transfer history\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 21 observation(s)",
+        "lowered_expr": "read(history.title, text) == \"Transfer history\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"History\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 21 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"History\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:history\"",
+      "read(history.title, text) == \"Transfer history\"",
+      "read(app.top_bar.title, text) == \"History\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -71,22 +157,48 @@
   {
     "state_id": "s_004",
     "state_name": "@7F090001 #4",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_004.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_004.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_004.json",
     "observation_count": 22,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:settings\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 22 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:settings\""
+      },
+      {
+        "expr": "read(settings_title, text) == \"Settings\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 22 observation(s)",
+        "lowered_expr": "read(settings.title, text) == \"Settings\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Settings\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 22 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Settings\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:settings\"",
+      "read(settings.title, text) == \"Settings\"",
+      "read(app.top_bar.title, text) == \"Settings\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -94,22 +206,48 @@
   {
     "state_id": "s_005",
     "state_name": "@7F090001 #5",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_005.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_005.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_005.json",
     "observation_count": 14,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:transfer_form\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:transfer_form\""
+      },
+      {
+        "expr": "read(transfer_form_title, text) == \"Transfer details\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(transfer_form.title, text) == \"Transfer details\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Transfer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Transfer\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:transfer_form\"",
+      "read(transfer_form.title, text) == \"Transfer details\"",
+      "read(app.top_bar.title, text) == \"Transfer\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -117,22 +255,48 @@
   {
     "state_id": "s_006",
     "state_name": "@7F090001 #6",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_006.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_006.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_006.json",
     "observation_count": 19,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:transfer_form\"",
+        "kind": "structural",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 19 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:transfer_form\""
+      },
+      {
+        "expr": "value(transfer_form_title) == \"Transfer details\"",
+        "kind": "structural",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 19 observation(s)",
+        "lowered_expr": "value(transfer_form.title) == \"Transfer details\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Transfer\"",
+        "kind": "structural",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 19 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Transfer\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:transfer_form\"",
+      "value(transfer_form.title) == \"Transfer details\"",
+      "value(app.top_bar.title) == \"Transfer\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -140,22 +304,48 @@
   {
     "state_id": "s_007",
     "state_name": "@7F090001 #7",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_007.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_007.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_007.json",
     "observation_count": 3,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:transfer_form\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 3 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:transfer_form\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Transfer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 3 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Transfer\""
+      },
+      {
+        "expr": "value(transfer_form_title) == \"Transfer details\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 3 observation(s)",
+        "lowered_expr": "value(transfer_form.title) == \"Transfer details\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:transfer_form\"",
+      "value(app.top_bar.title) == \"Transfer\"",
+      "value(transfer_form.title) == \"Transfer details\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -163,22 +353,48 @@
   {
     "state_id": "s_008",
     "state_name": "@7F090001 #8",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_008.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_008.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_008.json",
     "observation_count": 13,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:transfer_confirm\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 13 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:transfer_confirm\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Confirm Transfer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 13 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Confirm Transfer\""
+      },
+      {
+        "expr": "value(transfer_confirm_title) == \"Confirm transfer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 13 observation(s)",
+        "lowered_expr": "value(transfer_confirm.title) == \"Confirm transfer\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:transfer_confirm\"",
+      "value(app.top_bar.title) == \"Confirm Transfer\"",
+      "value(transfer_confirm.title) == \"Confirm transfer\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -186,22 +402,56 @@
   {
     "state_id": "s_009",
     "state_name": "@7F090001 #9",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_009.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_009.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_009.json",
     "observation_count": 9,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:otp_confirm\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 9 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:otp_confirm\""
+      },
+      {
+        "expr": "read(otp_confirm_title, text) == \"Enter OTP\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 9 observation(s)",
+        "lowered_expr": "read(otp_confirm.title, text) == \"Enter OTP\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"OTP\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 9 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"OTP\""
+      },
+      {
+        "expr": "read(otp_confirm_otp_input, is_editable) == true",
+        "kind": "form_status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 9 observation(s)",
+        "lowered_expr": "read(otp_confirm.otp_input, is_editable) == true"
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:otp_confirm\"",
+      "read(otp_confirm.title, text) == \"Enter OTP\"",
+      "read(app.top_bar.title, text) == \"OTP\"",
+      "read(otp_confirm.otp_input, is_editable) == true"
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -209,22 +459,48 @@
   {
     "state_id": "s_010",
     "state_name": "@7F090001 #10",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_010.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_010.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_010.json",
     "observation_count": 10,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:otp_confirm\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 10 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:otp_confirm\""
+      },
+      {
+        "expr": "read(otp_confirm_title, text) == \"Enter OTP\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 10 observation(s)",
+        "lowered_expr": "read(otp_confirm.title, text) == \"Enter OTP\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"OTP\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 10 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"OTP\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:otp_confirm\"",
+      "read(otp_confirm.title, text) == \"Enter OTP\"",
+      "read(app.top_bar.title, text) == \"OTP\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -232,22 +508,56 @@
   {
     "state_id": "s_011",
     "state_name": "@7F090001 #11",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_011.json",
-    "packet_audit_path": "output_docs/vigilbank/transition_guard/llm_invariant_attempts/state_s_011.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilbank/transition_guard/llm_invariant_attempts/state_s_011.json",
     "observation_count": 8,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:transfer_success\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 8 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:transfer_success\""
+      },
+      {
+        "expr": "value(transfer_success_title) == \"Transfer successful\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 8 observation(s)",
+        "lowered_expr": "value(transfer_success.title) == \"Transfer successful\""
+      },
+      {
+        "expr": "value(transfer_success_message) == \"Your transfer has been recorded.\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 8 observation(s)",
+        "lowered_expr": "value(transfer_success.message) == \"Your transfer has been recorded.\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Receipt\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 8 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Receipt\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:transfer_success\"",
+      "value(transfer_success.title) == \"Transfer successful\"",
+      "value(transfer_success.message) == \"Your transfer has been recorded.\"",
+      "value(app.top_bar.title) == \"Receipt\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []

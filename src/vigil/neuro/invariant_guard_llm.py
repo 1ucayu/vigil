@@ -5,9 +5,9 @@ This asks an LLM to produce a typed
 already-built* arrival state via **provider structured output** (a strict
 :class:`~vigil.models.llm_structured.LlmInvariantGuardResponse` schema), then converts the
 parsed object into a :class:`LlmInvariantPacketCandidate`. The model is a lean candidate
-generator only: it proposes minimal typed state-invariant candidates. Admission, DSL parsing,
-alias resolution, replay confidence, and runtime verdicts all remain deterministic / symbolic
-downstream.
+generator only: it proposes minimal typed state-invariant predicates. Deterministic
+compilation, admission, DSL parsing, alias resolution, replay confidence, and runtime
+verdicts all remain symbolic downstream.
 
 When structured output is unavailable (provider/schema failure, refusal, or validation
 failure), the result is a clearly rejected candidate (``parsed_ok=False``) with the
@@ -113,8 +113,8 @@ def _visual_caption_section(evidence: InvariantEvidence) -> str:
         "Purpose: screenshot-only perception hint from visual grounding. Use it to "
         "interpret icon meanings, visual grouping, overlays, selected/disabled visual "
         "state, and other facts missing from XML. It is not symbolic admission proof; "
-        "executable invariant expressions must still reference arrival-registry aliases "
-        "or current-state runtime resource ids.\n"
+        "executable invariant predicates must still reference arrival-registry aliases "
+        "or current-state runtime resource ids before deterministic compilation.\n"
         f"```text\n{caption}\n```"
     )
 
@@ -150,7 +150,7 @@ def build_invariant_user_prompt(
         "/* Minimal invariant synthesis */\n"
         "Generate the typed invariant candidate packet for this ALREADY-BUILT "
         "state. Topology is fixed: do not invent states/transitions/actions/confidence.\n"
-        "Runtime state invariants are evaluated with ScreenContext only — they may use "
+        "Runtime state invariants are evaluated with ScreenContext only — typed predicates may use "
         "read/value/count/contains over the arrival registry and must NOT use "
         "$intent.*, $bind.*, action(...), in_state(...), or time_in(...)."
     )
@@ -202,8 +202,8 @@ def build_invariant_user_prompt(
 
     sections.append(
         "[Output]\n"
-        "Emit the invariant packet object from the system prompt "
-        "(`candidates` only)."
+        "Emit the typed invariant packet object from the system prompt "
+        "(`candidates` only; no DSL expr strings)."
     )
 
     prompt = "\n\n".join(sections)

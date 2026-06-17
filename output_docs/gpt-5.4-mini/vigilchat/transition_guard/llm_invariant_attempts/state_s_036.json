@@ -2,11 +2,11 @@
   "state_id": "s_036",
   "parsed_ok": true,
   "schema_name": "LlmInvariantGuardResponse",
-  "schema_hash": "70ae64e79636881b",
+  "schema_hash": "cf47cf3900a148f5",
   "schema_constraint_mode": "native_schema",
   "provider": "proxy",
   "model": "gpt-5.4-mini",
-  "spec_hash": "835f93c6631a57bf",
+  "spec_hash": "ca08778c8d35e455",
   "refusal": "",
   "rejection_reason": "",
   "parse_errors": [],
@@ -16,7 +16,7 @@
     "state_invariant_candidates": [
       {
         "kind": "stable_label",
-        "expr": "read(screen_marker, text) == 'screen:attachment_picker'",
+        "expr": "read(screen_marker, text) == \"screen:attachment_picker\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -29,7 +29,7 @@
       },
       {
         "kind": "stable_label",
-        "expr": "read(app_top_bar_title, text) == 'Attach'",
+        "expr": "read(app_top_bar_title, text) == \"Attach\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -42,7 +42,7 @@
       },
       {
         "kind": "stable_label",
-        "expr": "read(attachment_picker_title, text) == 'Choose attachment'",
+        "expr": "read(attachment_picker_title, text) == \"Choose attachment\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -54,8 +54,34 @@
         "rejection_reason": ""
       },
       {
-        "kind": "stable_label",
-        "expr": "read(thread_thread_id_carol, text) == 'carol'",
+        "kind": "semantic_role",
+        "expr": "read(attachment_picker_item_photo_beach_label, text) == \"Beach photo\"",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "semantic_role",
+        "expr": "read(attachment_picker_item_doc_report_label, text) == \"Q3 report.pdf\"",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "semantic_role",
+        "expr": "read(attachment_picker_item_sticker_thumbs_label, text) == \"Thumbs-up sticker\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -73,6 +99,6 @@
     "notes": ""
   },
   "raw_responses": [
-    "{\"candidates\":[{\"kind\":\"stable_label\",\"expr\":\"read(screen_marker, text) == 'screen:attachment_picker'\"},{\"kind\":\"stable_label\",\"expr\":\"read(app_top_bar_title, text) == 'Attach'\"},{\"kind\":\"stable_label\",\"expr\":\"read(attachment_picker_title, text) == 'Choose attachment'\"},{\"kind\":\"stable_label\",\"expr\":\"read(thread_thread_id_carol, text) == 'carol'\"}]}"
+    "{\"candidates\":[{\"kind\":\"stable_label\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"screen_marker\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"screen:attachment_picker\"}},{\"predicate_type\":\"read\",\"element\":\"app_top_bar_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Attach\"}},{\"predicate_type\":\"read\",\"element\":\"attachment_picker_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Choose attachment\"}}]},{\"kind\":\"semantic_role\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"attachment_picker_item_photo_beach_label\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Beach photo\"}},{\"predicate_type\":\"read\",\"element\":\"attachment_picker_item_doc_report_label\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Q3 report.pdf\"}},{\"predicate_type\":\"read\",\"element\":\"attachment_picker_item_sticker_thumbs_label\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Thumbs-up sticker\"}}]}]}"
   ]
 }

@@ -82,7 +82,20 @@ def test_strict_value_ref_only_allows_literal_and_intent() -> None:
 def test_invariant_response_round_trips_to_runtime() -> None:
     response = LlmInvariantGuardResponse.model_validate(
         {
-            "candidates": [{"kind": "stable_label", "expr": 'read(title, text) == "X"'}],
+            "candidates": [
+                {
+                    "kind": "stable_label",
+                    "predicates": [
+                        {
+                            "predicate_type": "read",
+                            "element": "title",
+                            "property": "text",
+                            "operator": "==",
+                            "expected": {"kind": "literal", "value": "X"},
+                        }
+                    ],
+                }
+            ],
         }
     )
     packet = response.to_runtime()
@@ -106,3 +119,33 @@ def test_extra_keys_are_forbidden() -> None:
         )
     with pytest.raises(ValidationError):
         LlmInvariantGuardResponse.model_validate({"state_invariant_candidates": []})
+    with pytest.raises(ValidationError):
+        LlmInvariantGuardResponse.model_validate(
+            {
+                "candidates": [
+                    {
+                        "kind": "stable_label",
+                        "expr": 'read(title, text) == "X"',
+                    }
+                ]
+            }
+        )
+    with pytest.raises(ValidationError):
+        LlmInvariantGuardResponse.model_validate(
+            {
+                "candidates": [
+                    {
+                        "kind": "stable_label",
+                        "predicates": [
+                            {
+                                "predicate_type": "read",
+                                "element": "title",
+                                "property": "text",
+                                "operator": "==",
+                                "expected": {"kind": "intent", "slot": "title_text"},
+                            }
+                        ],
+                    }
+                ]
+            }
+        )

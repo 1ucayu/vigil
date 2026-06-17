@@ -50,6 +50,12 @@ PredicateTypeLiteral = Literal[
     "contains",
     "count",
 ]
+InvariantPredicateTypeLiteral = Literal[
+    "read",
+    "value",
+    "contains",
+    "count",
+]
 OperatorLiteral = Literal["==", "!=", ">", "<", ">=", "<=", "contains", "not_contains"]
 InvariantKindLiteral = Literal[
     "structural",
@@ -77,6 +83,18 @@ class StrictValueRef(BaseModel):
         return ValueRef(kind="intent", slot=self.slot)
 
 
+class StrictLiteralValueRef(BaseModel):
+    """RHS value reference for invariant predicates: literals only, no intent binding."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["literal"] = "literal"
+    value: str | float | bool | None = None
+
+    def to_runtime(self) -> ValueRef:
+        return ValueRef(kind="literal", value=self.value)
+
+
 class StrictPredicateSpec(BaseModel):
     """One typed predicate. The runtime ``args`` open dict is intentionally absent."""
 
@@ -87,6 +105,31 @@ class StrictPredicateSpec(BaseModel):
     property: str = ""
     operator: OperatorLiteral = "=="
     expected: StrictValueRef = Field(default_factory=lambda: StrictValueRef(kind="literal"))
+
+    def to_runtime(self) -> PredicateSpec:
+        return PredicateSpec(
+            predicate_type=self.predicate_type,
+            element=self.element,
+            property=self.property,
+            operator=self.operator,
+            expected=self.expected.to_runtime(),
+            args={},
+            source="llm",
+        )
+
+
+class StrictInvariantPredicateSpec(BaseModel):
+    """One state-invariant predicate. Scope is current-state widgets plus literals only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    predicate_type: InvariantPredicateTypeLiteral
+    element: str = ""
+    property: str = ""
+    operator: OperatorLiteral = "=="
+    expected: StrictLiteralValueRef = Field(
+        default_factory=lambda: StrictLiteralValueRef(kind="literal")
+    )
 
     def to_runtime(self) -> PredicateSpec:
         return PredicateSpec(
@@ -153,19 +196,39 @@ class LlmTransitionGuardResponse(BaseModel):
         )
 
 
-class StrictStateInvariantCandidate(BaseModel):
+class StrictStateInvariantSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: InvariantKindLiteral = "unknown"
-    expr: str = ""
+    predicates: list[StrictInvariantPredicateSpec] = Field(default_factory=list)
 
-    def to_runtime(self) -> StateInvariantCandidate:
-        return StateInvariantCandidate(
-            kind=self.kind,
-            expr=self.expr,
-            admission_target="runtime_state_invariant",
-            source="llm",
-        )
+    def to_runtime(self) -> list[StateInvariantCandidate]:
+        from vigil.neuro.guard_dsl_compiler import compile_predicate_spec
+
+        if not self.predicates:
+            return [
+                StateInvariantCandidate(
+                    kind=self.kind,
+                    expr="",
+                    admission_target="runtime_state_invariant",
+                    source="llm",
+                    rejection_reason="no invariant predicates emitted",
+                )
+            ]
+
+        candidates: list[StateInvariantCandidate] = []
+        for predicate in self.predicates:
+            expr = compile_predicate_spec(predicate.to_runtime()) or ""
+            candidates.append(
+                StateInvariantCandidate(
+                    kind=self.kind,
+                    expr=expr,
+                    admission_target="runtime_state_invariant",
+                    source="llm",
+                    rejection_reason="" if expr else "predicate could not compile to DSL",
+                )
+            )
+        return candidates
 
 
 class LlmInvariantGuardResponse(BaseModel):
@@ -173,9 +236,12 @@ class LlmInvariantGuardResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    candidates: list[StrictStateInvariantCandidate] = Field(default_factory=list)
+    candidates: list[StrictStateInvariantSpec] = Field(default_factory=list)
 
     def to_runtime(self) -> InvariantGuardCandidatePacket:
+        candidates = [
+            runtime for candidate in self.candidates for runtime in candidate.to_runtime()
+        ]
         return InvariantGuardCandidatePacket(
-            state_invariant_candidates=[candidate.to_runtime() for candidate in self.candidates],
+            state_invariant_candidates=candidates,
         )

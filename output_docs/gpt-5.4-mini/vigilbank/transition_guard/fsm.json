@@ -66,7 +66,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:home\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 28
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"VigilBank\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 28
+        },
+        {
+          "expr": "value(home.title) == \"Welcome back\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 28
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -133,7 +152,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:recipients\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 22
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Recipients\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 22
+        },
+        {
+          "expr": "value(recipients.title) == \"Choose recipient\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 22
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -199,7 +237,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:history\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 21
+        },
+        {
+          "expr": "read(history.title, text) == \"Transfer history\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 21
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"History\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 21
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -266,7 +323,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 22
+        },
+        {
+          "expr": "read(settings.title, text) == \"Settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 22
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 22
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -325,7 +401,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:transfer_form\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "read(transfer_form.title, text) == \"Transfer details\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Transfer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -389,7 +484,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:transfer_form\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 19
+        },
+        {
+          "expr": "value(transfer_form.title) == \"Transfer details\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 19
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Transfer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 19
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -437,7 +551,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:transfer_form\"",
+          "confidence": 0.7,
+          "source": "llm+cross_visit",
+          "evidence_count": 3
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Transfer\"",
+          "confidence": 0.7,
+          "source": "llm+cross_visit",
+          "evidence_count": 3
+        },
+        {
+          "expr": "value(transfer_form.title) == \"Transfer details\"",
+          "confidence": 0.7,
+          "source": "llm+cross_visit",
+          "evidence_count": 3
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -495,7 +628,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:transfer_confirm\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 13
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Confirm Transfer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 13
+        },
+        {
+          "expr": "value(transfer_confirm.title) == \"Confirm transfer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 13
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -549,7 +701,32 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:otp_confirm\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 9
+        },
+        {
+          "expr": "read(otp_confirm.title, text) == \"Enter OTP\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 9
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"OTP\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 9
+        },
+        {
+          "expr": "read(otp_confirm.otp_input, is_editable) == true",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 9
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -604,7 +781,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:otp_confirm\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 10
+        },
+        {
+          "expr": "read(otp_confirm.title, text) == \"Enter OTP\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 10
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"OTP\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 10
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -657,7 +853,32 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:transfer_success\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 8
+        },
+        {
+          "expr": "value(transfer_success.title) == \"Transfer successful\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 8
+        },
+        {
+          "expr": "value(transfer_success.message) == \"Your transfer has been recorded.\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 8
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Receipt\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 8
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",

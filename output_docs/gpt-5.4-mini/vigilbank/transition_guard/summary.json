@@ -18,11 +18,11 @@
   "guard_status_counts": {
     "admitted": 77
   },
-  "invariant_source": "audit",
-  "invariants_attached": 0,
-  "invariant_states": 0,
-  "invariants_admitted_run": 0,
+  "invariant_source": "llm",
+  "invariants_attached": 35,
+  "invariant_states": 11,
+  "invariants_admitted_run": 35,
   "invariant_hints": 0,
-  "invariants_rejected": 0,
+  "invariants_rejected": 1,
   "min_invariant_observations": 2
 }

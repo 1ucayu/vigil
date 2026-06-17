@@ -2,11 +2,11 @@
   "state_id": "s_006",
   "parsed_ok": true,
   "schema_name": "LlmInvariantGuardResponse",
-  "schema_hash": "70ae64e79636881b",
+  "schema_hash": "cf47cf3900a148f5",
   "schema_constraint_mode": "native_schema",
   "provider": "proxy",
   "model": "gpt-5.4-mini",
-  "spec_hash": "835f93c6631a57bf",
+  "spec_hash": "ca08778c8d35e455",
   "refusal": "",
   "rejection_reason": "",
   "parse_errors": [],
@@ -15,8 +15,8 @@
   "packet": {
     "state_invariant_candidates": [
       {
-        "kind": "stable_label",
-        "expr": "read(screen_marker, text) == \"screen:transfer_form\"",
+        "kind": "structural",
+        "expr": "value(screen_marker) == \"screen:transfer_form\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -28,8 +28,8 @@
         "rejection_reason": ""
       },
       {
-        "kind": "stable_label",
-        "expr": "read(transfer_form_title, text) == \"Transfer details\"",
+        "kind": "structural",
+        "expr": "value(transfer_form_title) == \"Transfer details\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -41,34 +41,8 @@
         "rejection_reason": ""
       },
       {
-        "kind": "stable_label",
-        "expr": "read(app_top_bar_title, text) == \"Transfer\"",
-        "scope": "state",
-        "admission_target": "runtime_state_invariant",
-        "confidence": 0.0,
-        "evidence_count": 0,
-        "source": "llm",
-        "volatility": "unknown",
-        "provenance": [],
-        "notes": "",
-        "rejection_reason": ""
-      },
-      {
-        "kind": "semantic_role",
-        "expr": "read(transfer_recipient_label, text) == \"Alice Chen\"",
-        "scope": "state",
-        "admission_target": "runtime_state_invariant",
-        "confidence": 0.0,
-        "evidence_count": 0,
-        "source": "llm",
-        "volatility": "unknown",
-        "provenance": [],
-        "notes": "",
-        "rejection_reason": ""
-      },
-      {
-        "kind": "semantic_role",
-        "expr": "read(transfer_recipient_account, text) == \"•••• 4821\"",
+        "kind": "structural",
+        "expr": "value(app_top_bar_title) == \"Transfer\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -86,6 +60,6 @@
     "notes": ""
   },
   "raw_responses": [
-    "{\"candidates\":[{\"kind\":\"stable_label\",\"expr\":\"read(screen_marker, text) == \\\"screen:transfer_form\\\"\"},{\"kind\":\"stable_label\",\"expr\":\"read(transfer_form_title, text) == \\\"Transfer details\\\"\"},{\"kind\":\"stable_label\",\"expr\":\"read(app_top_bar_title, text) == \\\"Transfer\\\"\"},{\"kind\":\"semantic_role\",\"expr\":\"read(transfer_recipient_label, text) == \\\"Alice Chen\\\"\"},{\"kind\":\"semantic_role\",\"expr\":\"read(transfer_recipient_account, text) == \\\"•••• 4821\\\"\"}]}"
+    "{\"candidates\":[{\"kind\":\"structural\",\"predicates\":[{\"predicate_type\":\"value\",\"element\":\"screen_marker\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"screen:transfer_form\"}},{\"predicate_type\":\"value\",\"element\":\"transfer_form_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Transfer details\"}},{\"predicate_type\":\"value\",\"element\":\"app_top_bar_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Transfer\"}}]}]}"
   ]
 }

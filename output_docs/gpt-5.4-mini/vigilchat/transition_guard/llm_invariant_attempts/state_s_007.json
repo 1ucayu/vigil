@@ -2,11 +2,11 @@
   "state_id": "s_007",
   "parsed_ok": true,
   "schema_name": "LlmInvariantGuardResponse",
-  "schema_hash": "70ae64e79636881b",
+  "schema_hash": "cf47cf3900a148f5",
   "schema_constraint_mode": "native_schema",
   "provider": "proxy",
   "model": "gpt-5.4-mini",
-  "spec_hash": "835f93c6631a57bf",
+  "spec_hash": "ca08778c8d35e455",
   "refusal": "",
   "rejection_reason": "",
   "parse_errors": [],
@@ -16,7 +16,7 @@
     "state_invariant_candidates": [
       {
         "kind": "stable_label",
-        "expr": "read(screen_marker, text) == 'screen:settings'",
+        "expr": "value(screen_marker) == \"screen:settings\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -29,7 +29,7 @@
       },
       {
         "kind": "stable_label",
-        "expr": "read(settings_title, text) == 'Settings'",
+        "expr": "value(settings_title) == \"Settings\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -41,8 +41,21 @@
         "rejection_reason": ""
       },
       {
-        "kind": "semantic_role",
-        "expr": "read(settings_info_text, text) == 'VigilChat fidelity app. Seeded threads, contacts, and attachments. No network, no disk I/O.'",
+        "kind": "stable_label",
+        "expr": "value(app_top_bar_title) == \"Settings\"",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "status",
+        "expr": "value(settings_info_text) contains \"No network, no disk I/O.\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -60,6 +73,6 @@
     "notes": ""
   },
   "raw_responses": [
-    "{\"candidates\":[{\"kind\":\"stable_label\",\"expr\":\"read(screen_marker, text) == 'screen:settings'\"},{\"kind\":\"stable_label\",\"expr\":\"read(settings_title, text) == 'Settings'\"},{\"kind\":\"semantic_role\",\"expr\":\"read(settings_info_text, text) == 'VigilChat fidelity app. Seeded threads, contacts, and attachments. No network, no disk I/O.'\"}]}"
+    "{\"candidates\":[{\"kind\":\"stable_label\",\"predicates\":[{\"predicate_type\":\"value\",\"element\":\"screen_marker\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"screen:settings\"}}]},{\"kind\":\"stable_label\",\"predicates\":[{\"predicate_type\":\"value\",\"element\":\"settings_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Settings\"}},{\"predicate_type\":\"value\",\"element\":\"app_top_bar_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Settings\"}}]},{\"kind\":\"status\",\"predicates\":[{\"predicate_type\":\"value\",\"element\":\"settings_info_text\",\"property\":\"text\",\"operator\":\"contains\",\"expected\":{\"kind\":\"literal\",\"value\":\"No network, no disk I/O.\"}}]}]}"
   ]
 }

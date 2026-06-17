@@ -93,7 +93,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:alarm_list\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 55
+        },
+        {
+          "expr": "value(alarm_list.title) == \"Alarms\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 55
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Alarms\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 55
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -155,7 +174,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:alarm_edit\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "read(alarm_edit.title, text) == \"Edit alarm\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Edit alarm\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -245,7 +283,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:timer_setup\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 45
+        },
+        {
+          "expr": "value(timer_setup.title) == \"Pick a duration\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 45
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Timer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 45
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -334,7 +391,38 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:stopwatch_idle\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 44
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Stopwatch\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 44
+        },
+        {
+          "expr": "read(stopwatch_idle.title, text) == \"Stopwatch\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 44
+        },
+        {
+          "expr": "read(stopwatch_idle.zero, text) == \"00:00.0\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 44
+        },
+        {
+          "expr": "read(stopwatch.elapsed_ms, text) == \"0\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 44
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -423,7 +511,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 44
+        },
+        {
+          "expr": "read(settings.title, text) == \"Settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 44
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 44
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -482,7 +589,32 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(app.top_bar.title) == \"Timer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "value(timer_setup.title) == \"Pick a duration\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "value(screen_marker) == \"screen:timer_setup\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "value(timer.selected_duration_id) == \"d_1m\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -654,7 +786,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:stopwatch_running\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 127
+        },
+        {
+          "expr": "read(stopwatch_running.title, text) == \"Running\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 127
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Stopwatch\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 127
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -713,7 +864,32 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:timer_setup\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "read(timer_setup.title, text) == \"Pick a duration\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Timer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "read(timer.selected_duration_id, text) == \"d_5m\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -772,7 +948,32 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:timer_setup\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Timer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "read(timer_setup.title, text) == \"Pick a duration\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "read(timer.selected_duration_id, text) == \"d_10m\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -831,7 +1032,32 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:timer_setup\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "value(timer_setup.title) == \"Pick a duration\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Timer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "value(timer.selected_duration_id) == \"d_25m\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -888,7 +1114,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:timer_running\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 12
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Timer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 12
+        },
+        {
+          "expr": "read(timer_running.title, text) == \"Running\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 12
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -1031,7 +1276,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:stopwatch_paused\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 98
+        },
+        {
+          "expr": "read(stopwatch_paused.title, text) == \"Paused\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 98
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Stopwatch\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 98
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -1084,7 +1348,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:timer_paused\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 8
+        },
+        {
+          "expr": "read(timer_paused.title, text) == \"Paused\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 8
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Timer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 8
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -1136,7 +1419,38 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:timer_done\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 7
+        },
+        {
+          "expr": "read(timer_done.title, text) == \"Done\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 7
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Timer\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 7
+        },
+        {
+          "expr": "read(timer.remaining, text) == \"00:00.0\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 7
+        },
+        {
+          "expr": "read(timer.remaining_ms, text) == \"0\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 7
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",

@@ -2,22 +2,48 @@
   {
     "state_id": "s_001",
     "state_name": "@7F090001 #1",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_001.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_001.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_001.json",
     "observation_count": 55,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:alarm_list\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 55 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:alarm_list\""
+      },
+      {
+        "expr": "value(alarm_list_title) == \"Alarms\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 55 observation(s)",
+        "lowered_expr": "value(alarm_list.title) == \"Alarms\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Alarms\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 55 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Alarms\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:alarm_list\"",
+      "value(alarm_list.title) == \"Alarms\"",
+      "value(app.top_bar.title) == \"Alarms\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -25,22 +51,48 @@
   {
     "state_id": "s_002",
     "state_name": "@7F090001 #2",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_002.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_002.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_002.json",
     "observation_count": 17,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:alarm_edit\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:alarm_edit\""
+      },
+      {
+        "expr": "read(alarm_edit_title, text) == \"Edit alarm\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "read(alarm_edit.title, text) == \"Edit alarm\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Edit alarm\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 17 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Edit alarm\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:alarm_edit\"",
+      "read(alarm_edit.title, text) == \"Edit alarm\"",
+      "read(app.top_bar.title, text) == \"Edit alarm\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -48,22 +100,48 @@
   {
     "state_id": "s_003",
     "state_name": "@7F090001 #3",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_003.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_003.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_003.json",
     "observation_count": 45,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:timer_setup\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 45 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:timer_setup\""
+      },
+      {
+        "expr": "value(timer_setup_title) == \"Pick a duration\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 45 observation(s)",
+        "lowered_expr": "value(timer_setup.title) == \"Pick a duration\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Timer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 45 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Timer\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:timer_setup\"",
+      "value(timer_setup.title) == \"Pick a duration\"",
+      "value(app.top_bar.title) == \"Timer\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -71,22 +149,64 @@
   {
     "state_id": "s_004",
     "state_name": "@7F090001 #4",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_004.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_004.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_004.json",
     "observation_count": 44,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:stopwatch_idle\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 44 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:stopwatch_idle\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Stopwatch\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 44 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Stopwatch\""
+      },
+      {
+        "expr": "read(stopwatch_idle_title, text) == \"Stopwatch\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 44 observation(s)",
+        "lowered_expr": "read(stopwatch_idle.title, text) == \"Stopwatch\""
+      },
+      {
+        "expr": "read(stopwatch_idle_zero, text) == \"00:00.0\"",
+        "kind": "status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 44 observation(s)",
+        "lowered_expr": "read(stopwatch_idle.zero, text) == \"00:00.0\""
+      },
+      {
+        "expr": "read(stopwatch_elapsed_ms, text) == \"0\"",
+        "kind": "status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 44 observation(s)",
+        "lowered_expr": "read(stopwatch.elapsed_ms, text) == \"0\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:stopwatch_idle\"",
+      "read(app.top_bar.title, text) == \"Stopwatch\"",
+      "read(stopwatch_idle.title, text) == \"Stopwatch\"",
+      "read(stopwatch_idle.zero, text) == \"00:00.0\"",
+      "read(stopwatch.elapsed_ms, text) == \"0\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -94,22 +214,48 @@
   {
     "state_id": "s_005",
     "state_name": "@7F090001 #5",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_005.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_005.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_005.json",
     "observation_count": 44,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:settings\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 44 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:settings\""
+      },
+      {
+        "expr": "read(settings_title, text) == \"Settings\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 44 observation(s)",
+        "lowered_expr": "read(settings.title, text) == \"Settings\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Settings\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 44 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Settings\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:settings\"",
+      "read(settings.title, text) == \"Settings\"",
+      "read(app.top_bar.title, text) == \"Settings\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -117,22 +263,56 @@
   {
     "state_id": "s_006",
     "state_name": "@7F090001 #6",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_006.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_006.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_006.json",
     "observation_count": 14,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(app_top_bar_title) == \"Timer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Timer\""
+      },
+      {
+        "expr": "value(timer_setup_title) == \"Pick a duration\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "value(timer_setup.title) == \"Pick a duration\""
+      },
+      {
+        "expr": "value(screen_marker) == \"screen:timer_setup\"",
+        "kind": "status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:timer_setup\""
+      },
+      {
+        "expr": "value(timer_selected_duration_id) == \"d_1m\"",
+        "kind": "form_status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "value(timer.selected_duration_id) == \"d_1m\""
+      }
+    ],
+    "invariants_attached": [
+      "value(app.top_bar.title) == \"Timer\"",
+      "value(timer_setup.title) == \"Pick a duration\"",
+      "value(screen_marker) == \"screen:timer_setup\"",
+      "value(timer.selected_duration_id) == \"d_1m\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -140,22 +320,48 @@
   {
     "state_id": "s_007",
     "state_name": "@7F090001 #7",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_007.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_007.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_007.json",
     "observation_count": 127,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:stopwatch_running\"",
+        "kind": "status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 127 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:stopwatch_running\""
+      },
+      {
+        "expr": "read(stopwatch_running_title, text) == \"Running\"",
+        "kind": "status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 127 observation(s)",
+        "lowered_expr": "read(stopwatch_running.title, text) == \"Running\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Stopwatch\"",
+        "kind": "status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 127 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Stopwatch\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:stopwatch_running\"",
+      "read(stopwatch_running.title, text) == \"Running\"",
+      "read(app.top_bar.title, text) == \"Stopwatch\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -163,22 +369,56 @@
   {
     "state_id": "s_008",
     "state_name": "@7F090001 #8",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_008.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_008.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_008.json",
     "observation_count": 14,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:timer_setup\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:timer_setup\""
+      },
+      {
+        "expr": "read(timer_setup_title, text) == \"Pick a duration\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(timer_setup.title, text) == \"Pick a duration\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Timer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Timer\""
+      },
+      {
+        "expr": "read(timer_selected_duration_id, text) == \"d_5m\"",
+        "kind": "form_status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(timer.selected_duration_id, text) == \"d_5m\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:timer_setup\"",
+      "read(timer_setup.title, text) == \"Pick a duration\"",
+      "read(app.top_bar.title, text) == \"Timer\"",
+      "read(timer.selected_duration_id, text) == \"d_5m\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -186,22 +426,56 @@
   {
     "state_id": "s_009",
     "state_name": "@7F090001 #9",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_009.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_009.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_009.json",
     "observation_count": 14,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:timer_setup\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:timer_setup\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Timer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Timer\""
+      },
+      {
+        "expr": "read(timer_setup_title, text) == \"Pick a duration\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(timer_setup.title, text) == \"Pick a duration\""
+      },
+      {
+        "expr": "read(timer_selected_duration_id, text) == \"d_10m\"",
+        "kind": "form_status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "read(timer.selected_duration_id, text) == \"d_10m\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:timer_setup\"",
+      "read(app.top_bar.title, text) == \"Timer\"",
+      "read(timer_setup.title, text) == \"Pick a duration\"",
+      "read(timer.selected_duration_id, text) == \"d_10m\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -209,22 +483,56 @@
   {
     "state_id": "s_010",
     "state_name": "@7F090001 #10",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_010.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_010.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_010.json",
     "observation_count": 14,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "value(screen_marker) == \"screen:timer_setup\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "value(screen_marker) == \"screen:timer_setup\""
+      },
+      {
+        "expr": "value(timer_setup_title) == \"Pick a duration\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "value(timer_setup.title) == \"Pick a duration\""
+      },
+      {
+        "expr": "value(app_top_bar_title) == \"Timer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "value(app.top_bar.title) == \"Timer\""
+      },
+      {
+        "expr": "value(timer_selected_duration_id) == \"d_25m\"",
+        "kind": "status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 14 observation(s)",
+        "lowered_expr": "value(timer.selected_duration_id) == \"d_25m\""
+      }
+    ],
+    "invariants_attached": [
+      "value(screen_marker) == \"screen:timer_setup\"",
+      "value(timer_setup.title) == \"Pick a duration\"",
+      "value(app.top_bar.title) == \"Timer\"",
+      "value(timer.selected_duration_id) == \"d_25m\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -232,22 +540,48 @@
   {
     "state_id": "s_011",
     "state_name": "@7F090001 #11",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_011.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_011.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_011.json",
     "observation_count": 12,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:timer_running\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 12 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:timer_running\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Timer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 12 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Timer\""
+      },
+      {
+        "expr": "read(timer_running_title, text) == \"Running\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 12 observation(s)",
+        "lowered_expr": "read(timer_running.title, text) == \"Running\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:timer_running\"",
+      "read(app.top_bar.title, text) == \"Timer\"",
+      "read(timer_running.title, text) == \"Running\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -255,22 +589,48 @@
   {
     "state_id": "s_012",
     "state_name": "@7F090001 #12",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_012.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_012.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_012.json",
     "observation_count": 98,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:stopwatch_paused\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 98 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:stopwatch_paused\""
+      },
+      {
+        "expr": "read(stopwatch_paused_title, text) == \"Paused\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 98 observation(s)",
+        "lowered_expr": "read(stopwatch_paused.title, text) == \"Paused\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Stopwatch\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 98 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Stopwatch\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:stopwatch_paused\"",
+      "read(stopwatch_paused.title, text) == \"Paused\"",
+      "read(app.top_bar.title, text) == \"Stopwatch\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -278,22 +638,48 @@
   {
     "state_id": "s_014",
     "state_name": "@7F090001 #14",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_014.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_014.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_014.json",
     "observation_count": 8,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:timer_paused\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 8 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:timer_paused\""
+      },
+      {
+        "expr": "read(timer_paused_title, text) == \"Paused\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 8 observation(s)",
+        "lowered_expr": "read(timer_paused.title, text) == \"Paused\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Timer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 8 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Timer\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:timer_paused\"",
+      "read(timer_paused.title, text) == \"Paused\"",
+      "read(app.top_bar.title, text) == \"Timer\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []
@@ -301,22 +687,64 @@
   {
     "state_id": "s_015",
     "state_name": "@7F090001 #15",
-    "source": "audit",
-    "fallback_reason": "audit packet missing/unreadable: output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_015.json",
-    "packet_audit_path": "output_docs/vigilclock/transition_guard/llm_invariant_attempts/state_s_015.json",
+    "source": "llm",
+    "fallback_reason": "",
+    "packet_audit_path": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/llm_invariant_attempts/state_s_015.json",
     "observation_count": 7,
-    "invariants_admitted": [],
-    "invariants_attached": [],
+    "invariants_admitted": [
+      {
+        "expr": "read(screen_marker, text) == \"screen:timer_done\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 7 observation(s)",
+        "lowered_expr": "read(screen_marker, text) == \"screen:timer_done\""
+      },
+      {
+        "expr": "read(timer_done_title, text) == \"Done\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 7 observation(s)",
+        "lowered_expr": "read(timer_done.title, text) == \"Done\""
+      },
+      {
+        "expr": "read(app_top_bar_title, text) == \"Timer\"",
+        "kind": "stable_label",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 7 observation(s)",
+        "lowered_expr": "read(app.top_bar.title, text) == \"Timer\""
+      },
+      {
+        "expr": "read(timer_remaining, text) == \"00:00.0\"",
+        "kind": "status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 7 observation(s)",
+        "lowered_expr": "read(timer.remaining, text) == \"00:00.0\""
+      },
+      {
+        "expr": "read(timer_remaining_ms, text) == \"0\"",
+        "kind": "status",
+        "status": "runtime_state_invariant",
+        "reason": "admitted: holds across 7 observation(s)",
+        "lowered_expr": "read(timer.remaining_ms, text) == \"0\""
+      }
+    ],
+    "invariants_attached": [
+      "read(screen_marker, text) == \"screen:timer_done\"",
+      "read(timer_done.title, text) == \"Done\"",
+      "read(app.top_bar.title, text) == \"Timer\"",
+      "read(timer.remaining, text) == \"00:00.0\"",
+      "read(timer.remaining_ms, text) == \"0\""
+    ],
     "effect_hints": [],
     "rejected": [],
     "guard_candidates": [],
-    "parsed_ok": null,
-    "schema_name": "",
-    "schema_hash": "",
-    "schema_constraint_mode": "",
-    "provider": "",
-    "model": "",
-    "spec_hash": "",
+    "parsed_ok": true,
+    "schema_name": "LlmInvariantGuardResponse",
+    "schema_hash": "cf47cf3900a148f5",
+    "schema_constraint_mode": "native_schema",
+    "provider": "proxy",
+    "model": "gpt-5.4-mini",
+    "spec_hash": "ca08778c8d35e455",
     "refusal": "",
     "validation_errors": [],
     "normalization_warnings": []

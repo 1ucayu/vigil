@@ -2,11 +2,11 @@
   "state_id": "s_009",
   "parsed_ok": true,
   "schema_name": "LlmInvariantGuardResponse",
-  "schema_hash": "70ae64e79636881b",
+  "schema_hash": "cf47cf3900a148f5",
   "schema_constraint_mode": "native_schema",
   "provider": "proxy",
   "model": "gpt-5.4-mini",
-  "spec_hash": "835f93c6631a57bf",
+  "spec_hash": "ca08778c8d35e455",
   "refusal": "",
   "rejection_reason": "",
   "parse_errors": [],
@@ -16,7 +16,7 @@
     "state_invariant_candidates": [
       {
         "kind": "stable_label",
-        "expr": "read(screen_marker, text) == 'screen:otp_confirm'",
+        "expr": "read(screen_marker, text) == \"screen:otp_confirm\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -29,7 +29,7 @@
       },
       {
         "kind": "stable_label",
-        "expr": "read(otp_confirm_title, text) == 'Enter OTP'",
+        "expr": "read(otp_confirm_title, text) == \"Enter OTP\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -42,7 +42,7 @@
       },
       {
         "kind": "stable_label",
-        "expr": "read(app_top_bar_title, text) == 'OTP'",
+        "expr": "read(app_top_bar_title, text) == \"OTP\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -73,6 +73,6 @@
     "notes": ""
   },
   "raw_responses": [
-    "{\"candidates\":[{\"kind\":\"stable_label\",\"expr\":\"read(screen_marker, text) == 'screen:otp_confirm'\"},{\"kind\":\"stable_label\",\"expr\":\"read(otp_confirm_title, text) == 'Enter OTP'\"},{\"kind\":\"stable_label\",\"expr\":\"read(app_top_bar_title, text) == 'OTP'\"},{\"kind\":\"form_status\",\"expr\":\"read(otp_confirm_otp_input, is_editable) == true\"}]}"
+    "{\"candidates\":[{\"kind\":\"stable_label\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"screen_marker\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"screen:otp_confirm\"}}]},{\"kind\":\"stable_label\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"otp_confirm_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Enter OTP\"}}]},{\"kind\":\"stable_label\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"app_top_bar_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"OTP\"}}]},{\"kind\":\"form_status\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"otp_confirm_otp_input\",\"property\":\"is_editable\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":true}}]}]}"
   ]
 }

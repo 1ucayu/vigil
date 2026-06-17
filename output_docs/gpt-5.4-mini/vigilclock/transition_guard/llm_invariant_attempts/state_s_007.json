@@ -2,11 +2,11 @@
   "state_id": "s_007",
   "parsed_ok": true,
   "schema_name": "LlmInvariantGuardResponse",
-  "schema_hash": "70ae64e79636881b",
+  "schema_hash": "cf47cf3900a148f5",
   "schema_constraint_mode": "native_schema",
   "provider": "proxy",
   "model": "gpt-5.4-mini",
-  "spec_hash": "835f93c6631a57bf",
+  "spec_hash": "ca08778c8d35e455",
   "refusal": "",
   "rejection_reason": "",
   "parse_errors": [],
@@ -15,8 +15,8 @@
   "packet": {
     "state_invariant_candidates": [
       {
-        "kind": "structural",
-        "expr": "read(screen_marker, text) == 'screen:stopwatch_running'",
+        "kind": "status",
+        "expr": "read(screen_marker, text) == \"screen:stopwatch_running\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -28,8 +28,8 @@
         "rejection_reason": ""
       },
       {
-        "kind": "stable_label",
-        "expr": "read(stopwatch_running_title, text) == 'Running'",
+        "kind": "status",
+        "expr": "read(stopwatch_running_title, text) == \"Running\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -41,8 +41,8 @@
         "rejection_reason": ""
       },
       {
-        "kind": "stable_label",
-        "expr": "read(app_top_bar_title, text) == 'Stopwatch'",
+        "kind": "status",
+        "expr": "read(app_top_bar_title, text) == \"Stopwatch\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -60,6 +60,6 @@
     "notes": ""
   },
   "raw_responses": [
-    "{\"candidates\":[{\"kind\":\"structural\",\"expr\":\"read(screen_marker, text) == 'screen:stopwatch_running'\"},{\"kind\":\"stable_label\",\"expr\":\"read(stopwatch_running_title, text) == 'Running'\"},{\"kind\":\"stable_label\",\"expr\":\"read(app_top_bar_title, text) == 'Stopwatch'\"}]}"
+    "{\"candidates\":[{\"kind\":\"status\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"screen_marker\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"screen:stopwatch_running\"}},{\"predicate_type\":\"read\",\"element\":\"stopwatch_running_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Running\"}},{\"predicate_type\":\"read\",\"element\":\"app_top_bar_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Stopwatch\"}}]}]}"
   ]
 }

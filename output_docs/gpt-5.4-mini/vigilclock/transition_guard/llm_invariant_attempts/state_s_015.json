@@ -2,11 +2,11 @@
   "state_id": "s_015",
   "parsed_ok": true,
   "schema_name": "LlmInvariantGuardResponse",
-  "schema_hash": "70ae64e79636881b",
+  "schema_hash": "cf47cf3900a148f5",
   "schema_constraint_mode": "native_schema",
   "provider": "proxy",
   "model": "gpt-5.4-mini",
-  "spec_hash": "835f93c6631a57bf",
+  "spec_hash": "ca08778c8d35e455",
   "refusal": "",
   "rejection_reason": "",
   "parse_errors": [],
@@ -15,7 +15,7 @@
   "packet": {
     "state_invariant_candidates": [
       {
-        "kind": "structural",
+        "kind": "stable_label",
         "expr": "read(screen_marker, text) == \"screen:timer_done\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
@@ -86,6 +86,6 @@
     "notes": ""
   },
   "raw_responses": [
-    "{\"candidates\":[{\"kind\":\"structural\",\"expr\":\"read(screen_marker, text) == \\\"screen:timer_done\\\"\"},{\"kind\":\"stable_label\",\"expr\":\"read(timer_done_title, text) == \\\"Done\\\"\"},{\"kind\":\"stable_label\",\"expr\":\"read(app_top_bar_title, text) == \\\"Timer\\\"\"},{\"kind\":\"status\",\"expr\":\"read(timer_remaining, text) == \\\"00:00.0\\\"\"},{\"kind\":\"status\",\"expr\":\"read(timer_remaining_ms, text) == \\\"0\\\"\"}]}"
+    "{\"candidates\":[{\"kind\":\"stable_label\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"screen_marker\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"screen:timer_done\"}},{\"predicate_type\":\"read\",\"element\":\"timer_done_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Done\"}},{\"predicate_type\":\"read\",\"element\":\"app_top_bar_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Timer\"}}]},{\"kind\":\"status\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"timer_remaining\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"00:00.0\"}},{\"predicate_type\":\"read\",\"element\":\"timer_remaining_ms\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"0\"}}]}]}"
   ]
 }

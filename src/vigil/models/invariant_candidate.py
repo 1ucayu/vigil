@@ -26,7 +26,9 @@ from vigil.models.guard import GuardContract
 class StateInvariantCandidate(BaseModel):
     """A proposed state invariant ``phi`` for the target state.
 
-    ``expr`` is a single DSL predicate string over the target-state widget registry.
+    ``expr`` is the runtime/admission IR: a single DSL predicate string over the
+    target-state widget registry. LLM-facing structured output should emit typed
+    predicates first; deterministic compilation lowers those predicates to ``expr``.
     ``admission_target`` is the LLM's intent (``runtime_state_invariant`` |
     ``metadata_only`` | ``reject``); deterministic admission still has the final say.
     """

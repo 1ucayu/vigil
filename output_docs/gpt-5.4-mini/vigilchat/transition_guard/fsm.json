@@ -117,7 +117,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:inbox\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 79
+        },
+        {
+          "expr": "read(inbox.title, text) == \"Inbox\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 79
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"VigilChat\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 79
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -267,7 +286,14 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:thread\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 105
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -415,7 +441,14 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:thread\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 103
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -521,7 +554,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:contacts\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 61
+        },
+        {
+          "expr": "value(contacts.title) == \"Contacts\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 61
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Contacts\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 61
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -625,7 +677,32 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 59
+        },
+        {
+          "expr": "value(settings.title) == \"Settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 59
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 59
+        },
+        {
+          "expr": "value(settings.info_text) contains \"No network, no disk I/O.\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 59
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -800,7 +877,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:message_options\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 130
+        },
+        {
+          "expr": "read(message_options.title, text) == \"Message options\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 130
+        },
+        {
+          "expr": "read(message_options.subtitle, text) == \"Choose an action for the selected message.\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 130
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -909,7 +1005,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:attachment_picker\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 64
+        },
+        {
+          "expr": "value(attachment_picker.title) == \"Choose attachment\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 64
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Attach\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 64
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -958,7 +1073,20 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(delete_confirm.title, text) == \"Delete message?\"",
+          "confidence": 0.8,
+          "source": "llm+cross_visit",
+          "evidence_count": 4
+        },
+        {
+          "expr": "read(screen_marker, text) == \"screen:delete_confirm\"",
+          "confidence": 0.8,
+          "source": "llm+cross_visit",
+          "evidence_count": 4
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -1171,7 +1299,14 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:thread\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 168
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -1388,7 +1523,14 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:thread\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 172
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -1450,7 +1592,44 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:attachment_picker\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Attach\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "read(attachment_picker.title, text) == \"Choose attachment\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "read(attachment_picker.item.photo_beach.label, text) == \"Beach photo\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "read(attachment_picker.item.doc_report.label, text) == \"Q3 report.pdf\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "read(attachment_picker.item.sticker_thumbs.label, text) == \"Thumbs-up sticker\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -1515,7 +1694,14 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:thread\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 20
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -1577,7 +1763,32 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:thread\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Alice Chen\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "value(thread.title) == \"Alice Chen\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "value(thread.thread_id.alice) == \"alice\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",

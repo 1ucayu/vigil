@@ -2,11 +2,11 @@
   "state_id": "s_002",
   "parsed_ok": true,
   "schema_name": "LlmInvariantGuardResponse",
-  "schema_hash": "70ae64e79636881b",
+  "schema_hash": "cf47cf3900a148f5",
   "schema_constraint_mode": "native_schema",
   "provider": "proxy",
   "model": "gpt-5.4-mini",
-  "spec_hash": "835f93c6631a57bf",
+  "spec_hash": "ca08778c8d35e455",
   "refusal": "",
   "rejection_reason": "",
   "parse_errors": [],
@@ -15,8 +15,8 @@
   "packet": {
     "state_invariant_candidates": [
       {
-        "kind": "structural",
-        "expr": "read(screen_marker, text) == 'screen:product_detail'",
+        "kind": "stable_label",
+        "expr": "read(screen_marker, text) == \"screen:product_detail\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -29,7 +29,7 @@
       },
       {
         "kind": "stable_label",
-        "expr": "read(app_top_bar_title, text) == 'Product'",
+        "expr": "read(app_top_bar_title, text) == \"Product\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -42,7 +42,7 @@
       },
       {
         "kind": "stable_label",
-        "expr": "read(product_detail_title, text) == 'Selected item'",
+        "expr": "read(product_detail_title, text) == \"Selected item\"",
         "scope": "state",
         "admission_target": "runtime_state_invariant",
         "confidence": 0.0,
@@ -60,6 +60,6 @@
     "notes": ""
   },
   "raw_responses": [
-    "{\"candidates\":[{\"kind\":\"structural\",\"expr\":\"read(screen_marker, text) == 'screen:product_detail'\"},{\"kind\":\"stable_label\",\"expr\":\"read(app_top_bar_title, text) == 'Product'\"},{\"kind\":\"stable_label\",\"expr\":\"read(product_detail_title, text) == 'Selected item'\"}]}"
+    "{\"candidates\":[{\"kind\":\"stable_label\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"screen_marker\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"screen:product_detail\"}}]},{\"kind\":\"stable_label\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"app_top_bar_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Product\"}}]},{\"kind\":\"stable_label\",\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"product_detail_title\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Selected item\"}}]}]}"
   ]
 }

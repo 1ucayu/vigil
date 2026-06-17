@@ -79,7 +79,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:home\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 41
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"VigilMarket\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 41
+        },
+        {
+          "expr": "value(home.title) == \"Morning menu\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 41
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -137,7 +156,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:product_detail\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 13
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Product\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 13
+        },
+        {
+          "expr": "read(product_detail.title, text) == \"Selected item\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 13
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -201,7 +239,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:search\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 19
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Search\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 19
+        },
+        {
+          "expr": "value(search.title) == \"Find a drink\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 19
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -265,7 +322,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(app.top_bar.title) == \"Search\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 19
+        },
+        {
+          "expr": "value(search.title) == \"Find a drink\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 19
+        },
+        {
+          "expr": "value(screen_marker) == \"screen:search\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 19
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -335,7 +411,20 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:catalog\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 25
+        },
+        {
+          "expr": "value(catalog.title) == \"Catalog\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 25
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -397,7 +486,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:cart_empty\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Cart\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        },
+        {
+          "expr": "read(cart_empty.message, text) == \"Your cart is empty.\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 17
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -462,7 +570,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:orders\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 20
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Orders\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 20
+        },
+        {
+          "expr": "value(orders.title) == \"Past orders\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 20
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -532,7 +659,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 25
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 25
+        },
+        {
+          "expr": "read(settings.title, text) == \"Settings\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 25
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -597,7 +743,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:cart\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 20
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Cart\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 20
+        },
+        {
+          "expr": "read(cart.title, text) == \"Cart\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 20
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -646,7 +811,14 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(remove_dialog.title, text) == \"Remove item?\"",
+          "confidence": 0.8,
+          "source": "llm+cross_visit",
+          "evidence_count": 4
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -704,7 +876,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:address_select\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 13
+        },
+        {
+          "expr": "read(address_select.title, text) == \"Choose address\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 13
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Delivery\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 13
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -763,7 +954,26 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(screen_marker) == \"screen:payment_confirm\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "value(payment_confirm.title) == \"Confirm payment\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        },
+        {
+          "expr": "value(app.top_bar.title) == \"Payment\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 14
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -812,7 +1022,20 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "value(payment_dialog.title) == \"Confirm payment\"",
+          "confidence": 0.8,
+          "source": "llm+cross_visit",
+          "evidence_count": 4
+        },
+        {
+          "expr": "value(payment_dialog.message) == \"Pay $4.50 for Espresso (x1)?\"",
+          "confidence": 0.8,
+          "source": "llm+cross_visit",
+          "evidence_count": 4
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
@@ -866,7 +1089,32 @@
         "parameter_schema": {},
         "parameter_bindings": {}
       },
-      "invariant_specs": [],
+      "invariant_specs": [
+        {
+          "expr": "read(screen_marker, text) == \"screen:payment_success\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 9
+        },
+        {
+          "expr": "read(payment_success.title, text) == \"Payment successful\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 9
+        },
+        {
+          "expr": "read(app.top_bar.title, text) == \"Receipt\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 9
+        },
+        {
+          "expr": "read(payment_success.message, text) == \"Thanks for your order.\"",
+          "confidence": 0.9,
+          "source": "llm+cross_visit",
+          "evidence_count": 9
+        }
+      ],
       "annotations": {
         "display_name": "",
         "alt_text": "",
