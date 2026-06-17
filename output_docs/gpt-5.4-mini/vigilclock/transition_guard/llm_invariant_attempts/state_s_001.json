@@ -1,0 +1,143 @@
+{
+  "state_id": "s_001",
+  "parsed_ok": true,
+  "schema_name": "LlmInvariantGuardResponse",
+  "schema_hash": "70ae64e79636881b",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "spec_hash": "835f93c6631a57bf",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "packet": {
+    "state_invariant_candidates": [
+      {
+        "kind": "structural",
+        "expr": "read(screen_marker, text) == 'screen:alarm_list'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(app_top_bar_title, text) == 'Alarms'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(alarm_list_title, text) == 'Alarms'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(alarm_time_a_morning, text) == '07:00'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(alarm_label_a_morning, text) == 'Morning'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(alarm_time_a_lunch, text) == '12:30'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(alarm_label_a_lunch, text) == 'Lunch'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(alarm_time_a_evening, text) == '18:15'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(alarm_label_a_evening, text) == 'Evening'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      }
+    ],
+    "transition_guard_candidates": [],
+    "effect_invariant_hints": [],
+    "rejected_candidates": [],
+    "notes": ""
+  },
+  "raw_responses": [
+    "{\"candidates\":[{\"kind\":\"structural\",\"expr\":\"read(screen_marker, text) == 'screen:alarm_list'\"},{\"kind\":\"stable_label\",\"expr\":\"read(app_top_bar_title, text) == 'Alarms'\"},{\"kind\":\"stable_label\",\"expr\":\"read(alarm_list_title, text) == 'Alarms'\"},{\"kind\":\"stable_label\",\"expr\":\"read(alarm_time_a_morning, text) == '07:00'\"},{\"kind\":\"stable_label\",\"expr\":\"read(alarm_label_a_morning, text) == 'Morning'\"},{\"kind\":\"stable_label\",\"expr\":\"read(alarm_time_a_lunch, text) == '12:30'\"},{\"kind\":\"stable_label\",\"expr\":\"read(alarm_label_a_lunch, text) == 'Lunch'\"},{\"kind\":\"stable_label\",\"expr\":\"read(alarm_time_a_evening, text) == '18:15'\"},{\"kind\":\"stable_label\",\"expr\":\"read(alarm_label_a_evening, text) == 'Evening'\"}]}"
+  ]
+}

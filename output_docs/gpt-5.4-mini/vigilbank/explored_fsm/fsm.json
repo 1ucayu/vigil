@@ -1,0 +1,4683 @@
+{
+  "app_package": "com.vigil.bank",
+  "version": "0.1.0",
+  "schema_version": "4",
+  "initial_state": "s_001",
+  "states": {
+    "s_001": {
+      "state_id": "s_001",
+      "name": "@7F090001 #1",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "a4ee54163aa4",
+        "structural_hash": "43d8010faed67da7",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0001",
+          "scr_0003",
+          "scr_0008",
+          "scr_0013",
+          "scr_0018",
+          "scr_0027",
+          "scr_0032",
+          "scr_0033",
+          "scr_0043",
+          "scr_0078",
+          "scr_0088",
+          "scr_0095",
+          "scr_0102",
+          "scr_0108",
+          "scr_0115",
+          "scr_0119",
+          "scr_0129",
+          "scr_0175",
+          "scr_0200",
+          "scr_0264",
+          "scr_0318",
+          "scr_0354",
+          "scr_0363",
+          "scr_0399",
+          "scr_0449",
+          "scr_0459",
+          "scr_0508",
+          "scr_0517"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 28
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    },
+    "s_002": {
+      "state_id": "s_002",
+      "name": "@7F090001 #2",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "20aaf2f23cb7",
+        "structural_hash": "e828b69a8bfe62db",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0005",
+          "scr_0020",
+          "scr_0021",
+          "scr_0070",
+          "scr_0080",
+          "scr_0085",
+          "scr_0086",
+          "scr_0090",
+          "scr_0097",
+          "scr_0106",
+          "scr_0107",
+          "scr_0123",
+          "scr_0169",
+          "scr_0181",
+          "scr_0207",
+          "scr_0271",
+          "scr_0326",
+          "scr_0372",
+          "scr_0408",
+          "scr_0439",
+          "scr_0469",
+          "scr_0485"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 22
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    },
+    "s_003": {
+      "state_id": "s_003",
+      "name": "@7F090001 #3",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "eb50da26fc85",
+        "structural_hash": "b54d68703ea45991",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0010",
+          "scr_0029",
+          "scr_0030",
+          "scr_0092",
+          "scr_0093",
+          "scr_0104",
+          "scr_0110",
+          "scr_0127",
+          "scr_0128",
+          "scr_0134",
+          "scr_0187",
+          "scr_0214",
+          "scr_0278",
+          "scr_0334",
+          "scr_0381",
+          "scr_0417",
+          "scr_0447",
+          "scr_0457",
+          "scr_0467",
+          "scr_0477",
+          "scr_0516"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 21
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    },
+    "s_004": {
+      "state_id": "s_004",
+      "name": "@7F090001 #4",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "21a98600cfb3",
+        "structural_hash": "6acd2b5dfd0cf010",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0015",
+          "scr_0035",
+          "scr_0036",
+          "scr_0038",
+          "scr_0039",
+          "scr_0041",
+          "scr_0042",
+          "scr_0099",
+          "scr_0100",
+          "scr_0112",
+          "scr_0113",
+          "scr_0117",
+          "scr_0121",
+          "scr_0125",
+          "scr_0139",
+          "scr_0193",
+          "scr_0221",
+          "scr_0285",
+          "scr_0342",
+          "scr_0390",
+          "scr_0434",
+          "scr_0479"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 22
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    },
+    "s_005": {
+      "state_id": "s_005",
+      "name": "@7F090001 #5",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "e4e69e5ccc2c",
+        "structural_hash": "6e9f743546bc35b8",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0023",
+          "scr_0046",
+          "scr_0055",
+          "scr_0072",
+          "scr_0073",
+          "scr_0075",
+          "scr_0076",
+          "scr_0082",
+          "scr_0083",
+          "scr_0132",
+          "scr_0137",
+          "scr_0167",
+          "scr_0168",
+          "scr_0295"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 14
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    },
+    "s_006": {
+      "state_id": "s_006",
+      "name": "@7F090001 #6",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "10e6e938e1cb",
+        "structural_hash": "6e9f743546bc35b8",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0048",
+          "scr_0057",
+          "scr_0058",
+          "scr_0060",
+          "scr_0061",
+          "scr_0144",
+          "scr_0146",
+          "scr_0147",
+          "scr_0159",
+          "scr_0173",
+          "scr_0179",
+          "scr_0185",
+          "scr_0191",
+          "scr_0198",
+          "scr_0205",
+          "scr_0212",
+          "scr_0219",
+          "scr_0438",
+          "scr_0484"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 19
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    },
+    "s_007": {
+      "state_id": "s_007",
+      "name": "@7F090001 #7",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "a214e64a841e",
+        "structural_hash": "6e9f743546bc35b8",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0063",
+          "scr_0161",
+          "scr_0162"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 3
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    },
+    "s_008": {
+      "state_id": "s_008",
+      "name": "@7F090001 #8",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "e30cf02ef6a2",
+        "structural_hash": "c6bb4a9607fa181a",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0149",
+          "scr_0164",
+          "scr_0165",
+          "scr_0226",
+          "scr_0261",
+          "scr_0262",
+          "scr_0269",
+          "scr_0276",
+          "scr_0283",
+          "scr_0293",
+          "scr_0294",
+          "scr_0492",
+          "scr_0500"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 13
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    },
+    "s_009": {
+      "state_id": "s_009",
+      "name": "@7F090001 #9",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "87a5a10e034a",
+        "structural_hash": "f694f7fb435cd820",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0228",
+          "scr_0240",
+          "scr_0291",
+          "scr_0301",
+          "scr_0316",
+          "scr_0324",
+          "scr_0332",
+          "scr_0340",
+          "scr_0491"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 9
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    },
+    "s_010": {
+      "state_id": "s_010",
+      "name": "@7F090001 #10",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "027828b24ffe",
+        "structural_hash": "f694f7fb435cd820",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0242",
+          "scr_0256",
+          "scr_0258",
+          "scr_0259",
+          "scr_0349",
+          "scr_0361",
+          "scr_0370",
+          "scr_0379",
+          "scr_0388",
+          "scr_0499"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 10
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    },
+    "s_011": {
+      "state_id": "s_011",
+      "name": "@7F090001 #11",
+      "hierarchy_level": "fragment",
+      "parent_state": null,
+      "kind": "normal",
+      "identity": {
+        "functional_hash": "4386d335be96",
+        "structural_hash": "c29259086bb9b7e1",
+        "secondary_hash": null,
+        "identity_version": "v1",
+        "algorithm": "hybrid_ui_identity"
+      },
+      "android_context": {
+        "activity_name": ".MainActivity",
+        "package_name": null,
+        "window_type": null
+      },
+      "evidence": {
+        "raw_screen_ids": [
+          "scr_0303",
+          "scr_0351",
+          "scr_0352",
+          "scr_0397",
+          "scr_0406",
+          "scr_0415",
+          "scr_0432",
+          "scr_0507"
+        ],
+        "construction_source": "observed_trace",
+        "first_seen_trace": null,
+        "trust_level": "observed",
+        "observation_count": 8
+      },
+      "abstraction": {
+        "container_type": "none",
+        "container_selector": {},
+        "template_id": null,
+        "template_role": "normal",
+        "parameter_schema": {},
+        "parameter_bindings": {}
+      },
+      "invariant_specs": [],
+      "annotations": {
+        "display_name": "",
+        "alt_text": "",
+        "page_function": "",
+        "expected_actions": [],
+        "widget_aliases": [],
+        "generation_confidence": 0.0
+      },
+      "legacy_invariants": []
+    }
+  },
+  "transitions": [
+    {
+      "source": "s_001",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0016",
+        "bounds": [
+          79,
+          1105,
+          418,
+          1231
+        ],
+        "resource_id": "home.open_recipients",
+        "target_resource_id": "home.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "home.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#",
+            "View#home.quick_actions"
+          ],
+          "bounds": [
+            79,
+            1105,
+            418,
+            1231
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 1,
+          "source_screen_id": "scr_0003",
+          "target_screen_id": "scr_0005",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_001",
+      "target": "s_003",
+      "action": {
+        "type": "click",
+        "target": "e_0019",
+        "bounds": [
+          439,
+          1105,
+          685,
+          1231
+        ],
+        "resource_id": "home.open_history",
+        "target_resource_id": "home.open_history",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "home.open_history",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#",
+            "View#home.quick_actions"
+          ],
+          "bounds": [
+            439,
+            1105,
+            685,
+            1231
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 2,
+          "source_screen_id": "scr_0008",
+          "target_screen_id": "scr_0010",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_001",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0022",
+        "bounds": [
+          706,
+          1105,
+          969,
+          1231
+        ],
+        "resource_id": "home.open_settings",
+        "target_resource_id": "home.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "home.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#",
+            "View#home.quick_actions"
+          ],
+          "bounds": [
+            706,
+            1105,
+            969,
+            1231
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 3,
+          "source_screen_id": "scr_0013",
+          "target_screen_id": "scr_0015",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_001",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0033",
+        "bounds": [
+          276,
+          2127,
+          530,
+          2337
+        ],
+        "resource_id": "nav.open_recipients",
+        "target_resource_id": "nav.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            276,
+            2127,
+            530,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 4,
+          "source_screen_id": "scr_0018",
+          "target_screen_id": "scr_0020",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_002",
+      "target": "s_005",
+      "action": {
+        "type": "click",
+        "target": "e_0012",
+        "bounds": [
+          791,
+          531,
+          1001,
+          657
+        ],
+        "resource_id": "recipients.recipient_row.alice.open",
+        "target_resource_id": "recipients.recipient_row.alice.open",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "recipients.recipient_row.alice.open",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#",
+            "View#recipients.recipient_card.alice"
+          ],
+          "bounds": [
+            791,
+            531,
+            1001,
+            657
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 5,
+          "source_screen_id": "scr_0021",
+          "target_screen_id": "scr_0023",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_001",
+      "target": "s_003",
+      "action": {
+        "type": "click",
+        "target": "e_0037",
+        "bounds": [
+          551,
+          2127,
+          805,
+          2337
+        ],
+        "resource_id": "nav.open_history",
+        "target_resource_id": "nav.open_history",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_history",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            551,
+            2127,
+            805,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 6,
+          "source_screen_id": "scr_0027",
+          "target_screen_id": "scr_0029",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_003",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0013",
+        "bounds": [
+          42,
+          832,
+          1038,
+          958
+        ],
+        "resource_id": "history.back_home",
+        "target_resource_id": "history.back_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "history.back_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            832,
+            1038,
+            958
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 7,
+          "source_screen_id": "scr_0030",
+          "target_screen_id": "scr_0032",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_001",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0041",
+        "bounds": [
+          826,
+          2127,
+          1080,
+          2337
+        ],
+        "resource_id": "nav.open_settings",
+        "target_resource_id": "nav.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            826,
+            2127,
+            1080,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 8,
+          "source_screen_id": "scr_0033",
+          "target_screen_id": "scr_0035",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_004",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "bounds": [
+          864,
+          530,
+          1001,
+          656
+        ],
+        "resource_id": "settings.biometric_unlock",
+        "target_resource_id": "settings.biometric_unlock",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "settings.biometric_unlock",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#",
+            "View#settings.preferences_card"
+          ],
+          "bounds": [
+            864,
+            530,
+            1001,
+            656
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 9,
+          "source_screen_id": "scr_0036",
+          "target_screen_id": "scr_0038",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_004",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "bounds": [
+          864,
+          688,
+          1001,
+          814
+        ],
+        "resource_id": "settings.transfer_notifications",
+        "target_resource_id": "settings.transfer_notifications",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "settings.transfer_notifications",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#",
+            "View#settings.preferences_card"
+          ],
+          "bounds": [
+            864,
+            688,
+            1001,
+            814
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 10,
+          "source_screen_id": "scr_0039",
+          "target_screen_id": "scr_0041",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_004",
+      "target": "s_001",
+      "action": {
+        "type": "navigate_back"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 11,
+          "source_screen_id": "scr_0042",
+          "target_screen_id": "scr_0043",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_005",
+      "target": "s_006",
+      "action": {
+        "type": "input_text",
+        "target": "e_0013",
+        "bounds": [
+          42,
+          821,
+          1038,
+          989
+        ],
+        "resource_id": "transfer.amount.input",
+        "target_resource_id": "transfer.amount.input",
+        "target_class_name": "android.widget.EditText",
+        "target_selector": {
+          "resource_id": "transfer.amount.input",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.widget.EditText",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            821,
+            1038,
+            989
+          ],
+          "depth": 7
+        },
+        "text": "test123",
+        "target_class": "android.widget.EditText"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 12,
+          "source_screen_id": "scr_0046",
+          "target_screen_id": "scr_0048",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_005",
+      "target": "s_006",
+      "action": {
+        "type": "input_text",
+        "target": "e_0016",
+        "bounds": [
+          42,
+          1095,
+          1038,
+          1263
+        ],
+        "resource_id": "transfer.memo.input",
+        "target_resource_id": "transfer.memo.input",
+        "target_class_name": "android.widget.EditText",
+        "target_selector": {
+          "resource_id": "transfer.memo.input",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.widget.EditText",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1095,
+            1038,
+            1263
+          ],
+          "depth": 7
+        },
+        "text": "test123",
+        "target_class": "android.widget.EditText"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 13,
+          "source_screen_id": "scr_0055",
+          "target_screen_id": "scr_0057",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_006",
+      "target": "s_006",
+      "action": {
+        "type": "input_text",
+        "target": "e_0013",
+        "bounds": [
+          42,
+          821,
+          1038,
+          989
+        ],
+        "resource_id": "transfer.amount.input",
+        "target_resource_id": "transfer.amount.input",
+        "target_text": "<N>",
+        "target_class_name": "android.widget.EditText",
+        "target_selector": {
+          "resource_id": "transfer.amount.input",
+          "text": "<N>",
+          "content_description": "",
+          "class_name": "android.widget.EditText",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            821,
+            1038,
+            989
+          ],
+          "depth": 7
+        },
+        "text": "test123",
+        "target_class": "android.widget.EditText"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 2,
+      "provenance": [
+        {
+          "trace_step_index": 14,
+          "source_screen_id": "scr_0058",
+          "target_screen_id": "scr_0060",
+          "confidence_source": "observed"
+        },
+        {
+          "trace_step_index": 36,
+          "source_screen_id": "scr_0144",
+          "target_screen_id": "scr_0146",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_006",
+      "target": "s_007",
+      "action": {
+        "type": "input_text",
+        "target": "e_0017",
+        "bounds": [
+          42,
+          1095,
+          1038,
+          1263
+        ],
+        "resource_id": "transfer.memo.input",
+        "target_resource_id": "transfer.memo.input",
+        "target_class_name": "android.widget.EditText",
+        "target_selector": {
+          "resource_id": "transfer.memo.input",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.widget.EditText",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1095,
+            1038,
+            1263
+          ],
+          "depth": 7
+        },
+        "text": "test123",
+        "target_text": "test123",
+        "target_class": "android.widget.EditText"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 15,
+          "source_screen_id": "scr_0061",
+          "target_screen_id": "scr_0063",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_002",
+      "target": "s_005",
+      "action": {
+        "type": "click",
+        "target": "e_0018",
+        "bounds": [
+          791,
+          764,
+          1001,
+          890
+        ],
+        "resource_id": "recipients.recipient_row.bob.open",
+        "target_resource_id": "recipients.recipient_row.bob.open",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "recipients.recipient_row.bob.open",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#",
+            "View#recipients.recipient_card.bob"
+          ],
+          "bounds": [
+            791,
+            764,
+            1001,
+            890
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 16,
+          "source_screen_id": "scr_0070",
+          "target_screen_id": "scr_0072",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_005",
+      "target": "s_005",
+      "action": {
+        "type": "click",
+        "bounds": [
+          42,
+          1296,
+          1038,
+          1422
+        ],
+        "resource_id": "transfer.continue",
+        "target_resource_id": "transfer.continue",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "transfer.continue",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1296,
+            1038,
+            1422
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 17,
+          "source_screen_id": "scr_0073",
+          "target_screen_id": "scr_0075",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_005",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0025",
+        "bounds": [
+          0,
+          2127,
+          255,
+          2337
+        ],
+        "resource_id": "nav.open_home",
+        "target_resource_id": "nav.open_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            0,
+            2127,
+            255,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 18,
+          "source_screen_id": "scr_0076",
+          "target_screen_id": "scr_0078",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_002",
+      "target": "s_005",
+      "action": {
+        "type": "click",
+        "target": "e_0024",
+        "bounds": [
+          791,
+          997,
+          1001,
+          1123
+        ],
+        "resource_id": "recipients.recipient_row.carol.open",
+        "target_resource_id": "recipients.recipient_row.carol.open",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "recipients.recipient_row.carol.open",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#",
+            "View#recipients.recipient_card.carol"
+          ],
+          "bounds": [
+            791,
+            997,
+            1001,
+            1123
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 19,
+          "source_screen_id": "scr_0080",
+          "target_screen_id": "scr_0082",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_005",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0029",
+        "bounds": [
+          276,
+          2127,
+          530,
+          2337
+        ],
+        "resource_id": "nav.open_recipients",
+        "target_resource_id": "nav.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            276,
+            2127,
+            530,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 20,
+          "source_screen_id": "scr_0083",
+          "target_screen_id": "scr_0085",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_002",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0031",
+        "bounds": [
+          0,
+          2127,
+          255,
+          2337
+        ],
+        "resource_id": "nav.open_home",
+        "target_resource_id": "nav.open_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            0,
+            2127,
+            255,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 21,
+          "source_screen_id": "scr_0086",
+          "target_screen_id": "scr_0088",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_002",
+      "target": "s_003",
+      "action": {
+        "type": "click",
+        "target": "e_0039",
+        "bounds": [
+          551,
+          2127,
+          805,
+          2337
+        ],
+        "resource_id": "nav.open_history",
+        "target_resource_id": "nav.open_history",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_history",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            551,
+            2127,
+            805,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 22,
+          "source_screen_id": "scr_0090",
+          "target_screen_id": "scr_0092",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_003",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0020",
+        "bounds": [
+          0,
+          2127,
+          255,
+          2337
+        ],
+        "resource_id": "nav.open_home",
+        "target_resource_id": "nav.open_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            0,
+            2127,
+            255,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 23,
+          "source_screen_id": "scr_0093",
+          "target_screen_id": "scr_0095",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_002",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0043",
+        "bounds": [
+          826,
+          2127,
+          1080,
+          2337
+        ],
+        "resource_id": "nav.open_settings",
+        "target_resource_id": "nav.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            826,
+            2127,
+            1080,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 24,
+          "source_screen_id": "scr_0097",
+          "target_screen_id": "scr_0099",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_004",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0014",
+        "bounds": [
+          42,
+          884,
+          363,
+          1010
+        ],
+        "resource_id": "settings.reset_demo",
+        "target_resource_id": "settings.reset_demo",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "settings.reset_demo",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            884,
+            363,
+            1010
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 25,
+          "source_screen_id": "scr_0100",
+          "target_screen_id": "scr_0102",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_003",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0024",
+        "bounds": [
+          276,
+          2127,
+          530,
+          2337
+        ],
+        "resource_id": "nav.open_recipients",
+        "target_resource_id": "nav.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            276,
+            2127,
+            530,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 26,
+          "source_screen_id": "scr_0104",
+          "target_screen_id": "scr_0106",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_002",
+      "target": "s_001",
+      "action": {
+        "type": "navigate_back"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 27,
+          "source_screen_id": "scr_0107",
+          "target_screen_id": "scr_0108",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_003",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0032",
+        "bounds": [
+          826,
+          2127,
+          1080,
+          2337
+        ],
+        "resource_id": "nav.open_settings",
+        "target_resource_id": "nav.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            826,
+            2127,
+            1080,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 28,
+          "source_screen_id": "scr_0110",
+          "target_screen_id": "scr_0112",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_004",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0017",
+        "bounds": [
+          42,
+          1042,
+          267,
+          1168
+        ],
+        "resource_id": "settings.back_home",
+        "target_resource_id": "settings.back_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "settings.back_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1042,
+            267,
+            1168
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 29,
+          "source_screen_id": "scr_0113",
+          "target_screen_id": "scr_0115",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_004",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0024",
+        "bounds": [
+          0,
+          2127,
+          255,
+          2337
+        ],
+        "resource_id": "nav.open_home",
+        "target_resource_id": "nav.open_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            0,
+            2127,
+            255,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 30,
+          "source_screen_id": "scr_0117",
+          "target_screen_id": "scr_0119",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_004",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0028",
+        "bounds": [
+          276,
+          2127,
+          530,
+          2337
+        ],
+        "resource_id": "nav.open_recipients",
+        "target_resource_id": "nav.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            276,
+            2127,
+            530,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 31,
+          "source_screen_id": "scr_0121",
+          "target_screen_id": "scr_0123",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_004",
+      "target": "s_003",
+      "action": {
+        "type": "click",
+        "target": "e_0032",
+        "bounds": [
+          551,
+          2127,
+          805,
+          2337
+        ],
+        "resource_id": "nav.open_history",
+        "target_resource_id": "nav.open_history",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_history",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            551,
+            2127,
+            805,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 32,
+          "source_screen_id": "scr_0125",
+          "target_screen_id": "scr_0127",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_003",
+      "target": "s_001",
+      "action": {
+        "type": "navigate_back"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 2,
+      "provenance": [
+        {
+          "trace_step_index": 33,
+          "source_screen_id": "scr_0128",
+          "target_screen_id": "scr_0129",
+          "confidence_source": "observed"
+        },
+        {
+          "trace_step_index": 84,
+          "source_screen_id": "scr_0516",
+          "target_screen_id": "scr_0517",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_005",
+      "target": "s_003",
+      "action": {
+        "type": "click",
+        "target": "e_0033",
+        "bounds": [
+          551,
+          2127,
+          805,
+          2337
+        ],
+        "resource_id": "nav.open_history",
+        "target_resource_id": "nav.open_history",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_history",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            551,
+            2127,
+            805,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 34,
+          "source_screen_id": "scr_0132",
+          "target_screen_id": "scr_0134",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_005",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0037",
+        "bounds": [
+          826,
+          2127,
+          1080,
+          2337
+        ],
+        "resource_id": "nav.open_settings",
+        "target_resource_id": "nav.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            826,
+            2127,
+            1080,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 35,
+          "source_screen_id": "scr_0137",
+          "target_screen_id": "scr_0139",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_006",
+      "target": "s_008",
+      "action": {
+        "type": "click",
+        "target": "e_0019",
+        "bounds": [
+          42,
+          1296,
+          1038,
+          1422
+        ],
+        "resource_id": "transfer.continue",
+        "target_resource_id": "transfer.continue",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "transfer.continue",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1296,
+            1038,
+            1422
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 37,
+          "source_screen_id": "scr_0147",
+          "target_screen_id": "scr_0149",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_006",
+      "target": "s_007",
+      "action": {
+        "type": "input_text",
+        "target": "e_0016",
+        "bounds": [
+          42,
+          1095,
+          1038,
+          1263
+        ],
+        "resource_id": "transfer.memo.input",
+        "target_resource_id": "transfer.memo.input",
+        "target_text": "test123",
+        "target_class_name": "android.widget.EditText",
+        "target_selector": {
+          "resource_id": "transfer.memo.input",
+          "text": "test123",
+          "content_description": "",
+          "class_name": "android.widget.EditText",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1095,
+            1038,
+            1263
+          ],
+          "depth": 7
+        },
+        "text": "test123",
+        "target_class": "android.widget.EditText"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 38,
+          "source_screen_id": "scr_0159",
+          "target_screen_id": "scr_0161",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_007",
+      "target": "s_008",
+      "action": {
+        "type": "click",
+        "target": "e_0019",
+        "bounds": [
+          42,
+          1296,
+          1038,
+          1422
+        ],
+        "resource_id": "transfer.continue",
+        "target_resource_id": "transfer.continue",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "transfer.continue",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1296,
+            1038,
+            1422
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 39,
+          "source_screen_id": "scr_0162",
+          "target_screen_id": "scr_0164",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_008",
+      "target": "s_005",
+      "action": {
+        "type": "click",
+        "target": "e_0016",
+        "bounds": [
+          42,
+          1099,
+          281,
+          1225
+        ],
+        "resource_id": "transfer_confirm.cancel",
+        "target_resource_id": "transfer_confirm.cancel",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "transfer_confirm.cancel",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1099,
+            281,
+            1225
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 40,
+          "source_screen_id": "scr_0165",
+          "target_screen_id": "scr_0167",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_005",
+      "target": "s_002",
+      "action": {
+        "type": "navigate_back"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 41,
+          "source_screen_id": "scr_0168",
+          "target_screen_id": "scr_0169",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_006",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0026",
+        "bounds": [
+          0,
+          2127,
+          255,
+          2337
+        ],
+        "resource_id": "nav.open_home",
+        "target_resource_id": "nav.open_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            0,
+            2127,
+            255,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 2,
+      "provenance": [
+        {
+          "trace_step_index": 42,
+          "source_screen_id": "scr_0173",
+          "target_screen_id": "scr_0175",
+          "confidence_source": "observed"
+        },
+        {
+          "trace_step_index": 46,
+          "source_screen_id": "scr_0198",
+          "target_screen_id": "scr_0200",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_006",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0030",
+        "bounds": [
+          276,
+          2127,
+          530,
+          2337
+        ],
+        "resource_id": "nav.open_recipients",
+        "target_resource_id": "nav.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            276,
+            2127,
+            530,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 2,
+      "provenance": [
+        {
+          "trace_step_index": 43,
+          "source_screen_id": "scr_0179",
+          "target_screen_id": "scr_0181",
+          "confidence_source": "observed"
+        },
+        {
+          "trace_step_index": 47,
+          "source_screen_id": "scr_0205",
+          "target_screen_id": "scr_0207",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_006",
+      "target": "s_003",
+      "action": {
+        "type": "click",
+        "target": "e_0034",
+        "bounds": [
+          551,
+          2127,
+          805,
+          2337
+        ],
+        "resource_id": "nav.open_history",
+        "target_resource_id": "nav.open_history",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_history",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            551,
+            2127,
+            805,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 2,
+      "provenance": [
+        {
+          "trace_step_index": 44,
+          "source_screen_id": "scr_0185",
+          "target_screen_id": "scr_0187",
+          "confidence_source": "observed"
+        },
+        {
+          "trace_step_index": 48,
+          "source_screen_id": "scr_0212",
+          "target_screen_id": "scr_0214",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_006",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0038",
+        "bounds": [
+          826,
+          2127,
+          1080,
+          2337
+        ],
+        "resource_id": "nav.open_settings",
+        "target_resource_id": "nav.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            826,
+            2127,
+            1080,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 2,
+      "provenance": [
+        {
+          "trace_step_index": 45,
+          "source_screen_id": "scr_0191",
+          "target_screen_id": "scr_0193",
+          "confidence_source": "observed"
+        },
+        {
+          "trace_step_index": 49,
+          "source_screen_id": "scr_0219",
+          "target_screen_id": "scr_0221",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_008",
+      "target": "s_009",
+      "action": {
+        "type": "click",
+        "target": "e_0019",
+        "bounds": [
+          302,
+          1099,
+          1038,
+          1225
+        ],
+        "resource_id": "transfer_confirm.submit",
+        "target_resource_id": "transfer_confirm.submit",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "transfer_confirm.submit",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            302,
+            1099,
+            1038,
+            1225
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 50,
+          "source_screen_id": "scr_0226",
+          "target_screen_id": "scr_0228",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_009",
+      "target": "s_010",
+      "action": {
+        "type": "input_text",
+        "target": "e_0013",
+        "bounds": [
+          42,
+          841,
+          1038,
+          1009
+        ],
+        "resource_id": "otp_confirm.otp_input",
+        "target_resource_id": "otp_confirm.otp_input",
+        "target_class_name": "android.widget.EditText",
+        "target_selector": {
+          "resource_id": "otp_confirm.otp_input",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.widget.EditText",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            841,
+            1038,
+            1009
+          ],
+          "depth": 7
+        },
+        "text": "test123",
+        "target_class": "android.widget.EditText"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 51,
+          "source_screen_id": "scr_0240",
+          "target_screen_id": "scr_0242",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_010",
+      "target": "s_010",
+      "action": {
+        "type": "input_text",
+        "target": "e_0013",
+        "bounds": [
+          42,
+          841,
+          1038,
+          1009
+        ],
+        "resource_id": "otp_confirm.otp_input",
+        "target_resource_id": "otp_confirm.otp_input",
+        "target_text": "<N>",
+        "target_class_name": "android.widget.EditText",
+        "target_selector": {
+          "resource_id": "otp_confirm.otp_input",
+          "text": "<N>",
+          "content_description": "",
+          "class_name": "android.widget.EditText",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            841,
+            1038,
+            1009
+          ],
+          "depth": 7
+        },
+        "text": "test123",
+        "target_class": "android.widget.EditText"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 52,
+          "source_screen_id": "scr_0256",
+          "target_screen_id": "scr_0258",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_010",
+      "target": "s_008",
+      "action": {
+        "type": "click",
+        "target": "e_0016",
+        "bounds": [
+          42,
+          1042,
+          281,
+          1168
+        ],
+        "resource_id": "otp_confirm.cancel",
+        "target_resource_id": "otp_confirm.cancel",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "otp_confirm.cancel",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1042,
+            281,
+            1168
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 53,
+          "source_screen_id": "scr_0259",
+          "target_screen_id": "scr_0261",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_008",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0026",
+        "bounds": [
+          0,
+          2127,
+          255,
+          2337
+        ],
+        "resource_id": "nav.open_home",
+        "target_resource_id": "nav.open_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            0,
+            2127,
+            255,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 54,
+          "source_screen_id": "scr_0262",
+          "target_screen_id": "scr_0264",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_008",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0030",
+        "bounds": [
+          276,
+          2127,
+          530,
+          2337
+        ],
+        "resource_id": "nav.open_recipients",
+        "target_resource_id": "nav.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            276,
+            2127,
+            530,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 55,
+          "source_screen_id": "scr_0269",
+          "target_screen_id": "scr_0271",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_008",
+      "target": "s_003",
+      "action": {
+        "type": "click",
+        "target": "e_0034",
+        "bounds": [
+          551,
+          2127,
+          805,
+          2337
+        ],
+        "resource_id": "nav.open_history",
+        "target_resource_id": "nav.open_history",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_history",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            551,
+            2127,
+            805,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 56,
+          "source_screen_id": "scr_0276",
+          "target_screen_id": "scr_0278",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_008",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0038",
+        "bounds": [
+          826,
+          2127,
+          1080,
+          2337
+        ],
+        "resource_id": "nav.open_settings",
+        "target_resource_id": "nav.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            826,
+            2127,
+            1080,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 57,
+          "source_screen_id": "scr_0283",
+          "target_screen_id": "scr_0285",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_009",
+      "target": "s_008",
+      "action": {
+        "type": "click",
+        "target": "e_0015",
+        "bounds": [
+          42,
+          1042,
+          281,
+          1168
+        ],
+        "resource_id": "otp_confirm.cancel",
+        "target_resource_id": "otp_confirm.cancel",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "otp_confirm.cancel",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1042,
+            281,
+            1168
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 58,
+          "source_screen_id": "scr_0291",
+          "target_screen_id": "scr_0293",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_008",
+      "target": "s_005",
+      "action": {
+        "type": "navigate_back"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 59,
+          "source_screen_id": "scr_0294",
+          "target_screen_id": "scr_0295",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_009",
+      "target": "s_011",
+      "action": {
+        "type": "click",
+        "target": "e_0018",
+        "bounds": [
+          302,
+          1042,
+          1038,
+          1168
+        ],
+        "resource_id": "otp_confirm.confirm",
+        "target_resource_id": "otp_confirm.confirm",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "otp_confirm.confirm",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            302,
+            1042,
+            1038,
+            1168
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 60,
+          "source_screen_id": "scr_0301",
+          "target_screen_id": "scr_0303",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_009",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0025",
+        "bounds": [
+          0,
+          2127,
+          255,
+          2337
+        ],
+        "resource_id": "nav.open_home",
+        "target_resource_id": "nav.open_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            0,
+            2127,
+            255,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 61,
+          "source_screen_id": "scr_0316",
+          "target_screen_id": "scr_0318",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_009",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0029",
+        "bounds": [
+          276,
+          2127,
+          530,
+          2337
+        ],
+        "resource_id": "nav.open_recipients",
+        "target_resource_id": "nav.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            276,
+            2127,
+            530,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 62,
+          "source_screen_id": "scr_0324",
+          "target_screen_id": "scr_0326",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_009",
+      "target": "s_003",
+      "action": {
+        "type": "click",
+        "target": "e_0033",
+        "bounds": [
+          551,
+          2127,
+          805,
+          2337
+        ],
+        "resource_id": "nav.open_history",
+        "target_resource_id": "nav.open_history",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_history",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            551,
+            2127,
+            805,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 63,
+          "source_screen_id": "scr_0332",
+          "target_screen_id": "scr_0334",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_009",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0037",
+        "bounds": [
+          826,
+          2127,
+          1080,
+          2337
+        ],
+        "resource_id": "nav.open_settings",
+        "target_resource_id": "nav.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            826,
+            2127,
+            1080,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 64,
+          "source_screen_id": "scr_0340",
+          "target_screen_id": "scr_0342",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_010",
+      "target": "s_011",
+      "action": {
+        "type": "click",
+        "target": "e_0019",
+        "bounds": [
+          302,
+          1042,
+          1038,
+          1168
+        ],
+        "resource_id": "otp_confirm.confirm",
+        "target_resource_id": "otp_confirm.confirm",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "otp_confirm.confirm",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            302,
+            1042,
+            1038,
+            1168
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 65,
+          "source_screen_id": "scr_0349",
+          "target_screen_id": "scr_0351",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_011",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0012",
+        "bounds": [
+          42,
+          756,
+          1038,
+          882
+        ],
+        "resource_id": "transfer_success.back_home",
+        "target_resource_id": "transfer_success.back_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "transfer_success.back_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            756,
+            1038,
+            882
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 66,
+          "source_screen_id": "scr_0352",
+          "target_screen_id": "scr_0354",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_010",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0026",
+        "bounds": [
+          0,
+          2127,
+          255,
+          2337
+        ],
+        "resource_id": "nav.open_home",
+        "target_resource_id": "nav.open_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            0,
+            2127,
+            255,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 67,
+          "source_screen_id": "scr_0361",
+          "target_screen_id": "scr_0363",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_010",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0030",
+        "bounds": [
+          276,
+          2127,
+          530,
+          2337
+        ],
+        "resource_id": "nav.open_recipients",
+        "target_resource_id": "nav.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            276,
+            2127,
+            530,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 68,
+          "source_screen_id": "scr_0370",
+          "target_screen_id": "scr_0372",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_010",
+      "target": "s_003",
+      "action": {
+        "type": "click",
+        "target": "e_0034",
+        "bounds": [
+          551,
+          2127,
+          805,
+          2337
+        ],
+        "resource_id": "nav.open_history",
+        "target_resource_id": "nav.open_history",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_history",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            551,
+            2127,
+            805,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 69,
+          "source_screen_id": "scr_0379",
+          "target_screen_id": "scr_0381",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_010",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0038",
+        "bounds": [
+          826,
+          2127,
+          1080,
+          2337
+        ],
+        "resource_id": "nav.open_settings",
+        "target_resource_id": "nav.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            826,
+            2127,
+            1080,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 70,
+          "source_screen_id": "scr_0388",
+          "target_screen_id": "scr_0390",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_011",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0019",
+        "bounds": [
+          0,
+          2127,
+          255,
+          2337
+        ],
+        "resource_id": "nav.open_home",
+        "target_resource_id": "nav.open_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            0,
+            2127,
+            255,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 71,
+          "source_screen_id": "scr_0397",
+          "target_screen_id": "scr_0399",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_011",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0023",
+        "bounds": [
+          276,
+          2127,
+          530,
+          2337
+        ],
+        "resource_id": "nav.open_recipients",
+        "target_resource_id": "nav.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            276,
+            2127,
+            530,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 72,
+          "source_screen_id": "scr_0406",
+          "target_screen_id": "scr_0408",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_011",
+      "target": "s_003",
+      "action": {
+        "type": "click",
+        "target": "e_0027",
+        "bounds": [
+          551,
+          2127,
+          805,
+          2337
+        ],
+        "resource_id": "nav.open_history",
+        "target_resource_id": "nav.open_history",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_history",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            551,
+            2127,
+            805,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 73,
+          "source_screen_id": "scr_0415",
+          "target_screen_id": "scr_0417",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_011",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0031",
+        "bounds": [
+          826,
+          2127,
+          1080,
+          2337
+        ],
+        "resource_id": "nav.open_settings",
+        "target_resource_id": "nav.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            826,
+            2127,
+            1080,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 74,
+          "source_screen_id": "scr_0432",
+          "target_screen_id": "scr_0434",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_006",
+      "target": "s_002",
+      "action": {
+        "type": "navigate_back"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 2,
+      "provenance": [
+        {
+          "trace_step_index": 75,
+          "source_screen_id": "scr_0438",
+          "target_screen_id": "scr_0439",
+          "confidence_source": "observed"
+        },
+        {
+          "trace_step_index": 80,
+          "source_screen_id": "scr_0484",
+          "target_screen_id": "scr_0485",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_003",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0015",
+        "bounds": [
+          42,
+          1001,
+          1038,
+          1127
+        ],
+        "resource_id": "history.back_home",
+        "target_resource_id": "history.back_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "history.back_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "FrameLayout#content",
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#"
+          ],
+          "bounds": [
+            42,
+            1001,
+            1038,
+            1127
+          ],
+          "depth": 7
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 76,
+          "source_screen_id": "scr_0447",
+          "target_screen_id": "scr_0449",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_003",
+      "target": "s_001",
+      "action": {
+        "type": "click",
+        "target": "e_0022",
+        "bounds": [
+          0,
+          2127,
+          255,
+          2337
+        ],
+        "resource_id": "nav.open_home",
+        "target_resource_id": "nav.open_home",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_home",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            0,
+            2127,
+            255,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 77,
+          "source_screen_id": "scr_0457",
+          "target_screen_id": "scr_0459",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_003",
+      "target": "s_002",
+      "action": {
+        "type": "click",
+        "target": "e_0026",
+        "bounds": [
+          276,
+          2127,
+          530,
+          2337
+        ],
+        "resource_id": "nav.open_recipients",
+        "target_resource_id": "nav.open_recipients",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_recipients",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            276,
+            2127,
+            530,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 78,
+          "source_screen_id": "scr_0467",
+          "target_screen_id": "scr_0469",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_003",
+      "target": "s_004",
+      "action": {
+        "type": "click",
+        "target": "e_0034",
+        "bounds": [
+          826,
+          2127,
+          1080,
+          2337
+        ],
+        "resource_id": "nav.open_settings",
+        "target_resource_id": "nav.open_settings",
+        "target_class_name": "android.view.View",
+        "target_selector": {
+          "resource_id": "nav.open_settings",
+          "text": "",
+          "content_description": "",
+          "class_name": "android.view.View",
+          "nearby_text": "",
+          "ancestor_chain": [
+            "ComposeView#",
+            "View#",
+            "View#",
+            "View#app.bottom_nav",
+            "View#"
+          ],
+          "bounds": [
+            826,
+            2127,
+            1080,
+            2337
+          ],
+          "depth": 8
+        },
+        "target_class": "android.view.View"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 79,
+          "source_screen_id": "scr_0477",
+          "target_screen_id": "scr_0479",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_009",
+      "target": "s_008",
+      "action": {
+        "type": "navigate_back"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 81,
+          "source_screen_id": "scr_0491",
+          "target_screen_id": "scr_0492",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_010",
+      "target": "s_008",
+      "action": {
+        "type": "navigate_back"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 82,
+          "source_screen_id": "scr_0499",
+          "target_screen_id": "scr_0500",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    },
+    {
+      "source": "s_011",
+      "target": "s_001",
+      "action": {
+        "type": "navigate_back"
+      },
+      "guard": null,
+      "confidence": 1.0,
+      "low_trust": false,
+      "observed_count": 1,
+      "provenance": [
+        {
+          "trace_step_index": 83,
+          "source_screen_id": "scr_0507",
+          "target_screen_id": "scr_0508",
+          "confidence_source": "observed"
+        }
+      ],
+      "guard_contract": null,
+      "requires_guard": false,
+      "guard_admission_status": null,
+      "guard_admission_reason": ""
+    }
+  ],
+  "evolution_log": [
+    {
+      "action": "behavioral_quotient",
+      "representative": "s_003",
+      "absorbed": [
+        "s_012"
+      ],
+      "label_hash": "99f4286db7b94f91",
+      "block_id": "b_00003"
+    }
+  ],
+  "sub_fsm_templates": {}
+}

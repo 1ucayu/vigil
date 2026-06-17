@@ -134,6 +134,7 @@ class TestAnthropicProvider:
             call_kwargs = mock_client.messages.create.call_args.kwargs
             assert "temperature" not in call_kwargs
             assert "max_tokens" in call_kwargs
+            assert call_kwargs["thinking"] == {"type": "disabled"}
 
 
 class TestOpenAIProvider:
@@ -219,6 +220,24 @@ class TestRetry:
 
             with patch("vigil.core.llm_client.time.sleep"), pytest.raises(Exception, match="429"):
                 client.generate("sys", "user")
+
+    @patch("openai.OpenAI")
+    def test_proxy_post_retries_httpx_timeout(self, mock_openai_cls: MagicMock) -> None:
+        import httpx
+
+        mock_openai_cls.return_value = MagicMock()
+        client = LlmClient(LLMConfig(provider="proxy", proxy_model="claude-haiku-4-5"))
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"ok": True}
+
+        with (
+            patch("httpx.post", side_effect=[httpx.ReadTimeout("timed out"), response]) as post,
+            patch("vigil.core.llm_client.time.sleep"),
+        ):
+            result = client._proxy_post_json("/messages", {"model": "claude-haiku-4-5"})
+
+        assert result == {"ok": True}
+        assert post.call_count == 2
 
 
 class TestImagePreprocessing:
@@ -433,6 +452,7 @@ class TestProxyProvider:
         assert calls[0][0] == "/messages"
         assert calls[0][1]["model"] == "claude-haiku-4-5"
         assert calls[0][1]["max_tokens"] == 1234
+        assert calls[0][1]["thinking"] == {"type": "disabled"}
         mock_openai_cls.return_value.chat.completions.create.assert_not_called()
 
     @patch("openai.OpenAI")
@@ -469,6 +489,7 @@ class TestProxyProvider:
         assert blocks[0] == {"type": "text", "text": "img"}
         assert blocks[1]["type"] == "image"
         assert blocks[2] == {"type": "text", "text": "prompt"}
+        assert calls[0][1]["thinking"] == {"type": "disabled"}
         mock_openai_cls.return_value.chat.completions.create.assert_not_called()
 
 
@@ -592,7 +613,30 @@ class TestStructuredOutput:
         assert payload["tool_choice"] == {"type": "tool", "name": "Sch"}
         assert payload["tools"][0]["strict"] is True
         assert payload["max_tokens"] == 12345
+        assert payload["thinking"] == {"type": "disabled"}
         assert "temperature" not in payload
+
+    def test_proxy_anthropic_max_tokens_uses_non_streaming_ceiling(self) -> None:
+        assert (
+            LlmClient._proxy_anthropic_max_tokens(
+                {
+                    "capabilities": {
+                        "limits": {
+                            "max_output_tokens": 64000,
+                            "max_non_streaming_output_tokens": 8192,
+                        }
+                    }
+                }
+            )
+            == 8192
+        )
+        assert (
+            LlmClient._proxy_anthropic_max_tokens(
+                {"capabilities": {"limits": {"max_output_tokens": 64000}}}
+            )
+            == 16000
+        )
+        assert LlmClient._proxy_anthropic_max_tokens({}) == 16000
 
     @patch("openai.OpenAI")
     def test_proxy_google_chat_function_tool(self, mock_openai_cls: MagicMock) -> None:
@@ -903,6 +947,7 @@ class TestStructuredOutput:
             assert call_kwargs["tools"][0]["name"] == "Sch"
             # Anthropic REQUIRES max_tokens; it is the one documented cap.
             assert "max_tokens" in call_kwargs
+            assert call_kwargs["thinking"] == {"type": "disabled"}
 
     @patch("openai.OpenAI")
     def test_proxy_refusal_yields_no_parsed(self, mock_openai_cls: MagicMock) -> None:

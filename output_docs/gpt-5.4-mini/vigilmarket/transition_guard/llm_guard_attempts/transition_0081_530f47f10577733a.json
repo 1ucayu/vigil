@@ -1,0 +1,102 @@
+{
+  "transition_index": 81,
+  "prompt_hash": "530f47f10577733a",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_012",
+  "target": "s_013",
+  "action": {
+    "type": "click",
+    "target": "e_0012",
+    "bounds": [
+      79,
+      689,
+      1001,
+      815
+    ],
+    "resource_id": "address_select.address.home",
+    "target_resource_id": "address_select.address.home",
+    "target_class_name": "android.view.View",
+    "target_selector": {
+      "resource_id": "address_select.address.home",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.view.View",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "ComposeView#",
+        "View#",
+        "View#",
+        "View#",
+        "View#address_select.address_card.home"
+      ],
+      "bounds": [
+        79,
+        689,
+        1001,
+        815
+      ],
+      "depth": 8
+    },
+    "target_class": "android.view.View"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "item_binding",
+    "required": true,
+    "required_slots": [],
+    "predicates": [
+      {
+        "predicate_type": "read",
+        "element": "address_select_address_home",
+        "property": "text",
+        "operator": "==",
+        "expected": {
+          "kind": "literal",
+          "value": "Home",
+          "slot": null,
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      },
+      {
+        "predicate_type": "action",
+        "element": "action",
+        "property": "target_resource_id",
+        "operator": "==",
+        "expected": {
+          "kind": "literal",
+          "value": "address_select.address.home",
+          "slot": null,
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"item_binding\",\"slots\":[],\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"address_select_address_home\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Home\",\"slot\":\"\"}},{\"predicate_type\":\"action\",\"element\":\"action\",\"property\":\"target_resource_id\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"address_select.address.home\",\"slot\":\"\"}}]}}"
+  ]
+}

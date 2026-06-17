@@ -1,0 +1,80 @@
+{
+  "$comment": "Ground-truth DSL guards for guard-required transitions. Evaluator-only.",
+  "app_id": "com.vigil.market",
+  "guards": [
+    {
+      "transition": "product_detail.add_to_cart",
+      "from": "product_detail",
+      "to": "cart",
+      "dsl": [
+        "action(type) == \"click\"",
+        "read(product_detail.name, text) == $intent.product_name"
+      ]
+    },
+    {
+      "transition": "cart.checkout",
+      "from": "cart",
+      "to": "address_select",
+      "dsl": [
+        "action(type) == \"click\"",
+        "read(cart.item_name, text) == $intent.product_name",
+        "value(cart.qty_value) == $intent.qty",
+        "value(cart.total) <= $intent.max_amount"
+      ]
+    },
+    {
+      "transition": "address_select.address.<addr>",
+      "from": "address_select",
+      "to": "payment_confirm",
+      "dsl": [
+        "action(type) == \"click\"",
+        "contains(address_select.address, $intent.address)"
+      ]
+    },
+    {
+      "transition": "payment_confirm.pay",
+      "from": "payment_confirm",
+      "to": "payment_dialog",
+      "dsl": [
+        "action(type) == \"click\"",
+        "read(payment.product_name, text) == $intent.product_name",
+        "contains(payment.address_label, $intent.address)",
+        "value(payment.quantity) == $intent.qty",
+        "value(payment.total_amount) <= $intent.max_amount"
+      ]
+    },
+    {
+      "transition": "payment_dialog.confirm",
+      "from": "payment_dialog",
+      "to": "payment_success",
+      "dsl": [
+        "action(type) == \"click\"",
+        "read(payment.product_name, text) == $intent.product_name",
+        "contains(payment.address_label, $intent.address)",
+        "value(payment.total_amount) <= $intent.max_amount"
+      ]
+    },
+    {
+      "transition": "remove_dialog.confirm",
+      "from": "remove_dialog",
+      "to": "cart_empty",
+      "dsl": [
+        "action(type) == \"click\""
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "state": "payment_confirm",
+      "phi": [
+        "value(payment.total_amount) >= 0"
+      ]
+    },
+    {
+      "state": "payment_success",
+      "phi": [
+        "contains(payment_success.title, \"Payment successful\")"
+      ]
+    }
+  ]
+}

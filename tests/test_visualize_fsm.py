@@ -165,6 +165,14 @@ def test_default_output_path_uses_output_docs(sample_fsm: AppFSM, tmp_path: Path
     assert default_output_path(fsm_path, "html") == expected_html
 
 
+def test_default_output_path_uses_model_scoped_visualization_dir() -> None:
+    fsm_path = Path("output_docs/gpt-5.4-mini/vigilmarket/transition_guard/fsm.json")
+
+    assert default_output_path(fsm_path, "html") == (
+        OUTPUT_DOCS_DIR / "visualization" / "gpt-5.4-mini" / "vigilmarket.html"
+    )
+
+
 def test_explicit_docs_output_path_redirects_to_output_docs() -> None:
     assert resolve_generated_output_path("docs/settings_fsm.png", "ignored.png") == (
         OUTPUT_DOCS_DIR / "settings_fsm.png"
@@ -314,8 +322,8 @@ def test_render_fsm_compare_html_includes_gold_explored_details_and_screenshots(
     assert "Golden FSM" in html
     assert "Explored FSM" in html
     assert "#workbench.inspector-open" in html
-    assert "grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);" in html
-    assert "#explored-panel { grid-column: 1; grid-row: 2;" in html
+    assert "grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 0;" in html
+    assert "#explored-panel { grid-column: 2; grid-row: 1;" in html
     assert "fitToGraph()" in html
     assert "edge-hit" in html
     assert "startNodeDrag" in html

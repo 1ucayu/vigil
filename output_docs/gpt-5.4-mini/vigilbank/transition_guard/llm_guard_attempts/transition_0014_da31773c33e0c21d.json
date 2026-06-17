@@ -1,0 +1,73 @@
+{
+  "transition_index": 14,
+  "prompt_hash": "da31773c33e0c21d",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_006",
+  "target": "s_007",
+  "action": {
+    "type": "input_text",
+    "target": "e_0017",
+    "bounds": [
+      42,
+      1095,
+      1038,
+      1263
+    ],
+    "resource_id": "transfer.memo.input",
+    "target_resource_id": "transfer.memo.input",
+    "target_class_name": "android.widget.EditText",
+    "target_selector": {
+      "resource_id": "transfer.memo.input",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.widget.EditText",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "FrameLayout#content",
+        "ComposeView#",
+        "View#",
+        "View#",
+        "View#"
+      ],
+      "bounds": [
+        42,
+        1095,
+        1038,
+        1263
+      ],
+      "depth": 7
+    },
+    "text": "test123",
+    "target_text": "test123",
+    "target_class": "android.widget.EditText"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "none",
+    "required": false,
+    "required_slots": [],
+    "predicates": [],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"none\",\"slots\":[],\"predicates\":[]}}"
+  ]
+}

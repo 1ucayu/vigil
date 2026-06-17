@@ -1,0 +1,79 @@
+[
+  {
+    "state_id": "s_001",
+    "status": "annotated",
+    "screen_id": "scr_0001",
+    "confidence": 0.5,
+    "alt_text_chars": 450
+  },
+  {
+    "state_id": "s_002",
+    "status": "annotated",
+    "screen_id": "scr_0005",
+    "confidence": 0.5,
+    "alt_text_chars": 336
+  },
+  {
+    "state_id": "s_003",
+    "status": "annotated",
+    "screen_id": "scr_0010",
+    "confidence": 0.5,
+    "alt_text_chars": 381
+  },
+  {
+    "state_id": "s_004",
+    "status": "annotated",
+    "screen_id": "scr_0015",
+    "confidence": 0.5,
+    "alt_text_chars": 347
+  },
+  {
+    "state_id": "s_005",
+    "status": "annotated",
+    "screen_id": "scr_0023",
+    "confidence": 0.5,
+    "alt_text_chars": 486
+  },
+  {
+    "state_id": "s_006",
+    "status": "annotated",
+    "screen_id": "scr_0048",
+    "confidence": 0.5,
+    "alt_text_chars": 451
+  },
+  {
+    "state_id": "s_007",
+    "status": "annotated",
+    "screen_id": "scr_0063",
+    "confidence": 0.5,
+    "alt_text_chars": 436
+  },
+  {
+    "state_id": "s_008",
+    "status": "annotated",
+    "screen_id": "scr_0149",
+    "confidence": 0.5,
+    "alt_text_chars": 507
+  },
+  {
+    "state_id": "s_009",
+    "status": "annotated",
+    "screen_id": "scr_0228",
+    "confidence": 0.5,
+    "alt_text_chars": 413
+  },
+  {
+    "state_id": "s_010",
+    "status": "annotated",
+    "screen_id": "scr_0242",
+    "confidence": 0.5,
+    "alt_text_chars": 530
+  },
+  {
+    "state_id": "s_011",
+    "status": "annotated",
+    "screen_id": "scr_0303",
+    "confidence": 0.5,
+    "alt_text_chars": 326
+  }
+]

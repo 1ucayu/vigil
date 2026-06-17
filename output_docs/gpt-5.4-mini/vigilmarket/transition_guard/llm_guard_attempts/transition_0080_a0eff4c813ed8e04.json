@@ -1,0 +1,87 @@
+{
+  "transition_index": 80,
+  "prompt_hash": "a0eff4c813ed8e04",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_011",
+  "target": "s_006",
+  "action": {
+    "type": "click",
+    "target": "e_0013",
+    "bounds": [
+      585,
+      1293,
+      844,
+      1419
+    ],
+    "resource_id": "remove_dialog.confirm",
+    "target_resource_id": "remove_dialog.confirm",
+    "target_class_name": "android.view.View",
+    "target_selector": {
+      "resource_id": "remove_dialog.confirm",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.view.View",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "ViewGroup#",
+        "View#",
+        "View#",
+        "View#remove_dialog",
+        "View#"
+      ],
+      "bounds": [
+        585,
+        1293,
+        844,
+        1419
+      ],
+      "depth": 8
+    },
+    "target_class": "android.view.View"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "confirm_commit",
+    "required": true,
+    "required_slots": [],
+    "predicates": [
+      {
+        "predicate_type": "action",
+        "element": "remove_dialog_confirm",
+        "property": "target_resource_id",
+        "operator": "==",
+        "expected": {
+          "kind": "literal",
+          "value": "remove_dialog.confirm",
+          "slot": null,
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"confirm_commit\",\"slots\":[],\"predicates\":[{\"predicate_type\":\"action\",\"element\":\"remove_dialog_confirm\",\"property\":\"target_resource_id\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"remove_dialog.confirm\",\"slot\":\"\"}}]}}"
+  ]
+}

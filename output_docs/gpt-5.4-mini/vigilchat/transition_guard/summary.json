@@ -1,0 +1,30 @@
+{
+  "app": "chat",
+  "package": "com_vigil_chat_fidelity",
+  "trace_package": "com_vigil_chat",
+  "input_fsm": "output_docs/gpt-5.4-mini/vigilchat/explored_fsm/fsm.json",
+  "output_fsm": "output_docs/gpt-5.4-mini/vigilchat/transition_guard/fsm.json",
+  "trace": "data/apps/com_vigil_chat/traces/exploration_20260610_183602.json",
+  "states": 13,
+  "transitions": 233,
+  "visual_annotated": 0,
+  "visual_failed": 0,
+  "guard_source": "llm",
+  "guard_use_images": false,
+  "guards_attached": 62,
+  "guard_origin_counts": {
+    "llm": 233
+  },
+  "guard_status_counts": {
+    "admitted": 220,
+    "low_trust": 10,
+    "rejected": 3
+  },
+  "invariant_source": "audit",
+  "invariants_attached": 0,
+  "invariant_states": 0,
+  "invariants_admitted_run": 0,
+  "invariant_hints": 0,
+  "invariants_rejected": 0,
+  "min_invariant_observations": 2
+}

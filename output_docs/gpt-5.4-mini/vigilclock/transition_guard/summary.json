@@ -1,0 +1,29 @@
+{
+  "app": "clock",
+  "package": "com_vigil_clock_fidelity",
+  "trace_package": "com_vigil_clock",
+  "input_fsm": "output_docs/gpt-5.4-mini/vigilclock/explored_fsm/fsm.json",
+  "output_fsm": "output_docs/gpt-5.4-mini/vigilclock/transition_guard/fsm.json",
+  "trace": "data/apps/com_vigil_clock/traces/exploration_20260610_213433.json",
+  "states": 14,
+  "transitions": 173,
+  "visual_annotated": 0,
+  "visual_failed": 0,
+  "guard_source": "llm",
+  "guard_use_images": false,
+  "guards_attached": 15,
+  "guard_origin_counts": {
+    "llm": 173
+  },
+  "guard_status_counts": {
+    "admitted": 167,
+    "low_trust": 6
+  },
+  "invariant_source": "audit",
+  "invariants_attached": 0,
+  "invariant_states": 0,
+  "invariants_admitted_run": 0,
+  "invariant_hints": 0,
+  "invariants_rejected": 0,
+  "min_invariant_observations": 2
+}

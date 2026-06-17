@@ -40,6 +40,8 @@ _BACKOFF_BASE = 1  # seconds
 # only output cap in this module and exists purely to satisfy the SDK contract, not to limit
 # generation. It is set to a large model-output ceiling, never a cost/token budget.
 _ANTHROPIC_MAX_OUTPUT_TOKENS = 64000
+_ANTHROPIC_NON_STREAMING_MAX_OUTPUT_TOKENS = 16000
+_PROXY_POST_READ_TIMEOUT_SECONDS = 90
 
 # Substrings that mark a provider/proxy rejecting the JSON-Schema structured-output request
 # (as opposed to an unrelated 400). Matched case-insensitively against the error text.
@@ -74,6 +76,12 @@ class _ProxyProbeStatus:
 
 class _ProxyStructuredUnavailableError(Exception):
     """Raised when a proxy structured-output strategy cannot be used."""
+
+
+def _disable_anthropic_thinking(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep Anthropic Messages calls lean and avoid hidden extended-thinking tails."""
+    payload["thinking"] = {"type": "disabled"}
+    return payload
 
 
 def _extract_json(text: str) -> str:
@@ -408,6 +416,7 @@ class LlmClient:
             # not a project budget or artificial truncation limit.
             "max_tokens": self._proxy_anthropic_max_tokens(metadata),
         }
+        _disable_anthropic_thinking(payload)
         self._add_sampling_params(payload)
         response = self._proxy_post_json("/messages", payload)
         return self._proxy_messages_text(response)
@@ -723,6 +732,7 @@ class LlmClient:
             "tool_choice": {"type": "tool", "name": schema_name},
             "max_tokens": self._proxy_anthropic_max_tokens(metadata),
         }
+        _disable_anthropic_thinking(payload)
         self._add_sampling_params(payload)
         response = self._proxy_post_json("/messages", payload)
         block = next(
@@ -969,7 +979,13 @@ class LlmClient:
         url = self._proxy_url(path)
 
         def _call() -> dict[str, Any]:
-            response = httpx.post(url, headers=self._proxy_headers(), json=payload, timeout=180)
+            timeout = httpx.Timeout(
+                connect=10,
+                read=_PROXY_POST_READ_TIMEOUT_SECONDS,
+                write=30,
+                pool=10,
+            )
+            response = httpx.post(url, headers=self._proxy_headers(), json=payload, timeout=timeout)
             if response.status_code >= 400:
                 detail = response.text
                 if self._is_schema_unsupported(Exception(detail)):
@@ -1097,10 +1113,10 @@ class LlmClient:
     @staticmethod
     def _proxy_anthropic_max_tokens(metadata: dict[str, Any]) -> int:
         limits = (metadata.get("capabilities") or {}).get("limits") or {}
-        value = limits.get("max_output_tokens") or limits.get("max_non_streaming_output_tokens")
+        value = limits.get("max_non_streaming_output_tokens") or limits.get("max_output_tokens")
         if isinstance(value, int) and value > 0:
-            return value
-        return _ANTHROPIC_MAX_OUTPUT_TOKENS
+            return min(value, _ANTHROPIC_NON_STREAMING_MAX_OUTPUT_TOKENS)
+        return _ANTHROPIC_NON_STREAMING_MAX_OUTPUT_TOKENS
 
     def _openai_response_input_content(
         self,
@@ -1335,6 +1351,7 @@ class LlmClient:
                 "tool_choice": {"type": "tool", "name": schema_name},
                 "max_tokens": _ANTHROPIC_MAX_OUTPUT_TOKENS,
             }
+            _disable_anthropic_thinking(kwargs)
             self._add_sampling_params(kwargs)
             return self._client.messages.create(**kwargs)
 
@@ -1508,6 +1525,7 @@ class LlmClient:
                 "messages": [{"role": "user", "content": user_prompt}],
                 "max_tokens": _ANTHROPIC_MAX_OUTPUT_TOKENS,
             }
+            _disable_anthropic_thinking(kwargs)
             self._add_sampling_params(kwargs)
             return self._client.messages.create(**kwargs)
 
@@ -1535,6 +1553,7 @@ class LlmClient:
                 "messages": [{"role": "user", "content": content}],
                 "max_tokens": _ANTHROPIC_MAX_OUTPUT_TOKENS,
             }
+            _disable_anthropic_thinking(kwargs)
             self._add_sampling_params(kwargs)
             return self._client.messages.create(**kwargs)
 
@@ -1689,6 +1708,13 @@ class LlmClient:
 
     def _is_retryable(self, exc: Exception) -> bool:
         """Check if an exception is transient and should be retried."""
+        try:
+            import httpx
+        except Exception:  # pragma: no cover - httpx is an optional transport dependency.
+            httpx = None  # type: ignore[assignment]
+        if httpx is not None and isinstance(exc, httpx.TimeoutException | httpx.NetworkError):
+            return True
+
         exc_type = type(exc).__name__
         # Rate limit and transient errors
         retryable_names = {"RateLimitError", "APIConnectionError", "ClientError", "ServerError"}

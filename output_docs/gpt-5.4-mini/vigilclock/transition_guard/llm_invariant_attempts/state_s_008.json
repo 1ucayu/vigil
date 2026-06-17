@@ -1,0 +1,78 @@
+{
+  "state_id": "s_008",
+  "parsed_ok": true,
+  "schema_name": "LlmInvariantGuardResponse",
+  "schema_hash": "70ae64e79636881b",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "spec_hash": "835f93c6631a57bf",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "packet": {
+    "state_invariant_candidates": [
+      {
+        "kind": "structural",
+        "expr": "read(screen_marker, text) == 'screen:timer_setup'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(timer_setup_title, text) == 'Pick a duration'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(app_top_bar_title, text) == 'Timer'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "status",
+        "expr": "read(timer_duration_d_5m, is_checked) == true",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      }
+    ],
+    "transition_guard_candidates": [],
+    "effect_invariant_hints": [],
+    "rejected_candidates": [],
+    "notes": ""
+  },
+  "raw_responses": [
+    "{\"candidates\":[{\"kind\":\"structural\",\"expr\":\"read(screen_marker, text) == 'screen:timer_setup'\"},{\"kind\":\"stable_label\",\"expr\":\"read(timer_setup_title, text) == 'Pick a duration'\"},{\"kind\":\"stable_label\",\"expr\":\"read(app_top_bar_title, text) == 'Timer'\"},{\"kind\":\"status\",\"expr\":\"read(timer_duration_d_5m, is_checked) == true\"}]}"
+  ]
+}

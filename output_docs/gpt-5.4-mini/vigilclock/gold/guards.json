@@ -1,0 +1,87 @@
+{
+  "$comment": "Ground-truth DSL guards for guard-required transitions and state invariants. Evaluator-only.",
+  "app_id": "com.vigil.clock",
+  "guards": [
+    {
+      "transition": "alarm.toggle.<alarm_id>",
+      "from": "alarm_list",
+      "to": "alarm_list",
+      "dsl": [
+        "action(type) == \"click\"",
+        "$bind.alarm_id == $intent.alarm_id"
+      ]
+    },
+    {
+      "transition": "alarm.edit.<alarm_id>",
+      "from": "alarm_list",
+      "to": "alarm_edit",
+      "dsl": [
+        "action(type) == \"click\"",
+        "$bind.alarm_id == $intent.alarm_id"
+      ]
+    },
+    {
+      "transition": "alarm_edit.save",
+      "from": "alarm_edit",
+      "to": "alarm_list",
+      "dsl": [
+        "action(type) == \"click\"",
+        "value(alarm_edit.hour) == $intent.hour",
+        "value(alarm_edit.minute) == $intent.minute"
+      ]
+    },
+    {
+      "transition": "timer.duration.<duration_id>",
+      "from": "timer_setup",
+      "to": "timer_setup",
+      "dsl": [
+        "action(type) == \"click\"",
+        "$bind.duration_id == $intent.duration_id"
+      ]
+    },
+    {
+      "transition": "timer.start",
+      "from": "timer_setup",
+      "to": "timer_running",
+      "dsl": [
+        "action(type) == \"click\"",
+        "value(timer.selected_duration_id) == $intent.duration_id"
+      ]
+    },
+    {
+      "transition": "stopwatch.lap",
+      "from": "stopwatch_running",
+      "to": "stopwatch_running",
+      "dsl": [
+        "action(type) == \"click\"",
+        "state == \"stopwatch_running\""
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "state": "timer_done",
+      "phi": [
+        "value(timer.remaining_ms) == 0"
+      ]
+    },
+    {
+      "state": "stopwatch_idle",
+      "phi": [
+        "value(stopwatch.elapsed_ms) == 0"
+      ]
+    },
+    {
+      "state": "timer_running",
+      "phi": [
+        "value(timer.remaining_ms) >= 0"
+      ]
+    },
+    {
+      "state": "timer_paused",
+      "phi": [
+        "value(timer.remaining_ms) >= 0"
+      ]
+    }
+  ]
+}

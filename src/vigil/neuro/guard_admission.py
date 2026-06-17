@@ -12,9 +12,11 @@ guarantees the resulting DSL is **runtime-executable by the current**
   (``action_type``/``target_text``/``target_resource_id``/``target_content_desc``), with
   ``type`` normalized to ``action_type``. ``action(text)``/``action(value)`` are rejected.
 - ``$intent.*`` slots must be declared in ``contract.required_slots``.
-- ``semantic_binding_required`` and ``semantic_binding_incomplete`` are compatibility
-  metadata only. Admission validates executability; it does not impose an extra
-  semantic-completeness policy.
+- Generic exploration input placeholders are rejected as guard literals; they are trace
+  evidence that a field accepts input, not task intent.
+- Required semantic guard kinds must contain at least one executable ``$intent.*`` binding
+  predicate. Action-identity or enabledness-only candidates are marked ``LOW_TRUST`` and
+  are not attached.
 
 Anything that cannot be guaranteed executable is ``REJECTED`` or ``LOW_TRUST`` — never
 attached.
@@ -34,9 +36,11 @@ from vigil.core.paths import resolve_dsl_grammar_path
 from vigil.models.guard import (
     GuardAdmissionStatus,
     GuardContract,
+    GuardKind,
     PredicateSpec,
     ValueRef,
 )
+from vigil.neuro.exploration_inputs import is_exploration_synthetic_input
 from vigil.neuro.guard_dsl_compiler import compile_predicate_spec
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -102,6 +106,35 @@ _ALLOWED_ACTION_PROPS: frozenset[str] = frozenset(
     }
 )
 _CONTAINMENT_OPS: frozenset[str] = frozenset({"contains", "not_contains"})
+_VALID_ACTION_TYPE_LITERALS: frozenset[str] = frozenset(
+    {
+        "click",
+        "long_press",
+        "input_text",
+        "scroll_up",
+        "scroll_down",
+        "navigate_back",
+        "navigate_home",
+        "swipe",
+        "scroll",
+    }
+)
+_SEMANTIC_GUARD_KINDS: frozenset[GuardKind] = frozenset(
+    {
+        GuardKind.ITEM_BINDING,
+        GuardKind.INPUT_BINDING,
+        GuardKind.FORM_CHECK,
+        GuardKind.CONFIRM_COMMIT,
+        GuardKind.SAFETY_CHECK,
+    }
+)
+_LLM_LEAKAGE_MARKERS: tuple[str, ...] = (
+    "to=final",
+    "LlmTransitionGuardResponse",
+    "malformed output",
+    "code omitted",
+    "```",
+)
 
 # Registry-stored string properties usable for offline literal proof-of-false.
 _KNOWN_STRING_PROPS: tuple[str, ...] = (
@@ -130,6 +163,23 @@ def _literal_type_error(ptype: str, prop: str, value: object) -> str:
     return ""
 
 
+def _literal_content_error(ptype: str, prop: str, value: object) -> str:
+    """Reject string literals that are syntactically valid but semantically unusable."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if is_exploration_synthetic_input(text):
+        return (
+            f"literal {text!r} is an exploration synthetic input placeholder; "
+            "use a declared intent slot instead"
+        )
+    if any(marker in text for marker in _LLM_LEAKAGE_MARKERS):
+        return "literal appears to contain LLM/tool-output leakage"
+    if ptype == "action" and prop == "action_type" and text not in _VALID_ACTION_TYPE_LITERALS:
+        return f"action_type literal {text!r} is not a valid runtime action type"
+    return ""
+
+
 def _normalize_literal_value(ptype: str, prop: str, expected: ValueRef | None) -> ValueRef | None:
     """Normalize narrow LLM JSON literal slips that preserve the typed meaning."""
     if expected is None or expected.kind != "literal":
@@ -150,6 +200,7 @@ class GuardAdmissionResult(BaseModel):
     guard: str | None = None
     reason: str = ""
     rejected_predicates: list[str] = Field(default_factory=list)
+    semantic_binding_required: bool = False
     semantic_binding_incomplete: bool = False
 
 
@@ -228,6 +279,9 @@ def _lower_predicate(
             type_error = _literal_type_error(ptype, "", expected.value)
             if type_error:
                 return _Lowered(None, type_error)
+            content_error = _literal_content_error(ptype, "", expected.value)
+            if content_error:
+                return _Lowered(None, content_error)
         if ptype == "read":
             if not pred.property or pred.property not in _READABLE_PROPS:
                 return _Lowered(None, f"property '{pred.property}' not runtime-readable")
@@ -243,6 +297,9 @@ def _lower_predicate(
                 type_error = _literal_type_error(ptype, pred.property, expected.value)
                 if type_error:
                     return _Lowered(None, type_error)
+                content_error = _literal_content_error(ptype, pred.property, expected.value)
+                if content_error:
+                    return _Lowered(None, content_error)
             # Offline literal proof-of-false on registry-known string properties.
             if (
                 entry is not None
@@ -256,6 +313,10 @@ def _lower_predicate(
                         None,
                         f"literal predicate proven false on '{key}.{pred.property}'",
                     )
+        if ptype in {"value", "contains"} and expected is not None and expected.kind == "literal":
+            content_error = _literal_content_error(ptype, "", expected.value)
+            if content_error:
+                return _Lowered(None, content_error)
         lowered = pred.model_copy(update={"element": key})
 
     elif ptype == "action":
@@ -268,12 +329,19 @@ def _lower_predicate(
             type_error = _literal_type_error(ptype, prop, expected.value)
             if type_error:
                 return _Lowered(None, type_error)
+            content_error = _literal_content_error(ptype, prop, expected.value)
+            if content_error:
+                return _Lowered(None, content_error)
         lowered = pred.model_copy(update={"property": prop})
 
     compiled = compile_predicate_spec(lowered)
     if compiled is None:
         return _Lowered(None, f"{ptype} predicate not compilable")
     return _Lowered(compiled, "", is_binding)
+
+
+def _semantic_binding_required(contract: GuardContract) -> bool:
+    return bool(contract.required and contract.kind in _SEMANTIC_GUARD_KINDS)
 
 
 def admit_guard_contract(
@@ -284,6 +352,7 @@ def admit_guard_contract(
     """Admit (or reject) a guard contract as a runtime-executable guard."""
     registry = evidence.source_registry
     declared = {slot.name for slot in contract.required_slots}
+    semantic_binding_required = _semantic_binding_required(contract)
 
     surviving: list[str] = []
     rejected: list[str] = []
@@ -305,15 +374,44 @@ def admit_guard_contract(
             guard=None,
             reason="rejected non-executable predicate(s): " + "; ".join(rejected),
             rejected_predicates=rejected,
+            semantic_binding_required=semantic_binding_required,
         )
 
     # No executable predicate at all.
     if not surviving:
+        if semantic_binding_required:
+            return GuardAdmissionResult(
+                admitted=False,
+                status=GuardAdmissionStatus.LOW_TRUST,
+                guard=None,
+                reason="semantic binding incomplete: no executable predicate",
+                semantic_binding_required=True,
+                semantic_binding_incomplete=True,
+            )
         return GuardAdmissionResult(
             admitted=True,
             status=GuardAdmissionStatus.ADMITTED,
             guard=None,
             reason="no runtime-executable predicate",
+            semantic_binding_required=semantic_binding_required,
+        )
+
+    has_binding = any(
+        lowered.is_binding
+        for pred in contract.predicates
+        if (lowered := _lower_predicate(pred, registry, declared)).compiled is not None
+    )
+    if semantic_binding_required and not has_binding:
+        return GuardAdmissionResult(
+            admitted=False,
+            status=GuardAdmissionStatus.LOW_TRUST,
+            guard=None,
+            reason=(
+                "semantic binding incomplete: required semantic guard has no executable "
+                "$intent.* binding predicate"
+            ),
+            semantic_binding_required=True,
+            semantic_binding_incomplete=True,
         )
 
     guard = " && ".join(surviving)
@@ -325,6 +423,7 @@ def admit_guard_contract(
             status=GuardAdmissionStatus.REJECTED,
             guard=None,
             reason=f"parse error: {exc}",
+            semantic_binding_required=semantic_binding_required,
         )
 
     return GuardAdmissionResult(
@@ -332,5 +431,6 @@ def admit_guard_contract(
         status=GuardAdmissionStatus.ADMITTED,
         guard=guard,
         reason=f"admitted: {len(surviving)} executable predicate(s)",
+        semantic_binding_required=semantic_binding_required,
         semantic_binding_incomplete=False,
     )

@@ -1,0 +1,86 @@
+{
+  "transition_index": 9,
+  "prompt_hash": "f888b4aa0fdb1479",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_004",
+  "target": "s_004",
+  "action": {
+    "type": "click",
+    "bounds": [
+      864,
+      688,
+      1001,
+      814
+    ],
+    "resource_id": "settings.transfer_notifications",
+    "target_resource_id": "settings.transfer_notifications",
+    "target_class_name": "android.view.View",
+    "target_selector": {
+      "resource_id": "settings.transfer_notifications",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.view.View",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "ComposeView#",
+        "View#",
+        "View#",
+        "View#",
+        "View#settings.preferences_card"
+      ],
+      "bounds": [
+        864,
+        688,
+        1001,
+        814
+      ],
+      "depth": 8
+    },
+    "target_class": "android.view.View"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "toggle_binding",
+    "required": true,
+    "required_slots": [],
+    "predicates": [
+      {
+        "predicate_type": "action",
+        "element": "known_action",
+        "property": "target_resource_id",
+        "operator": "==",
+        "expected": {
+          "kind": "literal",
+          "value": "settings.transfer_notifications",
+          "slot": null,
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"toggle_binding\",\"slots\":[],\"predicates\":[{\"predicate_type\":\"action\",\"element\":\"known_action\",\"property\":\"target_resource_id\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"settings.transfer_notifications\",\"slot\":\"\"}}]}}"
+  ]
+}

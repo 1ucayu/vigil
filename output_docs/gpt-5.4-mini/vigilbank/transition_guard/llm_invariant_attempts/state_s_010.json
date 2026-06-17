@@ -1,0 +1,65 @@
+{
+  "state_id": "s_010",
+  "parsed_ok": true,
+  "schema_name": "LlmInvariantGuardResponse",
+  "schema_hash": "70ae64e79636881b",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "spec_hash": "835f93c6631a57bf",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "packet": {
+    "state_invariant_candidates": [
+      {
+        "kind": "stable_label",
+        "expr": "read(screen_marker, text) == \"screen:otp_confirm\"",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(otp_confirm_title, text) == \"Enter OTP\"",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(app_top_bar_title, text) == \"OTP\"",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      }
+    ],
+    "transition_guard_candidates": [],
+    "effect_invariant_hints": [],
+    "rejected_candidates": [],
+    "notes": ""
+  },
+  "raw_responses": [
+    "{\"candidates\":[{\"kind\":\"stable_label\",\"expr\":\"read(screen_marker, text) == \\\"screen:otp_confirm\\\"\"},{\"kind\":\"stable_label\",\"expr\":\"read(otp_confirm_title, text) == \\\"Enter OTP\\\"\"},{\"kind\":\"stable_label\",\"expr\":\"read(app_top_bar_title, text) == \\\"OTP\\\"\"}]}"
+  ]
+}

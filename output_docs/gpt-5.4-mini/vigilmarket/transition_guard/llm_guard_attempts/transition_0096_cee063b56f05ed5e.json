@@ -1,0 +1,87 @@
+{
+  "transition_index": 96,
+  "prompt_hash": "cee063b56f05ed5e",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_013",
+  "target": "s_007",
+  "action": {
+    "type": "click",
+    "target": "e_0040",
+    "bounds": [
+      733,
+      2127,
+      896,
+      2337
+    ],
+    "resource_id": "nav.open_orders",
+    "target_resource_id": "nav.open_orders",
+    "target_class_name": "android.view.View",
+    "target_selector": {
+      "resource_id": "nav.open_orders",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.view.View",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "ComposeView#",
+        "View#",
+        "View#",
+        "View#app.bottom_nav",
+        "View#"
+      ],
+      "bounds": [
+        733,
+        2127,
+        896,
+        2337
+      ],
+      "depth": 8
+    },
+    "target_class": "android.view.View"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "navigation",
+    "required": true,
+    "required_slots": [],
+    "predicates": [
+      {
+        "predicate_type": "action",
+        "element": "action",
+        "property": "target_resource_id",
+        "operator": "==",
+        "expected": {
+          "kind": "literal",
+          "value": "nav.open_orders",
+          "slot": null,
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"navigation\",\"slots\":[],\"predicates\":[{\"predicate_type\":\"action\",\"element\":\"action\",\"property\":\"target_resource_id\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"nav.open_orders\",\"slot\":\"\"}}]}}"
+  ]
+}

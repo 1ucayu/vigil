@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -190,6 +191,53 @@ def test_hybrid_skip_visual_builds_llm(monkeypatch, tmp_path) -> None:
     assert captured["guard_source"] == "hybrid"
     assert captured["llm"] is sentinel
     assert captured["guard_prompt"] == script.DEFAULT_GUARD_PROMPT
+
+
+def test_model_scoped_report_root_from_selected_model(monkeypatch, tmp_path) -> None:
+    sentinel = FakeLlm()
+    monkeypatch.setattr(script, "LlmClient", lambda *_a, **_k: sentinel)
+
+    captured = _run_main(
+        monkeypatch,
+        tmp_path,
+        ["--skip-visual", "--model", "gpt-5.4-mini"],
+    )
+
+    assert captured["report_root"] == tmp_path / "reports" / "gpt-5.4-mini"
+    assert captured["llm"] is sentinel
+
+
+def test_model_scoped_report_root_sanitizes_and_deduplicates(tmp_path) -> None:
+    assert script.sanitize_model_output_dir(" claude-sonnet-4.6[1m] ") == ("claude-sonnet-4.6_1m")
+    root = tmp_path / "reports" / "gpt-5.4-mini"
+    assert script.model_scoped_report_root(root, "gpt-5.4-mini") == root
+    assert script.model_scoped_report_root(tmp_path / "reports", None) == tmp_path / "reports"
+
+
+def test_output_docs_layout_audit_paths_use_transition_guard_dir() -> None:
+    spec = script.FIDELITY_APPS[0]
+
+    assert script._app_audit_report_path(
+        Path("output_docs") / "gpt-5.4-mini",
+        spec,
+        output_docs_layout=True,
+        filename="guard_generation.json",
+    ) == (
+        Path("output_docs")
+        / "gpt-5.4-mini"
+        / spec.output_slug
+        / "transition_guard"
+        / "guard_generation.json"
+    )
+    assert (
+        script._app_audit_report_path(
+            Path("reports"),
+            spec,
+            output_docs_layout=False,
+            filename="guard_generation.json",
+        )
+        == Path("reports") / spec.name / "guard_generation.json"
+    )
 
 
 def test_audit_skip_visual_builds_no_llm(monkeypatch, tmp_path) -> None:

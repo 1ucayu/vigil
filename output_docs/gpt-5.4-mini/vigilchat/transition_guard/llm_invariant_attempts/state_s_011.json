@@ -1,0 +1,104 @@
+{
+  "state_id": "s_011",
+  "parsed_ok": true,
+  "schema_name": "LlmInvariantGuardResponse",
+  "schema_hash": "70ae64e79636881b",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "spec_hash": "835f93c6631a57bf",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "packet": {
+    "state_invariant_candidates": [
+      {
+        "kind": "stable_label",
+        "expr": "read(screen_marker, text) == 'screen:attachment_picker'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(app_top_bar_title, text) == 'Attach'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(attachment_picker_title, text) == 'Choose attachment'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(attachment_picker_item_photo_beach_label, text) == 'Beach photo'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(attachment_picker_item_doc_report_label, text) == 'Q3 report.pdf'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      },
+      {
+        "kind": "stable_label",
+        "expr": "read(attachment_picker_item_sticker_thumbs_label, text) == 'Thumbs-up sticker'",
+        "scope": "state",
+        "admission_target": "runtime_state_invariant",
+        "confidence": 0.0,
+        "evidence_count": 0,
+        "source": "llm",
+        "volatility": "unknown",
+        "provenance": [],
+        "notes": "",
+        "rejection_reason": ""
+      }
+    ],
+    "transition_guard_candidates": [],
+    "effect_invariant_hints": [],
+    "rejected_candidates": [],
+    "notes": ""
+  },
+  "raw_responses": [
+    "{\"candidates\":[{\"kind\":\"stable_label\",\"expr\":\"read(screen_marker, text) == 'screen:attachment_picker'\"},{\"kind\":\"stable_label\",\"expr\":\"read(app_top_bar_title, text) == 'Attach'\"},{\"kind\":\"stable_label\",\"expr\":\"read(attachment_picker_title, text) == 'Choose attachment'\"},{\"kind\":\"stable_label\",\"expr\":\"read(attachment_picker_item_photo_beach_label, text) == 'Beach photo'\"},{\"kind\":\"stable_label\",\"expr\":\"read(attachment_picker_item_doc_report_label, text) == 'Q3 report.pdf'\"},{\"kind\":\"stable_label\",\"expr\":\"read(attachment_picker_item_sticker_thumbs_label, text) == 'Thumbs-up sticker'\"}]}"
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "transition_index": 37,
+  "prompt_hash": "00e5a38872f52bf8",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_005",
+  "target": "s_002",
+  "action": {
+    "type": "click",
+    "target": "e_0036",
+    "bounds": [
+      794,
+      1542,
+      1001,
+      1668
+    ],
+    "resource_id": "catalog.product_row.mocha.open",
+    "target_resource_id": "catalog.product_row.mocha.open",
+    "target_class_name": "android.view.View",
+    "target_selector": {
+      "resource_id": "catalog.product_row.mocha.open",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.view.View",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "View#",
+        "View#",
+        "View#",
+        "View#catalog.list",
+        "View#catalog.product_row.mocha"
+      ],
+      "bounds": [
+        794,
+        1542,
+        1001,
+        1668
+      ],
+      "depth": 9
+    },
+    "target_class": "android.view.View"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "item_binding",
+    "required": true,
+    "required_slots": [
+      {
+        "name": "selected_item",
+        "slot_type": "string",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      }
+    ],
+    "predicates": [
+      {
+        "predicate_type": "read",
+        "element": "catalog_product_row_mocha_name",
+        "property": "text",
+        "operator": "==",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "selected_item",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"item_binding\",\"slots\":[{\"name\":\"selected_item\",\"slot_type\":\"string\"}],\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"catalog_product_row_mocha_name\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"selected_item\"}}]}}"
+  ]
+}

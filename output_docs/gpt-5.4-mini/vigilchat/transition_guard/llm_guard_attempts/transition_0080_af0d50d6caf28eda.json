@@ -1,0 +1,97 @@
+{
+  "transition_index": 80,
+  "prompt_hash": "af0d50d6caf28eda",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_041",
+  "target": "s_042",
+  "action": {
+    "type": "input_text",
+    "target": "e_0014",
+    "bounds": [
+      42,
+      1938,
+      551,
+      2085
+    ],
+    "resource_id": "thread.message_input",
+    "target_resource_id": "thread.message_input",
+    "target_class_name": "android.widget.EditText",
+    "target_selector": {
+      "resource_id": "thread.message_input",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.widget.EditText",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "FrameLayout#content",
+        "ComposeView#",
+        "View#",
+        "View#",
+        "View#"
+      ],
+      "bounds": [
+        42,
+        1938,
+        551,
+        2085
+      ],
+      "depth": 7
+    },
+    "text": "test123",
+    "target_class": "android.widget.EditText"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "input_binding",
+    "required": true,
+    "required_slots": [
+      {
+        "name": "message_text",
+        "slot_type": "string",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      }
+    ],
+    "predicates": [
+      {
+        "predicate_type": "action",
+        "element": "action",
+        "property": "input_text",
+        "operator": "==",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "message_text",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"input_binding\",\"slots\":[{\"name\":\"message_text\",\"slot_type\":\"string\"}],\"predicates\":[{\"predicate_type\":\"action\",\"element\":\"action\",\"property\":\"input_text\",\"operator\":\"==\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"message_text\"}}]}}"
+  ]
+}

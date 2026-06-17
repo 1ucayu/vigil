@@ -1,0 +1,39 @@
+{
+  "transition_index": 65,
+  "prompt_hash": "c7bb2d5011b1ca0f",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_007",
+  "target": "s_001",
+  "action": {
+    "type": "navigate_back"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "navigation",
+    "required": false,
+    "required_slots": [],
+    "predicates": [],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"navigation\",\"slots\":[],\"predicates\":[]}}"
+  ]
+}

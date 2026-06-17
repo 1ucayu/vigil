@@ -480,6 +480,7 @@ def generate_contract_guards(
         # input and are cleared for newly generated metadata.
         contract.admission_status = result.status
         contract.admission_reason = result.reason
+        contract.semantic_binding_required = result.semantic_binding_required
         contract.semantic_binding_incomplete = result.semantic_binding_incomplete
 
         # Attach metadata (no graph mutation). ``requires_guard`` is a legacy-compat flag;

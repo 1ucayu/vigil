@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import urllib.error
 import urllib.request
@@ -108,8 +109,11 @@ def main() -> None:
     parser.add_argument(
         "--report-root",
         type=Path,
-        default=Path("output_docs/fidelity_guard_generation"),
-        help="Directory for visual/guard generation reports.",
+        default=Path("output_docs"),
+        help=(
+            "Base directory for visual/guard generation reports. When a model is selected, "
+            "outputs are written under <report-root>/<model>/..."
+        ),
     )
     parser.add_argument(
         "--output-root",
@@ -122,9 +126,9 @@ def main() -> None:
         action="store_true",
         help=(
             "Use output_docs fidelity layout: input from "
-            "<report-root>/<app>/explored_fsm/fsm.json, traces from formal "
+            "<report-root>/<model>/<app>/explored_fsm/fsm.json, traces from formal "
             "data/apps/com_vigil_* directories, and output to "
-            "<report-root>/<app>/transition_guard/."
+            "<report-root>/<model>/<app>/transition_guard/."
         ),
     )
     parser.add_argument(
@@ -242,6 +246,7 @@ def main() -> None:
     args = parser.parse_args()
 
     selected = [spec for spec in FIDELITY_APPS if spec.name in set(args.apps)]
+    model = args.model
     # The LLM client is needed for visual grounding and for the LLM/hybrid guard/invariant
     # sources. Deterministic and audit generation must never query or construct the model.
     need_llm_for_guards = (not args.skip_guards) and args.guard_source in ("llm", "hybrid")
@@ -274,6 +279,7 @@ def main() -> None:
                 allow_provider_fallback=args.allow_provider_fallback,
             )
 
+    report_root = model_scoped_report_root(args.report_root, model)
     summary: list[dict[str, Any]] = []
     for spec in selected:
         summary.append(
@@ -281,7 +287,7 @@ def main() -> None:
                 spec=spec,
                 data_root=args.data_root,
                 bundle_root=args.bundle_root,
-                report_root=args.report_root,
+                report_root=report_root,
                 output_root=args.output_root,
                 output_docs_layout=args.output_docs_layout,
                 clean_output=args.clean_output,
@@ -304,10 +310,29 @@ def main() -> None:
             )
         )
 
-    summary_path = args.report_root / "summary.json"
+    summary_path = report_root / "summary.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info(f"Summary written to {summary_path}")
+
+
+def sanitize_model_output_dir(model: str | None) -> str | None:
+    """Return a filesystem-safe model directory name without changing readable ids."""
+    if model is None:
+        return None
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", model.strip())
+    slug = slug.strip("._-")
+    return slug or None
+
+
+def model_scoped_report_root(report_root: Path, model: str | None) -> Path:
+    """Scope report output by model id, avoiding duplicate model path segments."""
+    model_slug = sanitize_model_output_dir(model)
+    if model_slug is None:
+        return report_root
+    if report_root.name == model_slug:
+        return report_root
+    return report_root / model_slug
 
 
 def discover_default_model(models_url: str, *, require_structured: bool = False) -> str:
@@ -450,12 +475,12 @@ def run_one_app(
     if output_docs_layout:
         app_data_dir = data_root / spec.trace_package
         fsm_path = report_root / spec.output_slug / "explored_fsm" / "fsm.json"
-        app_report_dir = report_root / spec.output_slug / "transition_guard"
+        app_report_dir = _app_report_dir(report_root, spec, output_docs_layout=True)
     else:
         app_data_dir = data_root / spec.package
         bundle_dir = bundle_root / spec.package
         fsm_path = bundle_dir / "fsm.json"
-        app_report_dir = report_root / spec.name
+        app_report_dir = _app_report_dir(report_root, spec, output_docs_layout=False)
     if not fsm_path.exists():
         raise SystemExit(f"FSM bundle missing for {spec.name}: {fsm_path}")
 
@@ -497,7 +522,12 @@ def run_one_app(
         invariant_audit_replay = None
         if invariant_source == "audit":
             audit_report_root = invariant_audit_root or report_root
-            audit_report_path = audit_report_root / spec.name / "invariant_generation.json"
+            audit_report_path = _app_audit_report_path(
+                audit_report_root,
+                spec,
+                output_docs_layout=output_docs_layout,
+                filename="invariant_generation.json",
+            )
             if not audit_report_path.exists():
                 raise SystemExit(
                     f"Invariant audit report missing for {spec.name}: {audit_report_path}"
@@ -539,7 +569,12 @@ def run_one_app(
         llm_audit_report = None
         if guard_source == "audit":
             audit_report_root = guard_audit_root or report_root
-            audit_report_path = audit_report_root / spec.name / "guard_generation.json"
+            audit_report_path = _app_audit_report_path(
+                audit_report_root,
+                spec,
+                output_docs_layout=output_docs_layout,
+                filename="guard_generation.json",
+            )
             if not audit_report_path.exists():
                 raise SystemExit(f"Guard audit report missing for {spec.name}: {audit_report_path}")
             loaded = json.loads(audit_report_path.read_text(encoding="utf-8"))
@@ -603,6 +638,36 @@ def run_one_app(
         encoding="utf-8",
     )
     return summary
+
+
+def _app_report_dir(
+    report_root: Path,
+    spec: FidelityAppSpec,
+    *,
+    output_docs_layout: bool,
+) -> Path:
+    if output_docs_layout:
+        return report_root / spec.output_slug / "transition_guard"
+    return report_root / spec.name
+
+
+def _app_audit_report_path(
+    report_root: Path,
+    spec: FidelityAppSpec,
+    *,
+    output_docs_layout: bool,
+    filename: str,
+) -> Path:
+    if output_docs_layout:
+        return (
+            _app_report_dir(
+                report_root,
+                spec,
+                output_docs_layout=True,
+            )
+            / filename
+        )
+    return report_root / spec.name / filename
 
 
 def _latest_trace_path(app_data_dir: Path) -> Path:

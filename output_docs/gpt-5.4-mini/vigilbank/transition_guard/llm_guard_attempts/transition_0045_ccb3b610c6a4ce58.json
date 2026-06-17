@@ -1,0 +1,97 @@
+{
+  "transition_index": 45,
+  "prompt_hash": "ccb3b610c6a4ce58",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_009",
+  "target": "s_010",
+  "action": {
+    "type": "input_text",
+    "target": "e_0013",
+    "bounds": [
+      42,
+      841,
+      1038,
+      1009
+    ],
+    "resource_id": "otp_confirm.otp_input",
+    "target_resource_id": "otp_confirm.otp_input",
+    "target_class_name": "android.widget.EditText",
+    "target_selector": {
+      "resource_id": "otp_confirm.otp_input",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.widget.EditText",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "FrameLayout#content",
+        "ComposeView#",
+        "View#",
+        "View#",
+        "View#"
+      ],
+      "bounds": [
+        42,
+        841,
+        1038,
+        1009
+      ],
+      "depth": 7
+    },
+    "text": "test123",
+    "target_class": "android.widget.EditText"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "input_binding",
+    "required": true,
+    "required_slots": [
+      {
+        "name": "otp_code",
+        "slot_type": "string",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      }
+    ],
+    "predicates": [
+      {
+        "predicate_type": "action",
+        "element": "known_action",
+        "property": "input_text",
+        "operator": "==",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "otp_code",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"input_binding\",\"slots\":[{\"name\":\"otp_code\",\"slot_type\":\"string\"}],\"predicates\":[{\"predicate_type\":\"action\",\"element\":\"known_action\",\"property\":\"input_text\",\"operator\":\"==\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"otp_code\"}}]}}"
+  ]
+}

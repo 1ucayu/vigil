@@ -212,10 +212,36 @@ def render_fsm(
 
 def default_output_path(fsm_path: Path, fmt: str) -> Path:
     """Default generated visualization path under output_docs/."""
+    if fmt == "html":
+        model_scoped = _infer_model_scoped_visualization_path(fsm_path)
+        if model_scoped is not None:
+            return model_scoped
     app_slug = _infer_app_slug(fsm_path)
     if fmt == "html":
         return OUTPUT_DOCS_DIR / app_slug / "fsm.html"
     return OUTPUT_DOCS_DIR / f"{app_slug}_fsm.{fmt}"
+
+
+def _infer_model_scoped_visualization_path(fsm_path: Path) -> Path | None:
+    """Mirror output_docs/<model>/<app> FSM inputs into visualization/<model>."""
+    rel: Path
+    try:
+        rel = fsm_path.resolve().relative_to(OUTPUT_DOCS_DIR.resolve())
+    except ValueError:
+        parts = fsm_path.parts
+        if not parts or parts[0] != "output_docs":
+            return None
+        rel = Path(*parts[1:])
+
+    parts = rel.parts
+    if len(parts) < 4:
+        return None
+    model_slug, app_slug, stage = parts[0], parts[1], parts[2]
+    if stage not in {"explored_fsm", "transition_guard"}:
+        return None
+    if parts[-1] != "fsm.json":
+        return None
+    return OUTPUT_DOCS_DIR / "visualization" / model_slug / f"{app_slug}.html"
 
 
 def _infer_app_slug(fsm_path: Path) -> str:
@@ -1543,12 +1569,12 @@ _COMPARE_HTML_TEMPLATE = r"""<!doctype html>
   #workbench {
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 0;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 0;
+    grid-template-rows: minmax(0, 1fr);
     transition: grid-template-columns 160ms ease;
   }
   #workbench.inspector-open {
-    grid-template-columns: minmax(0, 1fr) clamp(360px, 25vw, 460px);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) clamp(360px, 25vw, 460px);
   }
   .panel {
     min-width: 0;
@@ -1558,7 +1584,7 @@ _COMPARE_HTML_TEMPLATE = r"""<!doctype html>
     background: var(--panel);
   }
   #gold-panel { grid-column: 1; grid-row: 1; }
-  #explored-panel { grid-column: 1; grid-row: 2; border-top: 1px solid var(--line); }
+  #explored-panel { grid-column: 2; grid-row: 1; border-left: 1px solid var(--line); }
   .panel-title {
     height: 42px;
     padding: 8px 12px;
@@ -1639,8 +1665,8 @@ _COMPARE_HTML_TEMPLATE = r"""<!doctype html>
     fill: #3c4650;
   }
   #inspector {
-    grid-column: 2;
-    grid-row: 1 / 3;
+    grid-column: 3;
+    grid-row: 1;
     min-height: 0;
     min-width: 0;
     width: 100%;
@@ -2532,7 +2558,9 @@ def main() -> None:
         default=None,
         help=(
             "Output path. Defaults to output_docs/<app>_fsm.<format>, or "
-            "output_docs/<app>/fsm.html for --format html."
+            "output_docs/<app>/fsm.html for --format html. Model-scoped input "
+            "FSMs under output_docs/<model>/<app>/... default to "
+            "output_docs/visualization/<model>/<app>.html."
         ),
     )
     parser.add_argument(

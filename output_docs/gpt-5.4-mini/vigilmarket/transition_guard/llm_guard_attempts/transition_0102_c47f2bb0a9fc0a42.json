@@ -1,0 +1,157 @@
+{
+  "transition_index": 102,
+  "prompt_hash": "c47f2bb0a9fc0a42",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_014",
+  "target": "s_015",
+  "action": {
+    "type": "click",
+    "target": "e_0013",
+    "bounds": [
+      656,
+      1293,
+      844,
+      1419
+    ],
+    "resource_id": "payment_dialog.confirm",
+    "target_resource_id": "payment_dialog.confirm",
+    "target_class_name": "android.view.View",
+    "target_selector": {
+      "resource_id": "payment_dialog.confirm",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.view.View",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "ViewGroup#",
+        "View#",
+        "View#",
+        "View#payment_dialog",
+        "View#"
+      ],
+      "bounds": [
+        656,
+        1293,
+        844,
+        1419
+      ],
+      "depth": 8
+    },
+    "target_class": "android.view.View"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "confirm_commit",
+    "required": true,
+    "required_slots": [
+      {
+        "name": "amount_value",
+        "slot_type": "string",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      },
+      {
+        "name": "item_name",
+        "slot_type": "string",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      },
+      {
+        "name": "quantity_value",
+        "slot_type": "number",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      }
+    ],
+    "predicates": [
+      {
+        "predicate_type": "contains",
+        "element": "payment_dialog_message",
+        "property": "text",
+        "operator": "contains",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "amount_value",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      },
+      {
+        "predicate_type": "contains",
+        "element": "payment_dialog_message",
+        "property": "text",
+        "operator": "contains",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "item_name",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      },
+      {
+        "predicate_type": "contains",
+        "element": "payment_dialog_message",
+        "property": "text",
+        "operator": "contains",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "quantity_value",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      },
+      {
+        "predicate_type": "read",
+        "element": "payment_dialog_confirm",
+        "property": "is_enabled",
+        "operator": "==",
+        "expected": {
+          "kind": "literal",
+          "value": true,
+          "slot": null,
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"confirm_commit\",\"slots\":[{\"name\":\"amount_value\",\"slot_type\":\"string\"},{\"name\":\"item_name\",\"slot_type\":\"string\"},{\"name\":\"quantity_value\",\"slot_type\":\"number\"}],\"predicates\":[{\"predicate_type\":\"contains\",\"element\":\"payment_dialog_message\",\"property\":\"text\",\"operator\":\"contains\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"amount_value\"}},{\"predicate_type\":\"contains\",\"element\":\"payment_dialog_message\",\"property\":\"text\",\"operator\":\"contains\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"item_name\"}},{\"predicate_type\":\"contains\",\"element\":\"payment_dialog_message\",\"property\":\"text\",\"operator\":\"contains\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"quantity_value\"}},{\"predicate_type\":\"read\",\"element\":\"payment_dialog_confirm\",\"property\":\"is_enabled\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":true,\"slot\":\"\"}}]}}"
+  ]
+}

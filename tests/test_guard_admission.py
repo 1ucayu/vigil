@@ -269,7 +269,7 @@ def test_action_type_normalized_to_action_type():
     assert result.guard == 'action(action_type) == "click"'
 
 
-def test_required_enabled_only_guard_is_executable_when_predicate_survives():
+def test_required_enabled_only_semantic_guard_is_low_trust():
     reg = _registry(_entry("pay", resource_id=f"{PKG}:id/pay"))
     contract = _contract(
         kind=GuardKind.CONFIRM_COMMIT,
@@ -286,11 +286,12 @@ def test_required_enabled_only_guard_is_executable_when_predicate_survives():
         ],
     )
     result = admit_guard_contract(contract, _evidence(reg))
-    assert result.admitted is True
-    assert result.status is GuardAdmissionStatus.ADMITTED
-    assert result.guard == f"read({PKG}:id/pay, is_enabled) == true"
-    assert result.semantic_binding_incomplete is False
-    assert result.reason == "admitted: 1 executable predicate(s)"
+    assert result.admitted is False
+    assert result.status is GuardAdmissionStatus.LOW_TRUST
+    assert result.guard is None
+    assert result.semantic_binding_required is True
+    assert result.semantic_binding_incomplete is True
+    assert "semantic binding incomplete" in result.reason
 
 
 def test_binding_predicate_admitted():
@@ -315,7 +316,7 @@ def test_binding_predicate_admitted():
     assert result.semantic_binding_incomplete is False
 
 
-def test_semantic_binding_required_enabled_only_is_compatibility_metadata():
+def test_semantic_binding_required_enabled_only_is_low_trust():
     reg = _registry(_entry("checkout", resource_id=f"{PKG}:id/checkout"))
     contract = _contract(
         kind=GuardKind.CONFIRM_COMMIT,
@@ -332,13 +333,14 @@ def test_semantic_binding_required_enabled_only_is_compatibility_metadata():
         ],
     )
     result = admit_guard_contract(contract, _evidence(reg))
-    assert result.admitted is True
-    assert result.status is GuardAdmissionStatus.ADMITTED
-    assert result.guard == f"read({PKG}:id/checkout, is_enabled) == true"
-    assert result.semantic_binding_incomplete is False
+    assert result.admitted is False
+    assert result.status is GuardAdmissionStatus.LOW_TRUST
+    assert result.guard is None
+    assert result.semantic_binding_required is True
+    assert result.semantic_binding_incomplete is True
 
 
-def test_required_guard_without_predicate_admitted_without_executable_guard():
+def test_required_semantic_guard_without_predicate_is_low_trust():
     contract = _contract(
         kind=GuardKind.CONFIRM_COMMIT,
         required=True,
@@ -346,10 +348,12 @@ def test_required_guard_without_predicate_admitted_without_executable_guard():
         predicates=[],
     )
     result = admit_guard_contract(contract, _evidence())
-    assert result.admitted is True
-    assert result.status is GuardAdmissionStatus.ADMITTED
+    assert result.admitted is False
+    assert result.status is GuardAdmissionStatus.LOW_TRUST
     assert result.guard is None
-    assert result.reason == "no runtime-executable predicate"
+    assert result.semantic_binding_required is True
+    assert result.semantic_binding_incomplete is True
+    assert "no executable predicate" in result.reason
 
 
 def test_optional_no_guard_contract_admitted():
@@ -358,3 +362,84 @@ def test_optional_no_guard_contract_admitted():
     assert result.admitted is True
     assert result.status is GuardAdmissionStatus.ADMITTED
     assert result.guard is None
+
+
+def test_synthetic_input_literal_rejected():
+    contract = _contract(
+        kind=GuardKind.INPUT_BINDING,
+        required=True,
+        predicates=[
+            PredicateSpec(
+                predicate_type="action",
+                property="input_text",
+                operator="==",
+                expected=ValueRef(kind="literal", value="test123"),
+            )
+        ],
+    )
+    result = admit_guard_contract(contract, _evidence())
+    assert result.admitted is False
+    assert result.status is GuardAdmissionStatus.REJECTED
+    assert "synthetic input placeholder" in result.reason
+
+
+def test_prompt_leakage_literal_rejected():
+    contract = _contract(
+        kind=GuardKind.INPUT_BINDING,
+        required=True,
+        predicates=[
+            PredicateSpec(
+                predicate_type="action",
+                property="input_text",
+                operator="==",
+                expected=ValueRef(
+                    kind="literal",
+                    value='test123"}} to=final LlmTransitionGuardResponse code omitted',
+                ),
+            )
+        ],
+    )
+    result = admit_guard_contract(contract, _evidence())
+    assert result.admitted is False
+    assert result.status is GuardAdmissionStatus.REJECTED
+    assert "LLM/tool-output leakage" in result.reason
+
+
+def test_action_type_literal_must_be_action_kind():
+    contract = _contract(
+        kind=GuardKind.ITEM_BINDING,
+        required=True,
+        predicates=[
+            PredicateSpec(
+                predicate_type="action",
+                property="action_type",
+                operator="==",
+                expected=ValueRef(kind="literal", value="contacts.contact_row.alice.open"),
+            )
+        ],
+    )
+    result = admit_guard_contract(contract, _evidence())
+    assert result.admitted is False
+    assert result.status is GuardAdmissionStatus.REJECTED
+    assert "not a valid runtime action type" in result.reason
+
+
+def test_required_item_action_only_guard_is_low_trust():
+    contract = _contract(
+        kind=GuardKind.ITEM_BINDING,
+        required=True,
+        predicates=[
+            PredicateSpec(
+                predicate_type="action",
+                property="target_resource_id",
+                operator="==",
+                expected=ValueRef(kind="literal", value="contacts.contact_row.alice.open"),
+            )
+        ],
+    )
+    result = admit_guard_contract(contract, _evidence())
+    assert result.admitted is False
+    assert result.status is GuardAdmissionStatus.LOW_TRUST
+    assert result.guard is None
+    assert result.semantic_binding_required is True
+    assert result.semantic_binding_incomplete is True

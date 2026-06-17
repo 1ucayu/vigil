@@ -1,0 +1,29 @@
+{
+  "app": "market",
+  "package": "com_vigil_market_fidelity",
+  "trace_package": "com_vigil_market",
+  "input_fsm": "output_docs/gpt-5.4-mini/vigilmarket/explored_fsm/fsm.json",
+  "output_fsm": "output_docs/gpt-5.4-mini/vigilmarket/transition_guard/fsm.json",
+  "trace": "data/apps/com_vigil_market/traces/exploration_20260611_035503.json",
+  "states": 14,
+  "transitions": 113,
+  "visual_annotated": 0,
+  "visual_failed": 0,
+  "guard_source": "llm",
+  "guard_use_images": false,
+  "guards_attached": 13,
+  "guard_origin_counts": {
+    "llm": 113
+  },
+  "guard_status_counts": {
+    "admitted": 111,
+    "low_trust": 2
+  },
+  "invariant_source": "audit",
+  "invariants_attached": 0,
+  "invariant_states": 0,
+  "invariants_admitted_run": 0,
+  "invariant_hints": 0,
+  "invariants_rejected": 0,
+  "min_invariant_observations": 2
+}

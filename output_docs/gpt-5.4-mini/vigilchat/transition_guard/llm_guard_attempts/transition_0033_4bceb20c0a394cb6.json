@@ -1,0 +1,41 @@
+{
+  "transition_index": 33,
+  "prompt_hash": "4bceb20c0a394cb6",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_006",
+  "target": "s_001",
+  "action": {
+    "type": "navigate_back"
+  },
+  "parsed_ok": false,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "prompt_only_unavailable",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "structured output unavailable: responses_json_schema: /responses HTTP 400: {\"error\":{\"message\":\"{\\\"error\\\":{\\\"message\\\":\\\"no model endpoints available given user constraints\\\",\\\"code\\\":\\\"no_available_model_endpoints\\\"}}\\n\",\"type\":\"error\"}}",
+  "parse_errors": [
+    "structured output unavailable: responses_json_schema: /responses HTTP 400: {\"error\":{\"message\":\"{\\\"error\\\":{\\\"message\\\":\\\"no model endpoints available given user constraints\\\",\\\"code\\\":\\\"no_available_model_endpoints\\\"}}\\n\",\"type\":\"error\"}}"
+  ],
+  "validation_errors": [
+    "responses_json_schema: /responses HTTP 400: {\"error\":{\"message\":\"{\\\"error\\\":{\\\"message\\\":\\\"no model endpoints available given user constraints\\\",\\\"code\\\":\\\"no_available_model_endpoints\\\"}}\\n\",\"type\":\"error\"}}"
+  ],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "unknown",
+    "required": false,
+    "required_slots": [],
+    "predicates": [],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": []
+}

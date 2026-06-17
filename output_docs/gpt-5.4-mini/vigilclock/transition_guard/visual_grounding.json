@@ -1,0 +1,100 @@
+[
+  {
+    "state_id": "s_001",
+    "status": "annotated",
+    "screen_id": "scr_0001",
+    "confidence": 0.5,
+    "alt_text_chars": 403
+  },
+  {
+    "state_id": "s_002",
+    "status": "annotated",
+    "screen_id": "scr_0005",
+    "confidence": 0.5,
+    "alt_text_chars": 475
+  },
+  {
+    "state_id": "s_003",
+    "status": "annotated",
+    "screen_id": "scr_0042",
+    "confidence": 0.5,
+    "alt_text_chars": 343
+  },
+  {
+    "state_id": "s_004",
+    "status": "annotated",
+    "screen_id": "scr_0047",
+    "confidence": 0.5,
+    "alt_text_chars": 350
+  },
+  {
+    "state_id": "s_005",
+    "status": "annotated",
+    "screen_id": "scr_0052",
+    "confidence": 0.5,
+    "alt_text_chars": 402
+  },
+  {
+    "state_id": "s_006",
+    "status": "annotated",
+    "screen_id": "scr_0065",
+    "confidence": 0.5,
+    "alt_text_chars": 335
+  },
+  {
+    "state_id": "s_007",
+    "status": "annotated",
+    "screen_id": "scr_0075",
+    "confidence": 0.5,
+    "alt_text_chars": 412
+  },
+  {
+    "state_id": "s_008",
+    "status": "annotated",
+    "screen_id": "scr_0089",
+    "confidence": 0.5,
+    "alt_text_chars": 383
+  },
+  {
+    "state_id": "s_009",
+    "status": "annotated",
+    "screen_id": "scr_0096",
+    "confidence": 0.5,
+    "alt_text_chars": 427
+  },
+  {
+    "state_id": "s_010",
+    "status": "annotated",
+    "screen_id": "scr_0103",
+    "confidence": 0.5,
+    "alt_text_chars": 415
+  },
+  {
+    "state_id": "s_011",
+    "status": "annotated",
+    "screen_id": "scr_0172",
+    "confidence": 0.5,
+    "alt_text_chars": 422
+  },
+  {
+    "state_id": "s_012",
+    "status": "annotated",
+    "screen_id": "scr_0197",
+    "confidence": 0.5,
+    "alt_text_chars": 312
+  },
+  {
+    "state_id": "s_014",
+    "status": "annotated",
+    "screen_id": "scr_0253",
+    "confidence": 0.5,
+    "alt_text_chars": 363
+  },
+  {
+    "state_id": "s_015",
+    "status": "annotated",
+    "screen_id": "scr_0316",
+    "confidence": 0.5,
+    "alt_text_chars": 374
+  }
+]

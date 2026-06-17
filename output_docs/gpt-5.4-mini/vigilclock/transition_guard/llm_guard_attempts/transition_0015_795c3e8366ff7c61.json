@@ -1,0 +1,71 @@
+{
+  "transition_index": 15,
+  "prompt_hash": "795c3e8366ff7c61",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_002",
+  "target": "s_001",
+  "action": {
+    "type": "click",
+    "target": "e_0030",
+    "bounds": [
+      280,
+      1030,
+      519,
+      1156
+    ],
+    "resource_id": "alarm_edit.cancel",
+    "target_resource_id": "alarm_edit.cancel",
+    "target_class_name": "android.view.View",
+    "target_selector": {
+      "resource_id": "alarm_edit.cancel",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.view.View",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "FrameLayout#content",
+        "ComposeView#",
+        "View#",
+        "View#",
+        "View#"
+      ],
+      "bounds": [
+        280,
+        1030,
+        519,
+        1156
+      ],
+      "depth": 7
+    },
+    "target_class": "android.view.View"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "navigation",
+    "required": false,
+    "required_slots": [],
+    "predicates": [],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"navigation\",\"slots\":[],\"predicates\":[]}}"
+  ]
+}

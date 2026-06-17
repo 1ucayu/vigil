@@ -166,6 +166,9 @@ def test_user_prompt_includes_transition_guard_scope():
     assert "[Known action]" in prompt
     assert "[Pre-state Evidence: P / source]" in prompt
     assert "[Semantic Binding Checklist]" in prompt
+    assert "[Exploration Synthetic Inputs]" in prompt
+    assert "test123" in prompt
+    assert "Never copy these values into a literal guard" in prompt
     assert "alias=send" in prompt
     assert "perm:SEND_SMS" in prompt
     assert "XML file text" not in prompt

@@ -1,0 +1,134 @@
+{
+  "transition_index": 35,
+  "prompt_hash": "be5915e8cff71a35",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_006",
+  "target": "s_008",
+  "action": {
+    "type": "click",
+    "target": "e_0019",
+    "bounds": [
+      42,
+      1296,
+      1038,
+      1422
+    ],
+    "resource_id": "transfer.continue",
+    "target_resource_id": "transfer.continue",
+    "target_class_name": "android.view.View",
+    "target_selector": {
+      "resource_id": "transfer.continue",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.view.View",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "FrameLayout#content",
+        "ComposeView#",
+        "View#",
+        "View#",
+        "View#"
+      ],
+      "bounds": [
+        42,
+        1296,
+        1038,
+        1422
+      ],
+      "depth": 7
+    },
+    "target_class": "android.view.View"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "form_check",
+    "required": true,
+    "required_slots": [
+      {
+        "name": "amount_cents",
+        "slot_type": "number",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      },
+      {
+        "name": "memo_text",
+        "slot_type": "string",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      }
+    ],
+    "predicates": [
+      {
+        "predicate_type": "value",
+        "element": "transfer_amount_input",
+        "property": "",
+        "operator": "==",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "amount_cents",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      },
+      {
+        "predicate_type": "value",
+        "element": "transfer_memo_input",
+        "property": "",
+        "operator": "==",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "memo_text",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      },
+      {
+        "predicate_type": "read",
+        "element": "transfer_continue",
+        "property": "is_enabled",
+        "operator": "==",
+        "expected": {
+          "kind": "literal",
+          "value": true,
+          "slot": null,
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"form_check\",\"slots\":[{\"name\":\"amount_cents\",\"slot_type\":\"number\"},{\"name\":\"memo_text\",\"slot_type\":\"string\"}],\"predicates\":[{\"predicate_type\":\"value\",\"element\":\"transfer_amount_input\",\"property\":\"\",\"operator\":\"==\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"amount_cents\"}},{\"predicate_type\":\"value\",\"element\":\"transfer_memo_input\",\"property\":\"\",\"operator\":\"==\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"memo_text\"}},{\"predicate_type\":\"read\",\"element\":\"transfer_continue\",\"property\":\"is_enabled\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":true,\"slot\":\"\"}}]}}"
+  ]
+}

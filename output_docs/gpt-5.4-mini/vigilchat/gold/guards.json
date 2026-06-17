@@ -1,0 +1,53 @@
+{
+  "$comment": "Ground-truth DSL guards for guard-required transitions. Evaluator-only.",
+  "app_id": "com.vigil.chat",
+  "guards": [
+    {
+      "transition": "thread.send",
+      "from": "thread",
+      "to": "thread",
+      "dsl": [
+        "action(type) == \"click\"",
+        "read(thread.thread_id.<thread_id>, text) == $intent.thread_id",
+        "value(thread.message_input) == $intent.message_text"
+      ]
+    },
+    {
+      "transition": "thread.attach",
+      "from": "thread",
+      "to": "attachment_picker",
+      "dsl": [
+        "action(type) == \"click\"",
+        "read(thread.thread_id.<thread_id>, text) == $intent.thread_id"
+      ]
+    },
+    {
+      "transition": "attachment_picker.item.<attachment_id>",
+      "from": "attachment_picker",
+      "to": "thread",
+      "dsl": [
+        "action(type) == \"click\"",
+        "read(thread.thread_id.<thread_id>, text) == $intent.thread_id",
+        "contains(attachment_picker.item.<attachment_id>.label, $intent.attachment_name)"
+      ]
+    },
+    {
+      "transition": "delete_confirm.confirm",
+      "from": "delete_confirm",
+      "to": "thread",
+      "dsl": [
+        "action(type) == \"click\"",
+        "read(delete_confirm.message_text, text) == $intent.message_text"
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "state": "thread",
+      "phi": [
+        "contains(thread.title, $intent.contact_name)"
+      ],
+      "$comment": "Active only when intent.contact_name is set."
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "transition_index": 29,
+  "prompt_hash": "bd6fb109eb63ff59",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_006",
+  "target": "s_002",
+  "action": {
+    "type": "click",
+    "target": "e_0015",
+    "bounds": [
+      42,
+      970,
+      1038,
+      1107
+    ],
+    "resource_id": "contacts.contact_row.dad.open",
+    "target_resource_id": "contacts.contact_row.dad.open",
+    "target_class_name": "android.view.View",
+    "target_selector": {
+      "resource_id": "contacts.contact_row.dad.open",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.view.View",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "FrameLayout#content",
+        "ComposeView#",
+        "View#",
+        "View#",
+        "View#"
+      ],
+      "bounds": [
+        42,
+        970,
+        1038,
+        1107
+      ],
+      "depth": 7
+    },
+    "target_class": "android.view.View"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "item_binding",
+    "required": true,
+    "required_slots": [],
+    "predicates": [
+      {
+        "predicate_type": "read",
+        "element": "contacts_contact_row_dad_name",
+        "property": "text",
+        "operator": "==",
+        "expected": {
+          "kind": "literal",
+          "value": "Dad",
+          "slot": null,
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"item_binding\",\"slots\":[],\"predicates\":[{\"predicate_type\":\"read\",\"element\":\"contacts_contact_row_dad_name\",\"property\":\"text\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":\"Dad\",\"slot\":\"\"}}]}}"
+  ]
+}

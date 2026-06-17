@@ -1,0 +1,180 @@
+{
+  "transition_index": 85,
+  "prompt_hash": "0914e1c1e66c88e9",
+  "spec_hash": "729d56e256fef027",
+  "source": "s_013",
+  "target": "s_014",
+  "action": {
+    "type": "click",
+    "target": "e_0017",
+    "bounds": [
+      302,
+      951,
+      1038,
+      1077
+    ],
+    "resource_id": "payment_confirm.pay",
+    "target_resource_id": "payment_confirm.pay",
+    "target_class_name": "android.view.View",
+    "target_selector": {
+      "resource_id": "payment_confirm.pay",
+      "text": "",
+      "content_description": "",
+      "class_name": "android.view.View",
+      "nearby_text": "",
+      "ancestor_chain": [
+        "FrameLayout#content",
+        "ComposeView#",
+        "View#",
+        "View#",
+        "View#"
+      ],
+      "bounds": [
+        302,
+        951,
+        1038,
+        1077
+      ],
+      "depth": 7
+    },
+    "target_class": "android.view.View"
+  },
+  "parsed_ok": true,
+  "schema_name": "LlmTransitionGuardResponse",
+  "schema_hash": "df78c62c8140a2b6",
+  "schema_constraint_mode": "native_schema",
+  "provider": "proxy",
+  "model": "gpt-5.4-mini",
+  "refusal": "",
+  "rejection_reason": "",
+  "parse_errors": [],
+  "validation_errors": [],
+  "normalization_warnings": [],
+  "repair_attempted": false,
+  "contract": {
+    "kind": "confirm_commit",
+    "required": true,
+    "required_slots": [
+      {
+        "name": "product_name",
+        "slot_type": "string",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      },
+      {
+        "name": "quantity_value",
+        "slot_type": "number",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      },
+      {
+        "name": "address_text",
+        "slot_type": "string",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      },
+      {
+        "name": "total_amount",
+        "slot_type": "string",
+        "description": "",
+        "required": true,
+        "value_domain": [],
+        "source": "llm"
+      }
+    ],
+    "predicates": [
+      {
+        "predicate_type": "contains",
+        "element": "payment_product_name",
+        "property": "text",
+        "operator": "contains",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "product_name",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      },
+      {
+        "predicate_type": "contains",
+        "element": "payment_quantity",
+        "property": "text",
+        "operator": "contains",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "quantity_value",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      },
+      {
+        "predicate_type": "contains",
+        "element": "payment_address_label",
+        "property": "text",
+        "operator": "contains",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "address_text",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      },
+      {
+        "predicate_type": "contains",
+        "element": "payment_total_amount",
+        "property": "text",
+        "operator": "contains",
+        "expected": {
+          "kind": "intent",
+          "value": null,
+          "slot": "total_amount",
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      },
+      {
+        "predicate_type": "read",
+        "element": "payment_confirm_pay",
+        "property": "is_enabled",
+        "operator": "==",
+        "expected": {
+          "kind": "literal",
+          "value": true,
+          "slot": null,
+          "property": null,
+          "element": null
+        },
+        "args": {},
+        "source": "llm"
+      }
+    ],
+    "binding_requirements": [],
+    "admission_status": "pending",
+    "admission_reason": "",
+    "confidence": 0.0,
+    "provenance": [],
+    "notes": "",
+    "semantic_binding_required": false,
+    "semantic_binding_incomplete": false
+  },
+  "raw_responses": [
+    "{\"contract\":{\"kind\":\"confirm_commit\",\"slots\":[{\"name\":\"product_name\",\"slot_type\":\"string\"},{\"name\":\"quantity_value\",\"slot_type\":\"number\"},{\"name\":\"address_text\",\"slot_type\":\"string\"},{\"name\":\"total_amount\",\"slot_type\":\"string\"}],\"predicates\":[{\"predicate_type\":\"contains\",\"element\":\"payment_product_name\",\"property\":\"text\",\"operator\":\"contains\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"product_name\"}},{\"predicate_type\":\"contains\",\"element\":\"payment_quantity\",\"property\":\"text\",\"operator\":\"contains\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"quantity_value\"}},{\"predicate_type\":\"contains\",\"element\":\"payment_address_label\",\"property\":\"text\",\"operator\":\"contains\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"address_text\"}},{\"predicate_type\":\"contains\",\"element\":\"payment_total_amount\",\"property\":\"text\",\"operator\":\"contains\",\"expected\":{\"kind\":\"intent\",\"value\":null,\"slot\":\"total_amount\"}},{\"predicate_type\":\"read\",\"element\":\"payment_confirm_pay\",\"property\":\"is_enabled\",\"operator\":\"==\",\"expected\":{\"kind\":\"literal\",\"value\":true,\"slot\":\"\"}}]}}"
+  ]
+}
